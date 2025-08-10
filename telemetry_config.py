@@ -28,11 +28,11 @@ class TelemetryConfig:
         self.newrelic_traces_endpoint = os.getenv("NEW_RELIC_TRACES_ENDPOINT")
         self.newrelic_metrics_endpoint = os.getenv("NEW_RELIC_METRICS_ENDPOINT")
         
-        # Fallback to local endpoints if New Relic not configured
+        # Local fallback if New Relic not configured
         self.otlp_traces_endpoint = self.newrelic_traces_endpoint if self.newrelic_license_key else os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
         self.otlp_metrics_endpoint = self.newrelic_metrics_endpoint if self.newrelic_license_key else os.getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
         
-        # Prometheus (keep for local development)
+        # Prometheus if necessary
         self.prometheus_port = int(os.getenv("PROMETHEUS_PORT"))
         self.enable_prometheus = os.getenv("ENABLE_PROMETHEUS")
         
@@ -40,6 +40,7 @@ class TelemetryConfig:
         self.tracer_provider: Optional[TracerProvider] = None
         self.meter_provider: Optional[MeterProvider] = None
         self._initialized = False
+        
         # Focused metrics instruments
         self._meter = None
         self.tool_calls_counter = None
@@ -93,11 +94,10 @@ class TelemetryConfig:
         )
         otlp_reader = PeriodicExportingMetricReader(
             exporter=otlp_metrics_exporter,
-            export_interval_millis=5000  # Export every 5 seconds
+            export_interval_millis=5000
         )
         metric_readers.append(otlp_reader)
         
-        # Optionally keep Prometheus for local development
         if self.enable_prometheus:
             prometheus_reader = PrometheusMetricReader()
             metric_readers.append(prometheus_reader)
@@ -115,7 +115,6 @@ class TelemetryConfig:
         else:
             logger.info(f"Metrics configured with local OTLP endpoint: {self.otlp_metrics_endpoint}")
         
-        # Initialize focused metrics instruments
         self._setup_metrics_instruments()
         
     def _setup_metrics_instruments(self):

@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import logging
 from typing import Optional, Dict, Any
 from asyncio import Lock
-from tool_metrics import record_api_call, start_api_call, end_api_call
+from tool_metrics import record_api_call, start_api_call, end_api_call, set_client_context
 import re
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,9 @@ load_dotenv()
 
 
 class CharmHealthAPIClient:
+    _shared_token_cache: Dict[str, Dict[str, Any]] = {}
+    _shared_token_locks: Dict[str, Lock] = {}
+
     def __init__(self, 
                  base_url: Optional[str] = None,
                  api_key: Optional[str] = None,
@@ -44,8 +47,6 @@ class CharmHealthAPIClient:
 
     async def __aenter__(self):
         logger.info("Entering CharmHealth API client context")
-        # Set the client_id in context for metrics tracking
-        from tool_metrics import set_client_context
         set_client_context(self.client_id)
         await self.ensure_client()
         return self
@@ -86,13 +87,27 @@ class CharmHealthAPIClient:
     async def _get_valid_token(self) -> str:
         logger.info("Getting valid CharmHealth API token")
         current_time = time.time()
+
         if self._auth_token and current_time < (self._token_expires_at - 300):
             return self._auth_token
-        
-        async with self._token_lock:
+
+        key = self._token_cache_key()
+        entry = self.__class__._shared_token_cache.get(key)
+        if entry and current_time < (entry["expires_at"] - 300):
+            self._auth_token = entry["token"]
+            self._token_expires_at = entry["expires_at"]
+            return entry["token"]
+
+        lock = self.__class__._shared_token_locks.setdefault(key, Lock())
+        async with lock:
+            current_time = time.time()
             if self._auth_token and current_time < (self._token_expires_at - 300):
                 return self._auth_token
-            
+            entry = self.__class__._shared_token_cache.get(key)
+            if entry and current_time < (entry["expires_at"] - 300):
+                self._auth_token = entry["token"]
+                self._token_expires_at = entry["expires_at"]
+                return entry["token"]
             return await self._refresh_token()
     
 
@@ -118,17 +133,25 @@ class CharmHealthAPIClient:
                 current_time = time.time()
                 response.raise_for_status()
                 token_data = response.json()
-                logger.info(f"Token Data: {token_data}")
                 new_token = token_data.get('access_token')
                 expires_in = token_data.get('expires_in', 3600)
                 if not new_token:
-                    raise ValueError(f"Failed to obtain new token: {token_data}")
-                
+                    raise ValueError(f"Failed to obtain new token")
+
                 self._auth_token = new_token
                 self._token_expires_at = current_time + expires_in
-                logger.info("Token refreshed successfully")
+
+                key = self._token_cache_key()
+                self.__class__._shared_token_cache[key] = {
+                    "token": new_token,
+                    "expires_at": self._token_expires_at,
+                }
+
+                scopes = token_data.get('scope', '')
+                scope_count = len(scopes.split()) if isinstance(scopes, str) else 0
+                logger.info(f"Token refreshed successfully (expires_in={expires_in}s, scopes={scope_count})")
                 return new_token
-            
+
             except Exception as e:
                 logger.error(f"Failed to refresh token: {e}")
                 raise
@@ -139,7 +162,7 @@ class CharmHealthAPIClient:
         headers = await self._get_auth_headers()
         start_time = time.time()
         
-        # Remove id from endpoint for metrics (id is an 18 digit number either between / and / or at the end)
+        # Remove any IDs from endpoint for metrics (an ID  is an 18 digit number either between / and / or at the end)
         clean_endpoint = re.sub(r'/[0-9]{18}$', '', endpoint)
         clean_endpoint = re.sub(r'/[0-9]{18}/', '/', clean_endpoint)
         
@@ -179,6 +202,11 @@ class CharmHealthAPIClient:
                 logger.warning("Received 401, forcing token refresh")
                 self._auth_token = None
                 self._token_expires_at = 0
+                try:
+                    key = self._token_cache_key()
+                    self.__class__._shared_token_cache.pop(key, None)
+                except Exception:
+                    pass
                 return await self._make_request(method, endpoint, params, data, retry_count + 1)
             logger.error(f"HTTP error {e.response.status_code}: {e}")
             return {"error": f"HTTP {e.response.status_code}: {e.response.text}"}
@@ -228,6 +256,8 @@ class CharmHealthAPIClient:
         """Get the client ID from the API client."""
         return self.client_id
     
+    def _token_cache_key(self) -> str:
+        return self.client_id
 
 
 
