@@ -1,21 +1,15 @@
 from fastmcp import FastMCP
-from typing import Optional, List, Dict, Any
-from datetime import datetime, date, timedelta
-import sys
-import os
-from api_client import CharmHealthAPIClient
-from utils import build_params_from_locals
+from typing import Optional, Dict, Any
+from api import CharmHealthAPIClient
+from common.utils import build_params_from_locals
 import logging
-from telemetry_config import telemetry
-from opentelemetry import trace
-from opentelemetry.trace import Status, StatusCode
-from tool_metrics import with_tool_metrics
-from telemetry_config import telemetry
+from telemetry import with_tool_metrics, telemetry
+
+telemetry.initialize()
 
 logger = logging.getLogger(__name__)
+
 practice_information_mcp = FastMCP(name="Practice Information")
-
-
 
 @practice_information_mcp.tool
 @with_tool_metrics()
@@ -26,6 +20,11 @@ async def list_facilities(
 ) -> Dict[str, Any]:
     """
     List all facilities for the practice.
+
+    Args:
+        page (Optional[int]): The page number to return
+        per_page (Optional[int]): The number of items per page
+        sort_order (Optional[str]): The order to sort the facilities in
     """
     async with CharmHealthAPIClient() as client:
         try:
@@ -37,7 +36,7 @@ async def list_facilities(
             if sort_order:
                 params["sort_order"] = sort_order
             response = await client.get("/facilities", params=params)
-            logger.info(f"Tool call completed for list_facilities, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for list_facilities, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in list_facilities: {e}")
@@ -93,7 +92,7 @@ async def list_members(
     """
     List all members for the practice.
     
-    Parameters:
+    Args:
     - page: Page number (optional)
     - per_page: Number of items per page (optional)
     - sort_order: Sort order - A (Ascending) or D (Descending) (optional)

@@ -1,19 +1,11 @@
 from fastmcp import FastMCP
 from typing import Optional, List, Dict, Any
-from datetime import datetime, date, timedelta
-import sys
-import os
-from api_client import CharmHealthAPIClient
-from utils import build_params_from_locals
+from datetime import date
+from api import CharmHealthAPIClient
+from common.utils import build_params_from_locals
 import logging
-from telemetry_config import telemetry
-from opentelemetry import trace
-from opentelemetry.trace import Status, StatusCode
-from tool_metrics import with_tool_metrics
-from telemetry_config import telemetry
-import contextvars
+from telemetry import telemetry, with_tool_metrics
 
-# Initialize at startup
 telemetry.initialize()
 
 logger = logging.getLogger(__name__)
@@ -24,7 +16,7 @@ def build_patient_payload(locals_dict: Dict[str, Any]) -> Dict[str, Any]:
     """
     Build the patient API payload from function parameters
     """
-    exclude = ["patient_id"]  # Removed "client" since it's no longer in locals()
+    exclude = ["patient_id"]
     params = {}
 
     address_fields = {}
@@ -116,7 +108,7 @@ async def list_patients(
         try:
             params = build_params_from_locals(locals())
             response = await client.get("/patients", params=params)
-            logger.info(f"Tool call completed for list_patients, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for list_patients, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in list_patients: {e}")
@@ -134,7 +126,7 @@ async def get_patient_details(
     async with CharmHealthAPIClient() as client:
         try:
             response = await client.get(f"/patients/{patient_id}")
-            logger.info(f"Tool call completed for get_patient_details, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for get_patient_details, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in get_patient_details: {e}")
@@ -270,7 +262,7 @@ async def add_patient(
         try:
             params = build_patient_payload(locals())
             response = await client.post("/patients", data=params)
-            logger.info(f"Tool call completed for add_patient, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for add_patient, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in add_patient: {e}")
@@ -389,7 +381,7 @@ async def update_patient(
         try:
             params = build_patient_payload(locals())
             response = await client.put(f"/patients/{patient_id}", data=params)
-            logger.info(f"Tool call completed for update_patient, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for update_patient, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in update_patient: {e}")
@@ -407,7 +399,7 @@ async def deactivate_patient(
     async with CharmHealthAPIClient() as client:
         try:
             response = await client.post(f"/patients/{patient_id}/inactive")
-            logger.info(f"Tool call completed for deactivate_patient, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for deactivate_patient, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in deactivate_patient: {e}")
@@ -420,11 +412,24 @@ async def activate_patient(
 ) -> Dict[str, Any]:
     """
     Activate a patient in CharmHealth.
+    
+    This function reactivates a previously deactivated patient, making them active
+    in the system again. The patient will be able to receive care and their
+    information will be accessible for scheduling and medical records.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to activate
+        
+    Returns:
+        Dict[str, Any]: Response from the CharmHealth API containing:
+            - Success confirmation or error details
+            - Patient activation status
+            - Any relevant messages from the API
     """
     async with CharmHealthAPIClient() as client:
         try:
             response = await client.post(f"/patients/{patient_id}/active")
-            logger.info(f"Tool call completed for activate_patient, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for activate_patient, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in activate_patient: {e}")
@@ -440,6 +445,13 @@ async def send_phr_invite(
 ) -> Dict[str, Any]:
     """
     Send a PHR invite to a patient in CharmHealth.
+
+    This function sends a PHR invite to a patient in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to send the invite to
+        email (str): The email address of the patient to send the invite to
+        rep_first_name (Optional[str]): The first name of the representative sending the invite
     """
     async with CharmHealthAPIClient() as client:
         try:
@@ -449,7 +461,7 @@ async def send_phr_invite(
                 "rep_last_name": rep_last_name
             }
             response = await client.post(f"/patients/{patient_id}/invitations", data=data)
-            logger.info(f"Tool call completed for send_phr_invite, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for send_phr_invite, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in send_phr_invite: {e}")
@@ -517,7 +529,7 @@ async def upload_patient_id(
             files = {"file": file}
             
             response = await client.post(f"/patients/{patient_id}/identity", data=form_data, files=files)
-            logger.info(f"Tool call completed for upload_patient_id, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for upload_patient_id, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in upload_patient_id: {e}")
@@ -532,12 +544,19 @@ async def upload_patient_photo(
 ) -> Dict[str, Any]:
     """
     Upload a patient photo to CharmHealth.
+
+    This function uploads a photo of a patient to CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to upload the photo for
+        file (str): The path to the photo file to upload
+        
     """
     async with CharmHealthAPIClient() as client:
         try:
             files = {"file": file}
             response = await client.post(f"/patients/{patient_id}/photo", files=files)
-            logger.info(f"Tool call completed for upload_patient_photo, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for upload_patient_photo, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in upload_patient_photo: {e}")
@@ -550,11 +569,17 @@ async def delete_patient_photo(
 ) -> Dict[str, Any]:
     """
     Delete a patient photo from CharmHealth.
+
+    This function deletes a photo of a patient from CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to delete the photo for
+        
     """
     async with CharmHealthAPIClient() as client:
         try:
             response = await client.delete(f"/patients/{patient_id}/photo")
-            logger.info(f"Tool call completed for delete_patient_photo, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for delete_patient_photo, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in delete_patient_photo: {e}")
@@ -572,22 +597,25 @@ async def list_quick_notes(
 ) -> Dict[str, Any]:
     """
     List quick notes for a patient in CharmHealth.
+
+    This function lists all quick notes for a patient in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to list quick notes for
+        page (Optional[int]): The page number to return
     """
     async with CharmHealthAPIClient() as client:
         try:
             endpoint = f"/patients/{patient_id}/quicknotes"
-            if not page and not per_page and not sort_order:
-                response = await client.get(endpoint)
-                logger.info(f"Tool call completed for list_quick_notes, with message {response.get("message", "")} and code {response.get("code", "")}")
-                return response
+            params = {}
             if page:
-                endpoint += f"?page={page}"
+                params["page"] = page
             if per_page:
-                endpoint += f"?per_page={per_page}"
+                params["per_page"] = per_page
             if sort_order:
-                endpoint += f"?sort_order={sort_order}"
-            response = await client.get(endpoint)
-            logger.info(f"Tool call completed for list_quick_notes, with message {response.get("message", "")} and code {response.get("code", "")}")
+                params["sort_order"] = sort_order
+            response = await client.get(endpoint, params=params)
+            logger.info(f"Tool call completed for list_quick_notes, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in list_quick_notes: {e}")
@@ -601,11 +629,17 @@ async def add_quick_note(
 ) -> Dict[str, Any]:
     """
     Add a quick note to a patient in CharmHealth.
+
+    This function adds a quick note to a patient in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to add the quick note to
+        notes (str): The notes to add to the patient
     """
     async with CharmHealthAPIClient() as client:
         try:
             response = await client.post(f"/patients/{patient_id}/quicknotes", data={"notes": notes})
-            logger.info(f"Tool call completed for add_quick_note, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for add_quick_note, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in add_quick_note: {e}")
@@ -620,11 +654,17 @@ async def edit_quick_note(
 ) -> Dict[str, Any]:
     """
     Edit a quick note in CharmHealth.
+
+    This function edits a quick note in CharmHealth.
+    
+    Args:
+        quick_note_id (str): The unique identifier for the quick note to edit
+        notes (str): The notes to edit the quick note to
     """
     async with CharmHealthAPIClient() as client:
         try:
             response = await client.put(f"patients/quicknotes/{quick_note_id}", data={"notes": notes})
-            logger.info(f"Tool call completed for edit_quick_note, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for edit_quick_note, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in edit_quick_note: {e}")
@@ -637,11 +677,16 @@ async def delete_quick_note(
 ) -> Dict[str, Any]:
     """
     Delete a quick note in CharmHealth.
+
+    This function deletes a quick note in CharmHealth.
+    
+    Args:
+        quick_note_id (str): The unique identifier for the quick note to delete
     """
     async with CharmHealthAPIClient() as client:
         try:
             response = await client.delete(f"patients/quicknotes/{quick_note_id}")
-            logger.info(f"Tool call completed for delete_quick_note, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for delete_quick_note, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in delete_quick_note: {e}")
@@ -656,11 +701,16 @@ async def get_recalls(
 ) -> Dict[str, Any]:
     """
     Get recalls for a patient in CharmHealth. 
+
+    This function gets all recalls for a patient in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to get recalls for
     """
     async with CharmHealthAPIClient() as client:
         try:
             response = await client.get(f"/patients/{patient_id}/recalls")
-            logger.info(f"Tool call completed for get_recalls, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for get_recalls, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in get_recalls: {e}")
@@ -725,14 +775,12 @@ async def add_recall(
             data = [recall_data]
             
             response = await client.post(f"/patients/{patient_id}/recalls", data=data)
-            logger.info(f"Tool call completed for add_recall, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for add_recall, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in add_recall: {e}")
             return {"error": str(e)}
     
-# =========================== PATIENT STICKY NOTES ===========================
-
 
 # =========================== PATIENT SUPPLEMENTS ===========================
 @patient_management_mcp.tool
@@ -782,7 +830,7 @@ async def add_supplement(
             data = [supplement_data]
             
             response = await client.post(f"/patients/{patient_id}/supplements", data=data)
-            logger.info(f"Tool call completed for add_supplement, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for add_supplement, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in add_supplement: {e}")
@@ -799,20 +847,28 @@ async def list_supplements(
 ) -> Dict[str, Any]:
     """
     List supplements for a patient in CharmHealth.
+
+    This function lists all supplements for a patient in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to list supplements for
+        encounter_id (Optional[str]): The unique identifier for the encounter to list supplements for
+        sort_order (Optional[str]): The order to sort the supplements in
     """
     async with CharmHealthAPIClient() as client:
         try:
             endpoint = f"/patients/{patient_id}/supplements"
+            params = {}
             if encounter_id:
-                endpoint += f"?encounter_id={encounter_id}"
+                params["encounter_id"] = encounter_id
             if page:
-                endpoint += f"?page={page}"
+                params["page"] = page
             if per_page:
-                endpoint += f"?per_page={per_page}"
+                params["per_page"] = per_page
             if sort_order:
-                endpoint += f"?sort_order={sort_order}"
-            response = await client.get(endpoint)
-            logger.info(f"Tool call completed for list_supplements, with message {response.get("message", "")} and code {response.get("code", "")}")
+                params["sort_order"] = sort_order
+            response = await client.get(endpoint, params=params)
+            logger.info(f"Tool call completed for list_supplements, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in list_supplements: {e}")
@@ -843,13 +899,20 @@ async def edit_supplement(
 ) -> Dict[str, Any]:
     """
     Edit a supplement in CharmHealth.
+
+    This function edits a supplement in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to edit the supplement for
+        supplement_id (str): The unique identifier for the supplement to edit
+        supplement_name (str): The name of the supplement to edit
     """
     async with CharmHealthAPIClient() as client:
         try:
             data = build_params_from_locals(locals())
             data.pop("patient_id")
             response = await client.put(f"/patients/{patient_id}/supplements/{supplement_id}", data=data)
-            logger.info(f"Tool call completed for edit_supplement, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for edit_supplement, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in edit_supplement: {e}")
@@ -870,13 +933,19 @@ async def add_allergy(
 ) -> Dict[str, Any]:
     """
     Add an allergy to a patient in CharmHealth.
+
+    This function adds an allergy to a patient in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to add the allergy to
+        allergen (str): The allergen to add to the patient
     """
     async with CharmHealthAPIClient() as client:
         try:
             data = build_params_from_locals(locals())
             data.pop("patient_id")
             response = await client.post(f"/patients/{patient_id}/allergies", data=data)
-            logger.info(f"Tool call completed for add_allergy, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for add_allergy, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in add_allergy: {e}")
@@ -889,11 +958,16 @@ async def get_allergies(
 ) -> Dict[str, Any]:
     """
     Get allergies for a patient in CharmHealth.
+
+    This function gets all allergies for a patient in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to get allergies for
     """
     async with CharmHealthAPIClient() as client:
         try:
             response = await client.get(f"/patients/{patient_id}/allergies")
-            logger.info(f"Tool call completed for get_allergies, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for get_allergies, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in get_allergies: {e}")
@@ -914,13 +988,19 @@ async def edit_allergy(
 ) -> Dict[str, Any]:
     """
     Edit a patient's allergy in CharmHealth.
+
+    This function edits a patient's allergy in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to edit the allergy for
+        allergy_id (str): The unique identifier for the allergy to edit
     """
     async with CharmHealthAPIClient() as client:
         try:
             data = build_params_from_locals(locals())
             data.pop("patient_id")
             response = await client.put(f"/patients/{patient_id}/allergies/{allergy_id}", data=data)
-            logger.info(f"Tool call completed for edit_allergy, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for edit_allergy, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in edit_allergy: {e}")
@@ -934,11 +1014,17 @@ async def delete_allergy(
 ) -> Dict[str, Any]:
     """
     Delete a patient's allergy in CharmHealth.
+
+    This function deletes a patient's allergy in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to delete the allergy for
+        allergy_id (str): The unique identifier for the allergy to delete
     """
     async with CharmHealthAPIClient() as client:
         try:
             response = await client.delete(f"/patients/{patient_id}/allergies/{allergy_id}")
-            logger.info(f"Tool call completed for delete_allergy, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for delete_allergy, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in delete_allergy: {e}")
@@ -1010,7 +1096,7 @@ async def add_medication(
             data = [medication_data]
             
             response = await client.post(f"/patients/{patient_id}/medications", data=data)
-            logger.info(f"Tool call completed for add_medication, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for add_medication, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in add_medication: {e}")
@@ -1027,20 +1113,27 @@ async def list_medications(
 ) -> Dict[str, Any]:
     """
     Get medications for a patient in CharmHealth.
+
+    This function gets all medications for a patient in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to get medications for
+        encounter_id (Optional[str]): The unique identifier for the encounter to get medications for
     """
     async with CharmHealthAPIClient() as client:
         try:
             endpoint = f"/patients/{patient_id}/medications"
+            params = {}
             if encounter_id:
-                endpoint += f"?encounter_id={encounter_id}"
+                params["encounter_id"] = encounter_id
             if page:
-                endpoint += f"?page={page}"
+                params["page"] = page
             if per_page:
-                endpoint += f"?per_page={per_page}"
+                params["per_page"] = per_page
             if sort_order:
-                endpoint += f"?sort_order={sort_order}"
-            response = await client.get(endpoint)
-            logger.info(f"Tool call completed for list_medications, with message {response.get("message", "")} and code {response.get("code", "")}")
+                params["sort_order"] = sort_order
+            response = await client.get(endpoint, params=params)
+            logger.info(f"Tool call completed for list_medications, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in list_medications: {e}")
@@ -1063,12 +1156,27 @@ async def edit_medication(
     trade_name: Optional[str] = None,
     strength_description: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """
+    Edit a medication in CharmHealth.
+
+    This function edits a medication in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to edit the medication for
+        medication_id (str): The unique identifier for the medication to edit
+        drug_name (Optional[str]): The name of the drug to edit
+        is_active (Optional[bool]): The status of the medication (true/false)
+        directions (Optional[str]): The directions to use the medication
+        is_directions_edited (Optional[bool]): Whether the directions have been edited (true/false)
+        dispense (Optional[float]): The dispense of the medication
+        refills (Optional[str]): The refills of the medication
+    """
     async with CharmHealthAPIClient() as client:
         try:
             data = build_params_from_locals(locals())
             data.pop("patient_id")
             response = await client.put(f"/patients/{patient_id}/medications/{medication_id}", data=data)
-            logger.info(f"Tool call completed for edit_medication, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for edit_medication, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in edit_medication: {e}")
@@ -1082,11 +1190,17 @@ async def delete_medication(
 ) -> Dict[str, Any]:
     """
     Delete a medication in CharmHealth.
+
+    This function deletes a medication in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to delete the medication for
+        medication_id (str): The unique identifier for the medication to delete
     """
     async with CharmHealthAPIClient() as client:
         try:
             response = await client.delete(f"/patients/{patient_id}/medications/{medication_id}")
-            logger.info(f"Tool call completed for delete_medication, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for delete_medication, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in delete_medication: {e}")
@@ -1122,7 +1236,7 @@ async def list_lab_results(
         try:
             params = build_params_from_locals(locals())
             response = await client.get("/labs/results", params=params)
-            logger.info(f"Tool call completed for list_lab_results, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for list_lab_results, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in list_lab_results: {e}")
@@ -1136,6 +1250,12 @@ async def get_detailed_lab_result(
 ) -> Dict[str, Any]:
     """
     Get detailed lab result from CharmHealth.
+
+    This function gets a detailed lab result from CharmHealth.
+    
+    Args:
+        group_id (Optional[str]): The unique identifier for the group to get the lab result for
+        lab_order_id (Optional[str]): The unique identifier for the lab order to get the lab result for
     """
     async with CharmHealthAPIClient() as client:
         try:
@@ -1146,7 +1266,7 @@ async def get_detailed_lab_result(
             else:
                 return {"error": "Either group_id or lab_order_id is required."}
             response = await client.get(endpoint)
-            logger.info(f"Tool call completed for get_detailed_lab_result, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for get_detailed_lab_result, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in get_detailed_lab_result: {e}")
@@ -1212,7 +1332,7 @@ async def add_lab_result(
         try:
             data = build_params_from_locals(locals())
             response = await client.post("/labs/results/upload", data=data)
-            logger.info(f"Tool call completed for add_lab_result, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for add_lab_result, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in add_lab_result: {e}")
@@ -1263,7 +1383,7 @@ async def add_diagnosis(
 
             logger.info(f"Diagnosis data: {data}")
             response = await client.post(f"/patients/{patient_id}/diagnoses", data=data)
-            logger.info(f"Tool call completed for add_diagnosis, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for add_diagnosis, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in add_diagnosis: {e}")
@@ -1278,6 +1398,12 @@ async def get_diagnoses(
 ) -> Dict[str, Any]:
     """
     Get diagnoses for a patient in CharmHealth.
+
+    This function gets all diagnoses for a patient in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to get diagnoses for
+        encounter_id (Optional[str]): The unique identifier for the encounter to get diagnoses for
     """
     async with CharmHealthAPIClient() as client:
         try:
@@ -1285,7 +1411,7 @@ async def get_diagnoses(
             if encounter_id:
                 endpoint += f"?encounter_id={encounter_id}"
             response = await client.get(endpoint)
-            logger.info(f"Tool call completed for get_diagnoses, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for get_diagnoses, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in get_diagnoses: {e}")
@@ -1304,13 +1430,19 @@ async def update_diagnosis(
 ) -> Dict[str, Any]:
     """
     Update a diagnosis in CharmHealth.
+
+    This function updates a diagnosis in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to update the diagnosis for
+        diagnosis_id (str): The unique identifier for the diagnosis to update
     """
     async with CharmHealthAPIClient() as client:
         try:
             data = build_params_from_locals(locals())
             data.pop("patient_id")
             response = await client.put(f"/patients/{patient_id}/diagnoses/{diagnosis_id}", data=data)
-            logger.info(f"Tool call completed for update_diagnosis, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for update_diagnosis, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in update_diagnosis: {e}")
@@ -1324,11 +1456,17 @@ async def delete_diagnosis(
 ) -> Dict[str, Any]:
     """
     Delete a diagnosis in CharmHealth.
+
+    This function deletes a diagnosis in CharmHealth.
+    
+    Args:
+        patient_id (str): The unique identifier for the patient to delete the diagnosis for
+        diagnosis_id (str): The unique identifier for the diagnosis to delete
     """
     async with CharmHealthAPIClient() as client:
         try:
             response = await client.delete(f"/patients/{patient_id}/diagnoses/{diagnosis_id}")
-            logger.info(f"Tool call completed for delete_diagnosis, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for delete_diagnosis, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in delete_diagnosis: {e}")

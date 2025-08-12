@@ -1,14 +1,10 @@
 from fastmcp import FastMCP
-from typing import Optional, List, Dict, Any
-from datetime import datetime, date, timedelta, time
-import sys
-import os
-from api_client import CharmHealthAPIClient
-from utils import build_params_from_locals
+from typing import Optional, Dict, Any
+from datetime import date, time
+from api import CharmHealthAPIClient
+from common.utils import build_params_from_locals
 import logging
-from tool_metrics import with_tool_metrics
-from telemetry_config import telemetry
-import contextvars
+from telemetry import with_tool_metrics, telemetry
 
 telemetry.initialize()
 
@@ -36,12 +32,18 @@ async def list_encounters(
 ) -> Dict[str, Any]:
     """
     Get encounters for a patient from CharmHealth.
+
+    Args:
+        member_id: The unique identifier for the member to get encounters for
+        patient_id: The unique identifier for the patient to get encounters for
+        filter_by: The filter to apply to the encounters
+        facility_id: The unique identifier for the facility to get encounters for
     """
     async with CharmHealthAPIClient() as client:
         try:
             params = build_params_from_locals(locals())
             response = await client.get("/encounters", params=params)
-            logger.info(f"Tool call completed for list_encounters, with message {response.get("message", "")} and code {response.get("code", "")}")
+            logger.info(f"Tool call completed for list_encounters, with message {response.get('message', '')} and code {response.get('code', '')}")
             return response
         except Exception as e:
             logger.error(f"Error in list_encounters: {e}")
@@ -60,11 +62,11 @@ async def get_encounter_details(
         try:
             if is_soap:
                 response = await client.get(f"/soap/encounters/{encounter_id}")
-                logger.info(f"Tool call completed for get_encounter_details, with message {response.get("message", "")} and code {response.get("code", "")}")
+                logger.info(f"Tool call completed for get_encounter_details, with message {response.get('message', '')} and code {response.get('code', '')}")
                 return response
             else:
                 response = await client.get(f"/encounters/{encounter_id}")
-                logger.info(f"Tool call completed for get_encounter_details, with message {response.get("message", "")} and code {response.get("code", "")}")
+                logger.info(f"Tool call completed for get_encounter_details, with message {response.get('message', '')} and code {response.get('code', '')}")
                 return response
         except Exception as e:
             logger.error(f"Error in get_encounter_details: {e}")
@@ -88,6 +90,12 @@ async def create_encounter(
     Create an encounter in CharmHealth.
     If appointment_id is provided, creates an encounter from the appointment.
     Otherwise, creates an encounter for a patient without a prior appointment.
+
+    Args:
+        appointment_id: The unique identifier for the appointment to create an encounter from
+        patient_id: The unique identifier for the patient to create an encounter for
+        member_id: The unique identifier for the member to create an encounter for
+        date: The date of the encounter
     """
     async with CharmHealthAPIClient() as client:
         try:
@@ -107,7 +115,7 @@ async def create_encounter(
                 # params.pop("appointment_id")
                 params.pop("patient_id")
                 response = await client.post(f"/patients/{patient_id}/encounter", data=params)
-                logger.info(f"Tool call completed for create_encounter, with message {response.get("message", "")} and code {response.get("code", "")}")
+                logger.info(f"Tool call completed for create_encounter, with message {response.get('message', '')} and code {response.get('code', '')}")
                 return response
         except Exception as e:
             logger.error(f"Error in create_encounter: {e}")
@@ -145,6 +153,12 @@ async def save_encounter(
     Save an encounter in CharmHealth using either the regular encounter API or SOAP encounter API.
     
     Args:
+        encounter_id: The unique identifier for the encounter to save
+        patient_id: The unique identifier for the patient to save the encounter for
+        chief_complaints: The chief complaints for the encounter
+        symptoms: The symptoms for the encounter
+        physical_examination: The physical examination for the encounter
+        treatment_notes: The treatment notes for the encounter
         use_soap_api: If True, uses the SOAP encounter API endpoint
         entries: For SOAP API - Dictionary containing template entries with entry_id and answer
                 Example: {"entry_id": 123, "answer": "Patient response"}
@@ -172,7 +186,7 @@ async def save_encounter(
                 params = build_params_from_locals(locals(), exclude=["use_soap_api", "entries"])
                 if patient_id:
                     response = await client.post(f"/patients/{patient_id}/encounters/{encounter_id}/save", data=params)
-                    logger.info(f"Tool call completed for save_encounter, with message {response.get("message", "")} and code {response.get("code", "")}")
+                    logger.info(f"Tool call completed for save_encounter, with message {response.get('message', '')} and code {response.get('code', '')}")
                     return response
                 else:
                     return {"error": "patient id is required to save a non-SOAP encounter for a patient."}

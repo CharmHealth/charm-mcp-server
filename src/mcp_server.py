@@ -3,11 +3,10 @@ from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
 from fastmcp.server.middleware.rate_limiting import SlidingWindowRateLimitingMiddleware
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 import logging
-from patient_management import patient_management_mcp
-from encounter import encounter_mcp
-from practice_information import practice_information_mcp
-from telemetry_config import telemetry
-import logging
+from tools.patient_management import patient_management_mcp
+from tools.encounter import encounter_mcp
+from tools.practice_information import practice_information_mcp
+from telemetry import telemetry
 import sys
 import os
 from datetime import datetime, timezone

@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import logging
 from typing import Optional, Dict, Any
 from asyncio import Lock
-from tool_metrics import record_api_call, start_api_call, end_api_call, set_client_context
+from telemetry import record_api_call, start_api_call, end_api_call, set_client_context
 import re
 logger = logging.getLogger(__name__)
 
@@ -162,7 +162,7 @@ class CharmHealthAPIClient:
         headers = await self._get_auth_headers()
         start_time = time.time()
         
-        # Remove any IDs from endpoint for metrics (an ID  is an 18 digit number either between / and / or at the end)
+        # Remove any IDs from endpoint for metrics (an ID is an 18 digit number either between / and / or at the end)
         clean_endpoint = re.sub(r'/[0-9]{18}$', '', endpoint)
         clean_endpoint = re.sub(r'/[0-9]{18}/', '/', clean_endpoint)
         

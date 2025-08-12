@@ -59,13 +59,13 @@ Create a `.env` file in the project root with your CharmHealth API credentials:
 
 ```env
 # CharmHealth API Configuration
-CHARMHEALTH_BASE_URL=https://sandbox3.charmtracker.com/api/ehr/v1
+CHARMHEALTH_BASE_URL=your_base_uri_here
 CHARMHEALTH_API_KEY=your_api_key_here
 CHARMHEALTH_REFRESH_TOKEN=your_refresh_token_here
 CHARMHEALTH_CLIENT_ID=your_client_id_here
 CHARMHEALTH_CLIENT_SECRET=your_client_secret_here
-CHARMHEALTH_REDIRECT_URI=https://sandbox3.charmtracker.com/ehr/physician/mySpace.do?ACTION=SHOW_OAUTH_JSON
-CHARMHEALTH_TOKEN_URL=https://accounts106.charmtracker.com/oauth/v2/token
+CHARMHEALTH_REDIRECT_URI=your_redirect_uri_here
+CHARMHEALTH_TOKEN_URL=your_token_url_here
 
 # Optional: Set to "prod" for production logging
 ENV=dev
@@ -75,7 +75,7 @@ ENV=dev
 
 To get your CharmHealth API credentials:
 
-1. **Contact CharmHealth**: Reach out to CharmHealth support to request API access
+1. **Contact CharmHealth**: Reach out to CharmHealth API support to request API access
 2. **OAuth Setup**: Follow their OAuth 2.0 setup process to obtain:
    - API Key
    - Client ID
@@ -110,42 +110,7 @@ The server will be available at `http://127.0.0.1:8080`
 
 ## Docker Deployment
 
-The MCP server can be built and run as a Docker container for easier deployment and isolation.
-
-### Building the Docker Image
-
-Create a `Dockerfile` in the project root:
-
-```dockerfile
-FROM python:3.13-slim
-
-WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy dependency files
-COPY requirements.txt pyproject.toml ./
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY . .
-
-# Expose port for HTTP mode (optional)
-EXPOSE 8080
-
-# Set default command
-CMD ["python", "mcp_server.py"]
-```
-
-Build the image:
-```bash
-docker build -t charm-mcp-server .
-```
+The MCP server can be run as a Docker container for easier deployment and isolation.
 
 ### Running with Docker
 
@@ -161,7 +126,7 @@ docker run --rm -i \
   -e CHARMHEALTH_CLIENT_ID='your_client_id_here' \
   -e CHARMHEALTH_CLIENT_SECRET='your_client_secret_here' \
   -e CHARMHEALTH_REDIRECT_URI='https://sandbox3.charmtracker.com/ehr/physician/mySpace.do?ACTION=SHOW_OAUTH_JSON' \
-  -e CHARMHEALTH_TOKEN_URL='https://accounts106.charmtracker.com/oauth/v2/token' \
+  -e CHARMHEALTH_TOKEN_URL='your_token_url_here' \
   charm-mcp-server
 ```
 
@@ -381,9 +346,6 @@ Returns:
 
 ## Features
 
-### Rate Limiting
-- 100 requests per minute sliding window
-- Prevents API abuse and ensures fair usage
 
 ### Logging & Telemetry
 - Structured logging for debugging and monitoring
@@ -393,11 +355,9 @@ Returns:
 ### Error Handling
 - Comprehensive error handling with informative messages
 - Automatic token refresh for expired authentication
-- Retry logic for transient failures
 
 ### Security
 - Secure credential management via environment variables
-- OAuth 2.0 token-based authentication
 - API key rotation support
 
 ## Development
@@ -416,13 +376,6 @@ charm-mcp-server/
 └── requirements.txt        # Python dependencies
 ```
 
-### Adding New Tools
-
-1. Choose the appropriate module (patient_management, encounter, or practice_information)
-2. Add the tool function with `@module_mcp.tool` decorator
-3. Include proper error handling and logging
-4. Add the `@with_tool_metrics()` decorator for monitoring
-5. Update this README with the new tool information
 
 ### Testing
 
@@ -456,10 +409,13 @@ export ENV=dev
 
 This will provide more detailed debug information in the console output.
 
-## License
-
-[Add your license information here]
 
 ## Support
 
-[Add your support contact information here]
+For issues, questions, or feature requests, contact vibhu@charmhealthtech.com
+
+When reporting issues, please provide:
+- Server logs with error messages
+- Environment configuration (sanitized)
+- Tools being called
+- Expected vs actual behavior

@@ -2,7 +2,7 @@ import functools
 import time
 import logging
 from typing import Dict, Any, Callable, Optional
-from telemetry_config import telemetry
+from .telemetry_config import telemetry
 import contextvars
 
 logger = logging.getLogger(__name__)
