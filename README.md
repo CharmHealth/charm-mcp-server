@@ -1,6 +1,8 @@
 # CharmHealth MCP Server
 
-A Model Context Protocol (MCP) server that provides healthcare data management tools through integration with the CharmHealth EHR API. This server enables MCP clients to interact with patient records, encounters, and practice information through a secure, standardized interface.
+An [MCP](https://modelcontextprotocol.io/) server for CharmHealth EHR that allows LLMs and MCP clients to interact with patient records, encounters, and practice information.
+
+[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 
 ## Features
 
@@ -97,7 +99,7 @@ The server will start and listen for MCP client connections via stdio transport 
 To run in HTTP mode for testing:
 
 ```python
-# Uncomment this line in mcp_server.py:
+# Uncomment this line in mcp_server.py and comment out mcp_composite_server.run():
 mcp_composite_server.run(transport="http", host="127.0.0.1", port=8080)
 ```
 
@@ -365,15 +367,22 @@ Returns:
 ### Project Structure
 ```
 charm-mcp-server/
-├── mcp_server.py           # Main server entry point
-├── api_client.py           # CharmHealth API client
-├── patient_management.py   # Patient management tools
-├── encounter.py            # Encounter management tools  
-├── practice_information.py # Practice information tools
-├── telemetry_config.py     # Telemetry and monitoring
-├── tool_metrics.py         # Tool performance tracking
-├── utils.py                # Utility functions
-└── requirements.txt        # Python dependencies
+├── src/
+│   ├── mcp_server.py                # Main server entry point
+│   ├── api/                         # CharmHealth API client
+│   │   └── api_client.py
+│   ├── tools/
+│   │   ├── patient_management.py    # Patient tools
+│   │   ├── encounter.py             # Encounter tools
+│   │   └── practice_information.py  # Practice tools
+│   ├── common/
+│   │   └── utils.py                 # Utility helpers
+│   └── telemetry/
+│       ├── telemetry_config.py      # Telemetry and monitoring
+│       └── tool_metrics.py          # Tool performance tracking
+├── pyproject.toml                   # Python project and deps
+├── DOCKER.md                        # Additional Docker details
+└── README.md
 ```
 
 
@@ -412,10 +421,10 @@ This will provide more detailed debug information in the console output.
 
 ## Support
 
-For issues, questions, or feature requests, contact vibhu@charmhealthtech.com
+For issues, questions, or feature requests, contact `vibhu@charmhealthtech.com`.
 
-When reporting issues, please provide:
+When reporting issues, please include:
 - Server logs with error messages
 - Environment configuration (sanitized)
-- Tools being called
+- Tool(s) being called
 - Expected vs actual behavior
