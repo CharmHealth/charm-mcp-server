@@ -39,7 +39,7 @@ The server provides three main categories of tools:
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/CharmHealth/charm-mcp-server.git
 cd charm-mcp-server
 ```
 
