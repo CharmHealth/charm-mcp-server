@@ -32,7 +32,9 @@ The server provides three main categories of tools:
 
 - Python 3.13 or higher
 - CharmHealth API credentials (sandbox or production)
+- [uv](https://docs.astral.sh/uv/) to run the server
 - An MCP client (like Claude Desktop, Cody, or other MCP-compatible tools)
+
 
 ## Installation
 
