@@ -4,6 +4,7 @@ from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals
 import logging
 from telemetry import with_tool_metrics, telemetry
+from datetime import date
 
 telemetry.initialize()
 
@@ -140,4 +141,111 @@ async def list_available_vitals_for_practice(
             return response
         except Exception as e:
             logger.error(f"Error in list_available_vitals_for_practice: {e}")
+            return {"error": str(e)}
+        
+
+@practice_information_mcp.tool
+@with_tool_metrics()
+async def list_appointments(
+    start_date: date,  # Required - Start date (yyyy-mm-dd format)
+    end_date: date,  # Required - End date (yyyy-mm-dd format)
+    facility_ids: str,  # Required - Facility IDs separated by commas
+    patient_id: Optional[int] = None,  # Optional - Patient Identifier
+    member_ids: Optional[str] = None,  # Optional - Provider IDs separated by commas
+    status_ids: Optional[str] = None,  # Optional - Status IDs separated by commas or 'ALL'
+    visit_type_ids: Optional[str] = None,  # Optional - Visit type IDs separated by commas
+    modified_time: Optional[int] = None,  # Optional - Modified time
+    modified_time_greater_than: Optional[int] = None,  # Optional - Modified time greater than
+    modified_time_less_than: Optional[int] = None,  # Optional - Modified time less than
+    modified_time_greater_equals: Optional[int] = None,  # Optional - Modified time greater equals
+    modified_time_less_equals: Optional[int] = None,  # Optional - Modified time less equals
+    time_of_creation: Optional[int] = None,  # Optional - Creation time
+    time_of_creation_greater_than: Optional[int] = None,  # Optional - Creation time greater than
+    time_of_creation_less_than: Optional[int] = None,  # Optional - Creation time less than
+    time_of_creation_greater_equals: Optional[int] = None,  # Optional - Creation time greater equals
+    time_of_creation_less_equals: Optional[int] = None,  # Optional - Creation time less equals
+    referral_source: Optional[str] = None,  # Optional - Referral Source
+    referral_specific_source: Optional[str] = None,  # Optional - Specific Source
+    sort_order: Optional[str] = None,  # Optional - A (Ascending) | D (Descending)
+    sort_column: Optional[str] = None,  # Optional - appointment_date
+    page: Optional[int] = None,  # Optional - Page number
+    per_page: Optional[int] = None,  # Optional - Records per page
+) -> Dict[str, Any]:
+    """
+    List appointments in CharmHealth with flexible filtering options.
+    
+    Required parameters:
+    - start_date: Start date for appointment search (yyyy-mm-dd format)
+    - end_date: End date for appointment search (yyyy-mm-dd format)  
+    - facility_ids: Facility IDs separated by commas (e.g., "123,456,789")
+    
+    Optional filtering parameters:
+    - patient_id: Filter by specific patient
+    - member_ids: Filter by specific providers (comma-separated IDs)
+    - status_ids: Filter by appointment status (comma-separated IDs or 'ALL')
+    - visit_type_ids: Filter by visit types (comma-separated IDs)
+    
+    Time-based filtering:
+    - modified_time: Filter by modification time
+    - modified_time_greater_than/less_than/greater_equals/less_equals: Modification time variants
+    - time_of_creation: Filter by creation time
+    - time_of_creation_greater_than/less_than/greater_equals/less_equals: Creation time variants
+    
+    Other filters:
+    - referral_source: Filter by referral source
+    - referral_specific_source: Filter by specific referral source
+    - sort_order: "A" for Ascending, "D" for Descending
+    - sort_column: Currently supports "appointment_date"
+    - page: Page number for pagination
+    - per_page: Number of records per page
+    
+    Common use cases:
+    
+    # All appointments for specific facilities in date range:
+    list_appointments(
+        start_date=date(2020, 7, 1),
+        end_date=date(2020, 7, 15), 
+        facility_ids="5130000xxxx9005"
+    )
+    
+    # All appointments for specific provider across facilities:
+    list_appointments(
+        start_date=date(2020, 7, 1),
+        end_date=date(2020, 7, 15),
+        facility_ids="123,456,789",
+        member_ids="provider_id_123"
+    )
+    
+    # All appointments for specific patient:
+    list_appointments(
+        start_date=date(2020, 7, 1),
+        end_date=date(2020, 7, 15),
+        facility_ids="123",
+        patient_id=1884000004241057
+    )
+    
+    # Confirmed appointments only:
+    list_appointments(
+        start_date=date(2020, 7, 1),
+        end_date=date(2020, 7, 15),
+        facility_ids="123",
+        status_ids="confirmed_status_id"
+    )
+    """
+    async with CharmHealthAPIClient() as client:
+        try:
+            # Build query parameters using build_params_from_locals
+            params = build_params_from_locals(locals())
+            
+            # Convert date objects to the required string format
+            if start_date:
+                params["start_date"] = start_date.strftime("%Y-%m-%d")
+            if end_date:
+                params["end_date"] = end_date.strftime("%Y-%m-%d")
+            
+            response = await client.get("/appointments", params=params)
+            logger.info(f"Tool call completed for list_appointments, with message {response.get('message', '')} and code {response.get('code', '')}")
+            return response
+        except Exception as e:
+            logger.error(f"Error in list_appointments: {e}")
             return {"error": str(e)}

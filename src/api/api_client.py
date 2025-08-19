@@ -136,7 +136,7 @@ class CharmHealthAPIClient:
                 new_token = token_data.get('access_token')
                 expires_in = token_data.get('expires_in', 3600)
                 if not new_token:
-                    raise ValueError(f"Failed to obtain new token")
+                    raise ValueError(f"Failed to obtain new token with response: {response.text}")
 
                 self._auth_token = new_token
                 self._token_expires_at = current_time + expires_in
@@ -153,7 +153,7 @@ class CharmHealthAPIClient:
                 return new_token
 
             except Exception as e:
-                logger.error(f"Failed to refresh token: {e}")
+                logger.error(f"Failed to refresh token: {e} with response: {response.text}")
                 raise
     
     async def _make_request(self, method: str, endpoint: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None, retry_count: int = 0) -> Dict[str, Any]:

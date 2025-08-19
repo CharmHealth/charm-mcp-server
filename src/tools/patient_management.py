@@ -1562,3 +1562,326 @@ async def add_vitals(
         except Exception as e:
             logger.error(f"Error in add_vitals: {e}")
             return {"error": str(e)}
+        
+
+# =========================== PATIENT APPOINTMENTS ===========================
+
+@patient_management_mcp.tool
+@with_tool_metrics()
+async def add_appointment(
+    patient_id: str,
+    facility_id: str,
+    member_id: str,
+    mode: str,  # Required - Phone call|In Person|Video Consult
+    repetition: str,  # Required - Type of appointment (Single Date, Daily, Weekly, etc.)
+    appointment_status: str,  # Required - Appointment Status (Confirmed, Pending, etc.)
+    start_date: date,  # Required - Appointment start date (YYYY-MM-DD)
+    start_time: str,  # Required - Appointment start time (HH:MM period)
+    duration_in_minutes: int,  # Required - Appointment Duration
+    end_date: Optional[date] = None,  # Optional - Appointment end date (YYYY-MM-DD)
+    weekly_days: Optional[List[Dict[str, str]]] = None,  # Optional - [{"week_day": "Monday"}] for periodic appointments
+    reason: Optional[str] = None,  # Optional - Reason for the appointment
+    message_to_patient: Optional[str] = None,  # Optional - Message to patient
+    questionnaire: Optional[List[Dict[str, int]]] = None,  # Optional - [{"questionnaire_id": int}]
+    consent_forms: Optional[List[Dict[str, int]]] = None,  # Optional - [{"file_id": int}]
+    visit_type_id: Optional[int] = None,  # Optional - Visit types of appointment
+    frequency: Optional[str] = None,  # Optional - daily|weekly
+    resource_id: Optional[int] = None,  # Optional - Resource room id
+    provider_double_booking: Optional[str] = None,  # Optional - "allow" to override double booking check
+    resource_double_booking: Optional[str] = None,  # Optional - "allow" to override resource double booking check
+    receipt_id: Optional[int] = None,  # Optional - Receipt details of appointment
+) -> Dict[str, Any]:
+    """
+    Add an appointment for a patient in CharmHealth.
+    
+    Required parameters:
+    - patient_id: Patient Identifier
+    - facility_id: Facility Identifier
+    - member_id: Provider Identifier
+    - mode: Appointment Mode ("Phone call" | "In Person" | "Video Consult")
+    - repetition: Type of appointment ("Single Date", "Daily", "Weekly", etc.)
+    - appointment_status: Appointment Status ("Confirmed", "Pending", etc.)
+    - start_date: Appointment start date (YYYY-MM-DD format)
+    - start_time: Appointment start time (HH:MM period format, e.g., "12:10 PM")
+    - duration_in_minutes: Appointment Duration
+    
+    Optional parameters:
+    - end_date: Appointment end date for recurring appointments
+    - weekly_days: List of weekdays for periodic appointments [{"week_day": "Sunday|Monday|..."}]
+    - reason: Reason for the appointment
+    - message_to_patient: Message to patient
+    - questionnaire: Questionnaires associated [{"questionnaire_id": <id>}]
+    - consent_forms: Consent forms associated [{"file_id": <id>}]
+    - visit_type_id: Visit type identifier
+    - frequency: "daily" or "weekly" for recurring appointments
+    - resource_id: Resource room identifier
+    - provider_double_booking: Set to "allow" to override double booking check
+    - resource_double_booking: Set to "allow" to override resource double booking check
+    - receipt_id: Receipt details identifier
+    
+    Example usage:
+    - Basic appointment: patient_id="123", facility_id="456", member_id="789", 
+      mode="In Person", repetition="Single Date", appointment_status="Confirmed",
+      start_date=date(2024, 8, 8), start_time="12:10 PM", duration_in_minutes=60
+    - Weekly recurring: Same as above but repetition="Weekly", frequency="weekly",
+      weekly_days=[{"week_day": "Monday"}, {"week_day": "Wednesday"}]
+    """
+    async with CharmHealthAPIClient() as client:
+        try:
+            # Build the appointment data using build_params_from_locals
+            appointment_data = build_params_from_locals(locals())
+            
+            
+            if start_date:
+                appointment_data["start_date"] = start_date.isoformat()
+            if end_date:
+                appointment_data["end_date"] = end_date.isoformat()
+            
+            
+            data = {"data": appointment_data}
+            
+            response = await client.post("/appointments", data=data)
+            logger.info(f"Tool call completed for add_appointment, with message {response.get('message', '')} and code {response.get('code', '')}")
+            return response
+        except Exception as e:
+            logger.error(f"Error in add_appointment: {e}")
+            return {"error": str(e)}
+
+@patient_management_mcp.tool
+@with_tool_metrics()
+async def reschedule_appointment(
+    appointment_id: str,
+    facility_id: str,
+    patient_id: str,
+    member_id: str,
+    mode: str,  # Required - Phone call|In Person|Video Consult
+    repetition: str,  # Required - Single Date, Period
+    start_date: date,  # Required - Appointment start date (YYYY-MM-DD)
+    start_time: str,  # Required - Appointment start time (HH:MM period)
+    duration_in_minutes: int,  # Required - Appointment duration (max 4 digits)
+    appointment_status: str,  # Required - Confirmed, Cancelled, Consulted, etc.
+    visit_type_id: int,  # Required - Visit types of appointment
+    reason: Optional[str] = None,  # Optional - Reason for appointment (max 1000 chars)
+    source: Optional[str] = None,  # Optional - Appointment source (max 10 chars)
+    message_to_patient: Optional[str] = None,  # Optional - Message to patient (max 1000 chars)
+    questionnaire: Optional[List[Dict[str, int]]] = None,  # Optional - [{"questionnaire_id": int}]
+    consent_forms: Optional[List[Dict[str, int]]] = None,  # Optional - [{"file_id": int}]
+    resource_id: Optional[int] = None,  # Optional - Resource Identifier
+    provider_double_booking: Optional[str] = None,  # Optional - "allow" to override double booking check
+    resource_double_booking: Optional[str] = None,  # Optional - "allow" to override resource double booking check
+) -> Dict[str, Any]:
+    """
+    Reschedule an existing appointment in CharmHealth.
+    
+    Required parameters:
+    - appointment_id: Existing appointment identifier to reschedule
+    - facility_id: Facility Identifier
+    - patient_id: Patient Identifier  
+    - member_id: Member/Provider Identifier
+    - mode: Appointment Mode ("Phone call" | "In Person" | "Video Consult")
+    - repetition: Type of appointment ("Single Date" | "Period")
+    - start_date: New appointment start date (YYYY-MM-DD format)
+    - start_time: New appointment start time (HH:MM period format, e.g., "07:30 AM")
+    - duration_in_minutes: Appointment duration in minutes (maximum 4 digits)
+    - appointment_status: Appointment Status ("Confirmed", "Cancelled", "Consulted", etc.)
+    - visit_type_id: Visit type identifier
+    
+    Optional parameters:
+    - reason: Reason for appointment (maximum 1000 characters)
+    - source: Appointment source (maximum 10 characters)
+    - message_to_patient: Message to patient (maximum 1000 characters)
+    - questionnaire: Questionnaires associated [{"questionnaire_id": <id>}]
+    - consent_forms: Consent forms associated [{"file_id": <id>}]
+    - resource_id: Resource identifier
+    - provider_double_booking: Set to "allow" to override double booking check
+    - resource_double_booking: Set to "allow" to override resource double booking check
+    
+    Example usage:
+    reschedule_appointment(
+        appointment_id="100004000000017379",
+        facility_id="100001000000000153", 
+        patient_id="100001000000000599",
+        member_id="100001000000000101",
+        mode="Phone Call",
+        repetition="Single Date",
+        start_date=date(2021, 3, 2),
+        start_time="07:30 AM",
+        duration_in_minutes=8,
+        appointment_status="Confirmed",
+        visit_type_id=100001000000008001,
+        reason="auto immune hashimo thyroid",
+        message_to_patient="take tests for anti TPO and TSH"
+    )
+    """
+    async with CharmHealthAPIClient() as client:
+        try:
+            # Build the appointment data using build_params_from_locals
+            appointment_data = build_params_from_locals(locals())
+            
+            # Remove appointment_id from the data payload as it's in the URL
+            appointment_data.pop("appointment_id", None)
+            
+            # Convert date objects to ISO format strings as required by API
+            if start_date:
+                appointment_data["start_date"] = start_date.isoformat()
+            
+            # Wrap the data in the required "data" object structure  
+            data = {"data": appointment_data}
+            
+            response = await client.post(f"/appointment/{appointment_id}/reschedule", data=data)
+            logger.info(f"Tool call completed for reschedule_appointment, with message {response.get('message', '')} and code {response.get('code', '')}")
+            return response
+        except Exception as e:
+            logger.error(f"Error in reschedule_appointment: {e}")
+            return {"error": str(e)}
+        
+@patient_management_mcp.tool
+@with_tool_metrics()
+async def cancel_appointment(
+    appointment_id: str,
+    reason: str,  # Required - Reason for cancellation (max length 400)
+    delete_type: Optional[str] = None,  # Optional - Current|Entire
+) -> Dict[str, Any]:
+    """
+    Cancel an existing appointment in CharmHealth.
+    
+    Required parameters:
+    - appointment_id: Existing appointment identifier to cancel
+    - reason: Reason for cancellation (maximum 400 characters)
+    
+    Optional parameters:
+    - delete_type: Type of cancellation ("Current" | "Entire")
+      - "Current": Cancel only the current appointment
+      - "Entire": Cancel the entire series (for recurring appointments)
+    
+    Example usage:
+    cancel_appointment(
+        appointment_id="100004000000017379",
+        reason="Booked for different date",
+        delete_type="Current"
+    )
+    """
+    async with CharmHealthAPIClient() as client:
+        try:
+            # Build the cancellation data
+            data = {
+                "reason": reason
+            }
+            
+            # Add delete_type if provided
+            if delete_type:
+                data["delete_type"] = delete_type
+            
+            response = await client.post(f"/appointments/{appointment_id}/cancel", data=data)
+            logger.info(f"Tool call completed for cancel_appointment, with message {response.get('message', '')} and code {response.get('code', '')}")
+            return response
+        except Exception as e:
+            logger.error(f"Error in cancel_appointment: {e}")
+            return {"error": str(e)}
+
+@patient_management_mcp.tool
+@with_tool_metrics()
+async def list_appointments(
+    start_date: date,  # Required - Start date (yyyy-mm-dd format)
+    end_date: date,  # Required - End date (yyyy-mm-dd format)
+    facility_ids: str,  # Required - Facility IDs separated by commas
+    patient_id: Optional[int] = None,  # Optional - Patient Identifier
+    member_ids: Optional[str] = None,  # Optional - Provider IDs separated by commas
+    status_ids: Optional[str] = None,  # Optional - Status IDs separated by commas or 'ALL'
+    visit_type_ids: Optional[str] = None,  # Optional - Visit type IDs separated by commas
+    modified_time: Optional[int] = None,  # Optional - Modified time
+    modified_time_greater_than: Optional[int] = None,  # Optional - Modified time greater than
+    modified_time_less_than: Optional[int] = None,  # Optional - Modified time less than
+    modified_time_greater_equals: Optional[int] = None,  # Optional - Modified time greater equals
+    modified_time_less_equals: Optional[int] = None,  # Optional - Modified time less equals
+    time_of_creation: Optional[int] = None,  # Optional - Creation time
+    time_of_creation_greater_than: Optional[int] = None,  # Optional - Creation time greater than
+    time_of_creation_less_than: Optional[int] = None,  # Optional - Creation time less than
+    time_of_creation_greater_equals: Optional[int] = None,  # Optional - Creation time greater equals
+    time_of_creation_less_equals: Optional[int] = None,  # Optional - Creation time less equals
+    referral_source: Optional[str] = None,  # Optional - Referral Source
+    referral_specific_source: Optional[str] = None,  # Optional - Specific Source
+    sort_order: Optional[str] = None,  # Optional - A (Ascending) | D (Descending)
+    sort_column: Optional[str] = None,  # Optional - appointment_date
+    page: Optional[int] = None,  # Optional - Page number
+    per_page: Optional[int] = None,  # Optional - Records per page
+) -> Dict[str, Any]:
+    """
+    List appointments in CharmHealth with flexible filtering options.
+    
+    Required parameters:
+    - start_date: Start date for appointment search (yyyy-mm-dd format)
+    - end_date: End date for appointment search (yyyy-mm-dd format)  
+    - facility_ids: Facility IDs separated by commas (e.g., "123,456,789")
+    
+    Optional filtering parameters:
+    - patient_id: Filter by specific patient
+    - member_ids: Filter by specific providers (comma-separated IDs)
+    - status_ids: Filter by appointment status (comma-separated IDs or 'ALL')
+    - visit_type_ids: Filter by visit types (comma-separated IDs)
+    
+    Time-based filtering:
+    - modified_time: Filter by modification time
+    - modified_time_greater_than/less_than/greater_equals/less_equals: Modification time variants
+    - time_of_creation: Filter by creation time
+    - time_of_creation_greater_than/less_than/greater_equals/less_equals: Creation time variants
+    
+    Other filters:
+    - referral_source: Filter by referral source
+    - referral_specific_source: Filter by specific referral source
+    - sort_order: "A" for Ascending, "D" for Descending
+    - sort_column: Currently supports "appointment_date"
+    - page: Page number for pagination
+    - per_page: Number of records per page
+    
+    Common use cases:
+    
+    # All appointments for specific facilities in date range:
+    list_appointments(
+        start_date=date(2020, 7, 1),
+        end_date=date(2020, 7, 15), 
+        facility_ids="5130000xxxx9005"
+    )
+    
+    # All appointments for specific provider across facilities:
+    list_appointments(
+        start_date=date(2020, 7, 1),
+        end_date=date(2020, 7, 15),
+        facility_ids="123,456,789",
+        member_ids="provider_id_123"
+    )
+    
+    # All appointments for specific patient:
+    list_appointments(
+        start_date=date(2020, 7, 1),
+        end_date=date(2020, 7, 15),
+        facility_ids="123",
+        patient_id=1884000004241057
+    )
+    
+    # Confirmed appointments only:
+    list_appointments(
+        start_date=date(2020, 7, 1),
+        end_date=date(2020, 7, 15),
+        facility_ids="123",
+        status_ids="confirmed_status_id"
+    )
+    """
+    async with CharmHealthAPIClient() as client:
+        try:
+            # Build query parameters using build_params_from_locals
+            params = build_params_from_locals(locals())
+            
+            # Convert date objects to the required string format
+            if start_date:
+                params["start_date"] = start_date.strftime("%Y-%m-%d")
+            if end_date:
+                params["end_date"] = end_date.strftime("%Y-%m-%d")
+            
+            response = await client.get("/appointments", params=params)
+            logger.info(f"Tool call completed for list_appointments, with message {response.get('message', '')} and code {response.get('code', '')}")
+            return response
+        except Exception as e:
+            logger.error(f"Error in list_appointments: {e}")
+            return {"error": str(e)}
+
