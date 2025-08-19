@@ -184,4 +184,4 @@ class TelemetryConfig:
         return metrics.get_meter(name, self.service_version)
 
 # Global telemetry instance
-telemetry = TelemetryConfig()
+telemetry = TelemetryConfig() if os.getenv("COLLECT_METRICS", "false").lower() in ("true", "1", "yes") else None

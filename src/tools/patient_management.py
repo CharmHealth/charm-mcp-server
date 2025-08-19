@@ -6,7 +6,8 @@ from common.utils import build_params_from_locals
 import logging
 from telemetry import telemetry, with_tool_metrics
 
-telemetry.initialize()
+if telemetry:
+    telemetry.initialize()
 
 logger = logging.getLogger(__name__)
 
