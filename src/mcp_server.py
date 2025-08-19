@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     use_stdio = True
-    if len(sys.argv) > 1 and sys.argv[1].lower() in ('http'):
+    if len(sys.argv) > 1 and sys.argv[1].strip().lower() == 'http':
         use_stdio = False
     if use_stdio:
         mcp_composite_server.run()
