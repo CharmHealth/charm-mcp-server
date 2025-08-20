@@ -6,8 +6,7 @@ import logging
 from telemetry import with_tool_metrics, telemetry
 from datetime import date
 
-if telemetry:
-    telemetry.initialize()
+telemetry.initialize()
 
 logger = logging.getLogger(__name__)
 
