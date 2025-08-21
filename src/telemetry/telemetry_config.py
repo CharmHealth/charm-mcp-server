@@ -17,6 +17,39 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+class NullMetricInstrument:
+    """Base null object for metric instruments"""
+    def set(self, value, attributes=None):
+        pass
+    
+    def add(self, value, attributes=None):
+        pass
+    
+    def record(self, value, attributes=None):
+        pass
+
+class NullTelemetry:
+    """Null object implementation of TelemetryConfig that does nothing"""
+    def __init__(self):
+        # Initialize all metric instruments as null objects
+        self.tool_calls_counter = NullMetricInstrument()
+        self.tool_duration_histogram = NullMetricInstrument()
+        self.api_calls_counter = NullMetricInstrument()
+        self.tool_calls_gauge = NullMetricInstrument()
+        self.api_calls_gauge = NullMetricInstrument()
+        self.tool_success_rate_gauge = NullMetricInstrument()
+        self.api_latency_gauge = NullMetricInstrument()
+        self._initialized = True
+    
+    def initialize(self):
+        pass
+    
+    def get_tracer(self, name: str):
+        return None
+    
+    def get_meter(self, name: str):
+        return None
+
 class TelemetryConfig:
     def __init__(self):
         self.service_name = os.getenv("OTEL_SERVICE_NAME")
@@ -184,4 +217,4 @@ class TelemetryConfig:
         return metrics.get_meter(name, self.service_version)
 
 # Global telemetry instance
-telemetry = TelemetryConfig()
+telemetry = TelemetryConfig() if os.getenv("COLLECT_METRICS", "false").lower() in ("true", "1", "yes") else NullTelemetry()
