@@ -394,7 +394,13 @@ charm-mcp-server/
 
 ### Testing
 
-Test individual tools by running the server and connecting with an MCP client, or test the HTTP endpoints directly when running in HTTP mode.
+Test individual tools by running the server and connecting with an MCP client, or test using MCP Inspector:
+
+```
+cd path/to/charm-mcp-server
+npx @modelcontextprotocol/inspector uvx uv run src/mcp_server.py
+```
+
 
 ## Troubleshooting
 
