@@ -3,9 +3,10 @@ from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
 from fastmcp.server.middleware.rate_limiting import SlidingWindowRateLimitingMiddleware
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 import logging
-from tools.patient_management import patient_management_mcp
-from tools.encounter import encounter_mcp
-from tools.practice_information import practice_information_mcp
+# from tools.patient_management import patient_management_mcp
+# from tools.encounter import encounter_mcp
+# from tools.practice_information import practice_information_mcp
+from tools.charm_mcp_tools import charm_mcp
 from telemetry import telemetry
 import sys
 import os
@@ -25,9 +26,7 @@ mcp_composite_server.add_middleware(SlidingWindowRateLimitingMiddleware(
 
 mcp_composite_server.add_middleware(StructuredLoggingMiddleware())
 
-mcp_composite_server.mount(server=patient_management_mcp, prefix="PatientManagement")
-mcp_composite_server.mount(server=encounter_mcp, prefix="Encounter")
-mcp_composite_server.mount(server=practice_information_mcp, prefix="PracticeInformation")
+mcp_composite_server.mount(server=charm_mcp, prefix="CharmHealth")
 
 @mcp_composite_server.custom_route("/health", methods=["GET"])
 async def health_check(request: Request) -> JSONResponse:

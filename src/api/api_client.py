@@ -188,7 +188,7 @@ class CharmHealthAPIClient:
             result = response.json()
             duration = time.time() - start_time
             api_success = True
-            
+            logger.info(f"Received {result} from {endpoint} with status code {response.status_code}")
             # Record successful API call
             record_api_call(self.client_id, True, clean_endpoint, method, duration)
             return result

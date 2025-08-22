@@ -272,8 +272,13 @@ Add the following to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "charm-health": {
-      "command": "python",
-      "args": ["/path/to/charm-mcp-server/mcp_server.py"],
+      "command": "uv",
+      "args": [
+                "--directory",
+                "/path/to/charm-mcp-server/src",
+                "run",
+                "mcp_server.py"
+                ],
       "env": {
         "CHARMHEALTH_BASE_URL": "https://sandbox3.charmtracker.com/api/ehr/v1",
         "CHARMHEALTH_API_KEY": "your_api_key_here",
