@@ -6,13 +6,13 @@ from .charm_mcp_tools import (
     managePatientDrugs,  
     documentEncounter,
     getPracticeInfo,
-    manageAllergies,     
-    manageDiagnoses,     
+    managePatientAllergies,     
+    managePatientDiagnoses,     
     managePatientNotes,  
-    manageRecalls,       
-    manageAppointments,
+    managePatientRecalls,       
+    managePatientAppointments,
     managePatientFiles,
-    manageLabs
+    managePatientLabs
 )
 
 __all__ = [
@@ -23,11 +23,11 @@ __all__ = [
     "managePatientDrugs",     
     "documentEncounter",
     "getPracticeInfo",
-    "manageAllergies",        
-    "manageDiagnoses",        
+    "managePatientAllergies",        
+    "managePatientDiagnoses",        
     "managePatientNotes",     
-    "manageRecalls",          
-    "manageAppointments",
+    "managePatientRecalls",          
+    "managePatientAppointments",
     "managePatientFiles",
-    "manageLabs"
+    "managePatientLabs"
 ]

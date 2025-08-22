@@ -6,27 +6,49 @@ An [MCP](https://modelcontextprotocol.io/) server for CharmHealth EHR that allow
 
 ## Features
 
-The server provides three main categories of tools:
+The server provides **14 comprehensive tools** organized into three main categories for complete EHR functionality:
 
-### 🏥 Patient Management
-- **Patient Records**: List, search, add, update, and manage patient information
-- **Medical History**: Manage allergies, medications, supplements, and diagnoses  
-- **Lab Results**: Add and retrieve detailed lab results and reports
-- **Quick Notes**: Add, edit, and delete patient quick notes
-- **Recalls**: Manage patient recall schedules
-- **Vitals**: Record patient vital signs
-- **Photo Management**: Upload and manage patient photos
-- **Patient Status**: Activate/deactivate patients and send PHR invitations
+### 🏥 Patient Management (10 tools)
+- **Patient Search & Records**: Advanced patient search with demographics, location, and medical criteria
+- **Patient Management**: Complete demographic and administrative data handling
+- **Medical History**: Comprehensive patient clinical overview and history review
+- **Drug Management**: Unified medications, supplements, and prescribing with safety checks
+- **Allergy Management**: Critical allergy documentation with safety alerts
+- **Diagnosis Management**: Problem list and diagnosis tracking
+- **Clinical Notes**: Quick clinical observations and provider communications
+- **Recalls & Follow-ups**: Preventive care reminders and appointment scheduling
+- **Vital Signs**: Complete vital signs recording and trend monitoring
+- **File Management**: Patient photos, documents, and PHR invitations
 
-### 📋 Encounter Management
-- **Encounter Records**: List, create, and retrieve encounter details
-- **Encounter Workflow**: Save and manage encounter documentation
-- **Filtering**: Filter encounters by status, facility, dates, and more
+### 🧪 Clinical Operations (2 tools)
+- **Encounter Documentation**: Complete SOAP note workflow and clinical findings
+- **Laboratory Management**: Lab results tracking and detailed reporting
 
-### 🏢 Practice Information
-- **Facilities**: List and manage practice facilities
-- **Staff Members**: Access practice member information
-- **Vitals Configuration**: List available vital sign types for the practice
+### 🏢 Practice Information (2 tools)
+- **Practice Setup**: Facilities, providers, and vital sign templates
+- **Appointment Management**: Complete appointment lifecycle with scheduling and rescheduling
+
+## Quick Start
+
+1. **Clone and install dependencies**:
+   ```bash
+   git clone https://github.com/CharmHealth/charm-mcp-server.git
+   cd charm-mcp-server
+   uv sync
+   ```
+
+2. **Configure environment**:
+   ```bash
+   cp .env.example .env  # Create from template if available
+   # Edit .env with your CharmHealth API credentials
+   ```
+
+3. **Run the server**:
+   ```bash
+   uv run --directory src mcp_server.py
+   ```
+
+4. **Configure your MCP client** (e.g., Claude Desktop) to connect to the server.
 
 ## Prerequisites
 
@@ -52,9 +74,9 @@ Using uv (recommended):
 uv sync
 ```
 
-Or using pip:
+**Note**: This project uses `pyproject.toml` for dependency management. If you prefer pip, you can install from the project definition:
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ### 3. Environment Configuration
@@ -78,6 +100,8 @@ ENV=dev
 COLLECT_METRICS=false
 ```
 
+**Important**: All environment variables must be properly set before running the server. The server will fail to start if required CharmHealth API credentials are missing.
+
 ### 4. Obtain CharmHealth API Credentials
 
 To get your CharmHealth API credentials:
@@ -93,27 +117,14 @@ To get your CharmHealth API credentials:
 
 ## Running the Server
 
-### Standalone Mode
+
 ```bash
-python mcp_server.py
+# Stdio mode (default)
+uv run --directory src mcp_server.py
+
+# HTTP mode
+uv run --directory src mcp_server.py http
 ```
-
-The server will start and listen for MCP client connections via stdio transport by default.
-
-### HTTP Mode (Development/Testing)
-To run in HTTP mode for testing:
-
-```python
-# Uncomment this line in mcp_server.py and comment out mcp_composite_server.run():
-mcp_composite_server.run(transport="http", host="127.0.0.1", port=8080)
-```
-
-Then run:
-```bash
-python mcp_server.py
-```
-
-The server will be available at `http://127.0.0.1:8080`
 
 ## Docker Deployment
 
@@ -299,47 +310,33 @@ Add the following to your Claude Desktop configuration file:
 ### Other MCP Clients
 
 For other MCP clients, configure them to run the server using:
-- **Command**: `python mcp_server.py`  
+- **Command**: `uv run src/mcp_server.py` (from project root) or `python mcp_server.py` (from src/ directory)
 - **Transport**: stdio
 - **Environment**: Include all CharmHealth API credentials
 
 ## Available Tools
 
-### Patient Management Tools (35 tools)
+The server provides **14 comprehensive tools** for complete EHR functionality:
 
-<details>
-<summary>Click to expand patient management tools</summary>
+### Patient and Encounter Management (12 tools)
 
-- `list_patients` - Search and list patients with filtering options
-- `get_patient_details` - Get detailed information for a specific patient
-- `add_patient` - Add a new patient to the system
-- `update_patient` - Update existing patient information
-- `activate_patient` / `deactivate_patient` - Manage patient status
-- `send_phr_invite` - Send patient health record invitations
-- `upload_patient_id` / `upload_patient_photo` / `delete_patient_photo` - Photo management
-- `list_quick_notes` / `add_quick_note` / `edit_quick_note` / `delete_quick_note` - Quick notes
-- `get_recalls` / `add_recall` - Patient recall management
-- `add_supplement` / `list_supplements` / `edit_supplement` - Supplement tracking
-- `add_allergy` / `get_allergies` / `edit_allergy` / `delete_allergy` - Allergy management
-- `add_medication` / `list_medications` / `edit_medication` / `delete_medication` - Medication management
-- `list_lab_results` / `get_detailed_lab_result` / `add_lab_result` - Lab result tracking
-- `add_diagnosis` / `get_diagnoses` / `update_diagnosis` / `delete_diagnosis` - Diagnosis management
-- `add_vitals` - Vital signs recording
+- **`documentEncounter`** - Complete encounter documentation workflow with comprehensive SOAP note capabilities and specialized clinical sections.
+- **`findPatients`** - Advanced patient search with demographics, location, and medical criteria. Essential first step for any patient-related task.
+- **`managePatient`** - Complete patient management with comprehensive demographic, social, and administrative data. Handles patient creation, updates, and status changes.
+- **`reviewPatientHistory`** - Get comprehensive patient information including medical history, current medications, and recent visits. Perfect for clinical decision-making.
+- **`managePatientDrugs`** - Unified drug management for medications, supplements, and vitamins with automatic allergy checking and drug safety workflow.
+- **`managePatientAllergies`** - Critical allergy management with safety alerts. Essential for safe prescribing and clinical decision-making.
+- **`managePatientDiagnoses`** - Complete diagnosis management for patient problem lists. Essential for clinical reasoning and care planning.
+- **`managePatientNotes`** - Quick clinical note management for important patient information and provider communications.
+- **`managePatientRecalls`** - Patient recall and follow-up management for preventive care reminders and care plan tracking.
+- **`managePatientVitals`** - Complete patient vital signs management with trend monitoring. Essential for clinical monitoring.
+- **`managePatientFiles`** - Patient file and document management including photos, identity documents, and PHR invitations.
+- **`managePatientLabs`** - Complete laboratory results management including listing lab results, detailed reports, and adding new results.
 
-</details>
+### Practice Information (2 tools)
 
-### Encounter Management Tools (4 tools)
-
-- `list_encounters` - List encounters with filtering by patient, date, status, etc.
-- `get_encounter_details` - Get detailed information for a specific encounter
-- `create_encounter` - Create a new patient encounter
-- `save_encounter` - Save encounter documentation and notes
-
-### Practice Information Tools (3 tools)
-
-- `list_facilities` - List all practice facilities
-- `list_members` - List practice staff members  
-- `list_available_vitals_for_practice` - Get available vital sign types
+- **`getPracticeInfo`** - Get essential practice information including available facilities, providers, and vital signs templates.
+- **`managePatientAppointments`** - Complete appointment lifecycle management including scheduling, rescheduling, cancellation, and flexible filtering.
 
 ## Health Check
 
@@ -379,20 +376,24 @@ Returns:
 charm-mcp-server/
 ├── src/
 │   ├── mcp_server.py                # Main server entry point
-│   ├── api/                         # CharmHealth API client
-│   │   └── api_client.py
+│   ├── api/
+│   │   ├── __init__.py
+│   │   └── api_client.py            # CharmHealth API client
 │   ├── tools/
-│   │   ├── patient_management.py    # Patient tools
-│   │   ├── encounter.py             # Encounter tools
-│   │   └── practice_information.py  # Practice tools
+│   │   ├── __init__.py
+│   │   └── charm_mcp_tools.py       # All 14 MCP tools (unified)
 │   ├── common/
+│   │   ├── __init__.py
 │   │   └── utils.py                 # Utility helpers
-│   └── telemetry/
-│       ├── telemetry_config.py      # Telemetry and monitoring
-│       └── tool_metrics.py          # Tool performance tracking
-├── pyproject.toml                   # Python project and deps
-├── DOCKER.md                        # Additional Docker details
-└── README.md
+│   ├── telemetry/
+│   │   ├── __init__.py
+│   │   ├── telemetry_config.py      # Telemetry and monitoring
+│   │   └── tool_metrics.py          # Tool performance tracking
+│   └── charm_mcp_server.egg-info/   # Package metadata
+├── pyproject.toml                   # Python project configuration
+├── uv.lock                          # Dependency lock file
+├── DOCKER.md                        # Docker deployment guide
+└── README.md                        # This file
 ```
 
 
