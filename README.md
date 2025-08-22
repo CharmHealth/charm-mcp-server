@@ -381,7 +381,7 @@ charm-mcp-server/
 │   │   └── api_client.py            # CharmHealth API client
 │   ├── tools/
 │   │   ├── __init__.py
-│   │   └── charm_mcp_tools.py       # All 14 MCP tools (unified)
+│   │   └── charm_mcp_tools.py       # All 14 MCP tools
 │   ├── common/
 │   │   ├── __init__.py
 │   │   └── utils.py                 # Utility helpers
