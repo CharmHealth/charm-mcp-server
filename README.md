@@ -73,6 +73,9 @@ CHARMHEALTH_TOKEN_URL=your_token_url_here
 
 # Optional: Set to "prod" for production logging
 ENV=dev
+
+# Enable or disable metric collection using OTEL. This is disabled by default. 
+COLLECT_METRICS=false
 ```
 
 ### 4. Obtain CharmHealth API Credentials

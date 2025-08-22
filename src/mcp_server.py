@@ -45,8 +45,13 @@ logging.basicConfig(level=logging.DEBUG if os.getenv("ENV") == "prod" else loggi
 logger = logging.getLogger(__name__)
 
 
-
-
 if __name__ == "__main__":
-    # mcp_composite_server.run(transport="http", host="127.0.0.1", port=8080)
-    mcp_composite_server.run()
+    use_stdio = True
+    if len(sys.argv) > 1 and sys.argv[1].strip().lower() == 'http':
+        use_stdio = False
+    if use_stdio:
+        mcp_composite_server.run()
+    else:
+        host = os.getenv("MCPSERVER_HOST", "127.0.0.1")
+        port = int(os.getenv("MCPSERVER_PORT", "8080"))
+        mcp_composite_server.run(transport="http", host=host, port=port)
