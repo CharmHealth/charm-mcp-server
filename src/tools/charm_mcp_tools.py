@@ -209,7 +209,7 @@ async def findPatients(
                     # Suggest immediate next actions based on common workflows
                     next_actions.append(f"reviewPatientHistory('{patient_id}') for complete clinical overview")
                     next_actions.append(f"managePatientAllergies(action='list', patient_id='{patient_id}') to check safety alerts")
-                    next_actions.append(f"managePatientAppointments(action='list', patient_id='{patient_id}') for scheduling")
+                    next_actions.append(f"manageAppointments(action='list', patient_id='{patient_id}') for scheduling")
                     
                     message = total_message + f"Patient found: {patient.get('first_name', '')} {patient.get('last_name', '')}. " + \
                              f"Next steps: {' OR '.join(next_actions[:2])}."
@@ -984,7 +984,7 @@ async def reviewPatientHistory(
                 next_appt = patient_summary["upcoming_appointments"][0]
                 workflow_guidance.append(f"Next visit: {next_appt.get('appointment_date')} - prepare encounter with documentEncounter()")
             else:
-                workflow_guidance.append("No upcoming appointments - schedule follow-up with managePatientAppointments() if needed")
+                workflow_guidance.append("No upcoming appointments - schedule follow-up with manageAppointments() if needed")
             
             # Medication review guidance
             if patient_summary.get("current_medications"):
@@ -1549,7 +1549,7 @@ async def documentEncounter(
             result = {
                 "encounter_id": encounter_id,
                 "documentation_completed": documentation_steps,
-                "guidance": f"Encounter documented successfully. Next steps: Use managePatientVitals() to record vital signs, managePatientDrugs() to update prescriptions, add diagnoses with managePatientDiagnoses(), or schedule follow-up with managePatientAppointments()."
+                "guidance": f"Encounter documented successfully. Next steps: Use managePatientVitals() to record vital signs, managePatientDrugs() to update prescriptions, add diagnoses with managePatientDiagnoses(), or schedule follow-up with manageAppointments()."
             }
             return result
             
@@ -1850,7 +1850,7 @@ async def managePatientDiagnoses(
                         guidance = f"Diagnosis '{diagnosis_name}' ({diagnosis_code}) added successfully to problem list."
                         if encounter_id:
                             guidance += f" Linked to encounter {encounter_id} for billing."
-                        guidance += " Consider appropriate treatments (medications, supplements, etc.) with managePatientDrugs() or schedule follow-up with managePatientAppointments()."
+                        guidance += " Consider appropriate treatments (medications, supplements, etc.) with managePatientDrugs() or schedule follow-up with manageAppointments()."
                         response["guidance"] = guidance
                     return response
                     
@@ -2033,7 +2033,7 @@ async def managePatientRecalls(
                         active_recalls = [r for r in response["recall"] if r.get("status", "").lower() == "active"]
                         
                         guidance = f"Patient has {recall_count} total recalls, {len(active_recalls)} active"
-                        guidance += ". These ensure timely preventive care and follow-up visits. Schedule appointments with managePatientAppointments() when recalls are due."
+                        guidance += ". These ensure timely preventive care and follow-up visits. Schedule appointments with manageAppointments() when recalls are due."
                         response["guidance"] = guidance
                     else:
                         response["guidance"] = "No recalls scheduled. Use action='add' to schedule preventive care reminders based on clinical guidelines and patient needs."
@@ -2068,7 +2068,7 @@ async def managePatientRecalls(
                         reminder_info = ""
                         if send_email_reminder or send_text_reminder:
                             reminder_info = " Patient will receive automated reminders."
-                        response["guidance"] = f"Recall for '{recall_type}' scheduled successfully.{reminder_info} Use managePatientAppointments() to schedule the actual appointment when due."
+                        response["guidance"] = f"Recall for '{recall_type}' scheduled successfully.{reminder_info} Use manageAppointments() to schedule the actual appointment when due."
                     return response
                     
                 case "update":
@@ -2342,7 +2342,7 @@ async def manageAppointments(
                     return response
                     
         except Exception as e:
-            logger.error(f"Error in managePatientAppointments: {e}")
+            logger.error(f"Error in manageAppointments: {e}")
             return {
                 "error": str(e),
                 "guidance": f"Appointment {action} failed. Check your parameters and try again. Use getPracticeInfo() to verify provider and facility IDs."

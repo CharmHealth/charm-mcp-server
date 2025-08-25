@@ -10,7 +10,7 @@ from .charm_mcp_tools import (
     managePatientDiagnoses,     
     managePatientNotes,  
     managePatientRecalls,       
-    managePatientAppointments,
+    manageAppointments,
     managePatientFiles,
     managePatientLabs
 )
@@ -27,7 +27,7 @@ __all__ = [
     "managePatientDiagnoses",        
     "managePatientNotes",     
     "managePatientRecalls",          
-    "managePatientAppointments",
+    "manageAppointments",
     "managePatientFiles",
     "managePatientLabs"
 ]
