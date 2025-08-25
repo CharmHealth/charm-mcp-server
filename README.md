@@ -331,7 +331,7 @@ The server provides **14 comprehensive tools** for complete EHR functionality:
 ### Practice Information (2 tools)
 
 - **`getPracticeInfo`** - Get essential practice information including available facilities, providers, and vital signs templates.
-- **`managePatientAppointments`** - Complete appointment lifecycle management including scheduling, rescheduling, cancellation, and flexible filtering.
+- **`manageAppointments`** - Complete appointment lifecycle management including scheduling, rescheduling, cancellation, and flexible filtering.
 
 ## Health Check
 

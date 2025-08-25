@@ -2116,7 +2116,7 @@ async def managePatientRecalls(
 
 @charm_mcp.tool
 @with_tool_metrics()
-async def managePatientAppointments(
+async def manageAppointments(
     action: Literal["schedule", "reschedule", "cancel", "list"],
     # Common fields
     patient_id: Optional[str] = None,
