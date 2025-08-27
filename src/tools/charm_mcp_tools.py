@@ -2208,7 +2208,7 @@ async def managePatientNotes(
     - "delete": Remove note (requires record_id). Ask the user if they are sure they want to delete the note before proceeding.
     
     Use for: Important care instructions, provider alerts, patient preferences, social determinants
-    Formal encounter notes should use documentEncounter() instead
+    Formal encounter notes should use manageEncounter() instead
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
