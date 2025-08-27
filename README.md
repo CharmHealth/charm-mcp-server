@@ -8,7 +8,7 @@ An [MCP](https://modelcontextprotocol.io/) server for CharmHealth EHR that allow
 
 The server provides **14 comprehensive tools** for complete EHR functionality:
 
-- **Encounter Documentation**: Complete SOAP note workflow and clinical findings
+- **Encounter Management**: Complete SOAP note workflow and clinical findings
 - **Patient Search & Records**: Advanced patient search with demographics, location, and medical criteria
 - **Patient Management**: Complete demographic and administrative data handling
 - **Medical History**: Comprehensive patient clinical overview and history review
@@ -315,7 +315,7 @@ The server provides **14 comprehensive tools** for complete EHR functionality:
 
 ### Patient and Encounter Management (12 tools)
 
-- **`documentEncounter`** - Complete encounter documentation workflow with comprehensive SOAP note capabilities and specialized clinical sections.
+- **`manageEncounter`** - Complete encounter documentation workflow with comprehensive SOAP note capabilities and specialized clinical sections.
 - **`findPatients`** - Advanced patient search with demographics, location, and medical criteria. Essential first step for any patient-related task.
 - **`managePatient`** - Complete patient management with comprehensive demographic, social, and administrative data. Handles patient creation, updates, and status changes.
 - **`reviewPatientHistory`** - Get comprehensive patient information including medical history, current medications, and recent visits. Perfect for clinical decision-making.
