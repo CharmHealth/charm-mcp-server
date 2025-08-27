@@ -974,7 +974,7 @@ async def reviewPatientHistory(
             if patient_summary.get("upcoming_appointments"):
                 next_appt = patient_summary["upcoming_appointments"][0] if patient_summary["upcoming_appointments"] else None
                 if next_appt:
-                    insights.append(f"Next appointment: {next_appt.get('appointment_date')} - use documentEncounter() after visit")
+                    insights.append(f"Next appointment: {next_appt.get('appointment_date')} - use manageEncounter() after visit")
             
             patient_summary["clinical_insights"] = insights
             
@@ -996,7 +996,7 @@ async def reviewPatientHistory(
             # Next appointment guidance
             if patient_summary.get("upcoming_appointments"):
                 next_appt = patient_summary["upcoming_appointments"][0]
-                workflow_guidance.append(f"Next visit: {next_appt.get('appointment_date')} - prepare encounter with documentEncounter()")
+                workflow_guidance.append(f"Next visit: {next_appt.get('appointment_date')} - prepare encounter with manageEncounter()()")
             else:
                 workflow_guidance.append("No upcoming appointments - schedule follow-up with manageAppointments() if needed")
             
@@ -1266,7 +1266,7 @@ async def managePatientDrugs(
                         response = await client.put(f"/patients/{patient_id}/medications/{record_id}", data={"is_active": False})
                         
                         if response.get("medications"):
-                            response["guidance"] = f"Medication {record_id} discontinued. Patient should stop taking this medication. Document discontinuation reason in next encounter with documentEncounter()."
+                            response["guidance"] = f"Medication {record_id} discontinued. Patient should stop taking this medication. Document discontinuation reason in next encounter with manageEncounter()()."
                     else:
                         # Set supplement to inactive
                         response = await client.put(f"/patients/{patient_id}/supplements/{record_id}", data={"status": "Inactive"})
@@ -1359,7 +1359,7 @@ async def managePatientVitals(
                     if not encounter_id:
                         return {
                             "error": "encounter_id required for adding vitals",
-                            "guidance": "Vitals must be linked to an encounter. Use documentEncounter() first to create an encounter, then record vitals."
+                            "guidance": "Vitals must be linked to an encounter. Use manageEncounter()() first to create an encounter, then record vitals."
                         }
                     
                     vitals_list = []
@@ -2234,7 +2234,7 @@ async def managePatientNotes(
                     
                     response = await client.post(f"/patients/{patient_id}/quicknotes", data={"notes": notes})
                     if response.get("data"):
-                        response["guidance"] = f"Clinical note added successfully. This important information is now visible to all providers during patient care. For detailed encounter documentation, use documentEncounter()."
+                        response["guidance"] = f"Clinical note added successfully. This important information is now visible to all providers during patient care. For detailed encounter documentation, use manageEncounter()()."
                     return response
                     
                 case "update":
@@ -2525,7 +2525,7 @@ async def manageAppointments(
                     
                     if response.get("appointment") or response.get("data"):
                         appt_id = response.get("appointment", {}).get("id") or response.get("data", {}).get("id")
-                        response["guidance"] = f"Appointment scheduled successfully (ID: {appt_id}). Use documentEncounter() after the visit to record clinical findings."
+                        response["guidance"] = f"Appointment scheduled successfully (ID: {appt_id}). Use manageEncounter()() after the visit to record clinical findings."
                     elif response.get("error"):
                         error_msg = response["error"].lower()
                         if "double booking" in error_msg:
