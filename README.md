@@ -3,6 +3,7 @@
 An [MCP](https://modelcontextprotocol.io/) server for CharmHealth EHR that allows LLMs and MCP clients to interact with patient records, encounters, and practice information.
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Features
 
