@@ -43,7 +43,7 @@ formatter = logging.Formatter(
 console_handler = logging.StreamHandler(sys.stderr)
 console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(formatter)
-logging.basicConfig(level=logging.DEBUG if os.getenv("ENV") == "prod" else logging.INFO, handlers=[console_handler], force=True)
+logging.basicConfig(level=logging.INFO if os.getenv("ENV") == "prod" else logging.DEBUG, handlers=[console_handler], force=True)
 logger = logging.getLogger(__name__)
 
 
