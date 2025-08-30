@@ -56,6 +56,8 @@ async def manageAppointments(
     status_ids: Optional[str] = None,   # Comma-separated
 ) -> Dict[str, Any]:
     """
+    Manage appointments.
+    
     <usecase>
     Complete appointment lifecycle management - schedule new appointments, reschedule existing ones,
     cancel appointments, and list appointments with flexible filtering. Handles the full appointment workflow.

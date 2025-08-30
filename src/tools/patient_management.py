@@ -120,6 +120,8 @@ async def managePatient(
     update_specific_details: Optional[bool] = True,
 ) -> Dict[str, Any]:
     """
+    Manage patients.
+
     <usecase>
     Complete patient management with comprehensive demographic, social, and administrative data.
     Handles patient creation, updates, status changes, and complex relationships. Supports all 
@@ -638,6 +640,8 @@ async def reviewPatientHistory(
     include_appointments: bool = True,
 ) -> Dict[str, Any]:
     """
+    Review patient history.
+    
     <usecase>
     Get comprehensive patient information including medical history, current medications, recent visits.
     Perfect for clinical decision-making and preparing for patient encounters.

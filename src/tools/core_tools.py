@@ -49,6 +49,8 @@ async def findPatients(
     page: Optional[int] = 1,
 ) -> Dict[str, Any]:
     """
+    Find patients.
+
     <usecase>
     Find patients quickly using natural search terms or specific criteria. Handles everything from 
     "find John Smith" to complex searches like "elderly diabetes patients in California". 
@@ -256,6 +258,8 @@ async def getPracticeInfo(
     info_type: Literal["facilities", "providers", "vitals", "overview"] = "overview"
 ) -> Dict[str, Any]:
     """
+    Get practice information.
+    
     <usecase>
     Get essential practice information needed for other operations - available facilities,
     providers, vital signs templates, etc. Use this to understand practice setup and get IDs for other tools.

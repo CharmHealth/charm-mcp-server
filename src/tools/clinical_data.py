@@ -32,6 +32,8 @@ async def managePatientVitals(
     limit: Optional[int] = 50,
 ) -> Dict[str, Any]:
     """
+    Manage patient vitals and vital signs.
+
     <usecase>
     Complete patient vital signs management - record vitals during encounters, review vital trends,
     update incorrect readings, and track patient health metrics over time. Essential for clinical monitoring.
@@ -242,6 +244,8 @@ async def managePatientDrugs(
     check_allergies: Optional[bool] = True,
 ) -> Dict[str, Any]:
     """
+    Manage patient drugs and supplements.
+
     <usecase>
     Unified drug management for medications, supplements, and vitamins - prescribe medications, 
     document supplements, manage drug interactions. Includes automatic allergy checking and 
@@ -486,6 +490,8 @@ async def managePatientAllergies(
     comments: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
+    Manage patient allergies.
+
     <usecase>
     Critical allergy management with safety alerts - document patient allergies, update allergy information,
     and maintain allergy safety checks. Essential for safe prescribing and clinical decision-making.
@@ -617,6 +623,8 @@ async def managePatientDiagnoses(
     comments: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
+    Manage patient diagnoses.
+    
     <usecase>
     Complete diagnosis management for patient problem lists - add new diagnoses, update existing conditions,
     and maintain accurate medical problem lists. Essential for clinical reasoning and care planning.

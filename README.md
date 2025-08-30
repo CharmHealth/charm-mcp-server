@@ -139,7 +139,7 @@ docker run --rm -i \
   -e CHARMHEALTH_REFRESH_TOKEN='your_refresh_token_here' \
   -e CHARMHEALTH_CLIENT_ID='your_client_id_here' \
   -e CHARMHEALTH_CLIENT_SECRET='your_client_secret_here' \
-  -e CHARMHEALTH_REDIRECT_URI='https://sandbox3.charmtracker.com/ehr/physician/mySpace.do?ACTION=SHOW_OAUTH_JSON' \
+  -e CHARMHEALTH_REDIRECT_URI='your_redirect_uri_here' \
   -e CHARMHEALTH_TOKEN_URL='your_token_url_here' \
   charm-mcp-server
 ```
@@ -155,8 +155,8 @@ docker run --rm -i \
   -e CHARMHEALTH_REFRESH_TOKEN='your_refresh_token_here' \
   -e CHARMHEALTH_CLIENT_ID='your_client_id_here' \
   -e CHARMHEALTH_CLIENT_SECRET='your_client_secret_here' \
-  -e CHARMHEALTH_REDIRECT_URI='https://sandbox3.charmtracker.com/ehr/physician/mySpace.do?ACTION=SHOW_OAUTH_JSON' \
-  -e CHARMHEALTH_TOKEN_URL='https://accounts106.charmtracker.com/oauth/v2/token' \
+  -e CHARMHEALTH_REDIRECT_URI='your_redirect_uri_here' \
+  -e CHARMHEALTH_TOKEN_URL='your_token_url_here' \
   -p 8080:8080 \
   charm-mcp-server
 ```
@@ -192,9 +192,9 @@ Configure your MCP client to use the Docker container:
         "-e",
         "CHARMHEALTH_CLIENT_SECRET=your_client_secret_here",
         "-e",
-        "CHARMHEALTH_REDIRECT_URI=https://sandbox3.charmtracker.com/ehr/physician/mySpace.do?ACTION=SHOW_OAUTH_JSON",
+        "CHARMHEALTH_REDIRECT_URI=your_redirect_uri_here",
         "-e",
-        "CHARMHEALTH_TOKEN_URL=https://accounts106.charmtracker.com/oauth/v2/token",
+        "CHARMHEALTH_TOKEN_URL=your_token_url_here",
         "charm-mcp-server"
       ]
     }
@@ -232,8 +232,8 @@ services:
       - CHARMHEALTH_REFRESH_TOKEN=your_refresh_token_here
       - CHARMHEALTH_CLIENT_ID=your_client_id_here
       - CHARMHEALTH_CLIENT_SECRET=your_client_secret_here
-      - CHARMHEALTH_REDIRECT_URI=https://sandbox3.charmtracker.com/ehr/physician/mySpace.do?ACTION=SHOW_OAUTH_JSON
-      - CHARMHEALTH_TOKEN_URL=https://accounts106.charmtracker.com/oauth/v2/token
+      - CHARMHEALTH_REDIRECT_URI=your_redirect_uri_here
+      - CHARMHEALTH_TOKEN_URL=your_token_url_here
       - ENV=prod
     ports:
       - "8080:8080"  # Only needed for HTTP mode
@@ -295,8 +295,8 @@ Add the following to your Claude Desktop configuration file:
         "CHARMHEALTH_REFRESH_TOKEN": "your_refresh_token_here",
         "CHARMHEALTH_CLIENT_ID": "your_client_id_here",
         "CHARMHEALTH_CLIENT_SECRET": "your_client_secret_here",
-        "CHARMHEALTH_REDIRECT_URI": "https://sandbox3.charmtracker.com/ehr/physician/mySpace.do?ACTION=SHOW_OAUTH_JSON",
-        "CHARMHEALTH_TOKEN_URL": "https://accounts106.charmtracker.com/oauth/v2/token"
+        "CHARMHEALTH_REDIRECT_URI": "your_redirect_uri_here",
+        "CHARMHEALTH_TOKEN_URL": "your_token_url_here"
       }
     }
   }

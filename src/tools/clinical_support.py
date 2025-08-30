@@ -19,6 +19,8 @@ async def managePatientNotes(
     notes: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
+    Manage patient notes.
+
     <usecase>
     Quick clinical note management for important patient information - add care notes, provider communications,
     and clinical observations that need to be highlighted across all patient interactions.
@@ -117,6 +119,8 @@ async def managePatientRecalls(
     text_reminder_before: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
+    Manage patient recalls.
+
     <usecase>
     Patient recall and follow-up management - schedule preventive care reminders, follow-up appointments,
     and care plan reminders. Ensures patients receive timely care according to clinical guidelines.
@@ -246,6 +250,8 @@ async def managePatientFiles(
     rep_last_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
+    Manage patient files and documents.
+
     <usecase>
     Patient file and document management - upload patient photos, manage identity documents, 
     and send PHR (Personal Health Record) invitations. Handles the complete patient file workflow.
@@ -382,6 +388,8 @@ async def managePatientLabs(
     result_details: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
+    Manage patient laboratory results.
+    
     <usecase>
     Complete laboratory results management - list lab results, get detailed reports, 
     and add new lab results. Handles the full lab workflow for clinical decision-making.

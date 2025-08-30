@@ -26,6 +26,8 @@ async def manageEncounter(
     reason: Optional[str] = None  # Required for unlock action
 ) -> Dict[str, Any]:
     """
+    Manage encounters.
+    
     <usecase>
     Complete encounter workflow - create, review, and sign encounters with comprehensive clinical documentation.
     Essential for clinical workflow from initial documentation through final signature.
