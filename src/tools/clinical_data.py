@@ -29,7 +29,7 @@ async def managePatientVitals(
     # Filtering for list action
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-    limit: Optional[int] = 50,
+    limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Manage patient vitals and vital signs.

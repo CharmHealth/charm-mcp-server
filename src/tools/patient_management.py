@@ -688,7 +688,7 @@ async def reviewPatientHistory(
             
             # Get recent vitals
             if "vitals" in include_sections:
-                vitals_response = await client.get(f"/patients/{patient_id}/vitals", params={"limit": 10})
+                vitals_response = await client.get(f"/patients/{patient_id}/vitals")
                 patient_summary["recent_vitals"] = vitals_response.get("vitals", [])
             
             # Get active diagnoses
