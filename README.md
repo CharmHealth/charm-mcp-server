@@ -5,6 +5,16 @@ An [MCP](https://modelcontextprotocol.io/) server for CharmHealth EHR that allow
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+### Critical HIPAA Notice
+
+> [!CAUTION]
+> This server can access, transmit, and surface protected health information (PHI). Use it only with:
+>
+> - HIPAA-compliant LLM services covered by a signed BAA and configured with no training and zero data retention
+> - HIPAA-compliant MCP clients, or clients operated entirely within your HIPAA compliance program
+>
+> If you are using this with actual patient data (non-sandbox data), do not connect non-HIPAA consumer LLM endpoints or clients. You are responsible for enforcing access controls, audit logging, encryption in transit/at rest, and data retention policies for your deployment.
+
 ## Features
 
 The server provides **14 comprehensive tools** for complete EHR functionality:
@@ -44,14 +54,15 @@ The server provides **14 comprehensive tools** for complete EHR functionality:
    uv run --directory src mcp_server.py
    ```
 
-4. **Configure your MCP client** (e.g., Claude Desktop) to connect to the server.
+4. **Configure your HIPAA-compliant MCP client** (e.g., an enterprise/HIPAA-compliant deployment of your chosen client) to connect to the server.
 
 ## Prerequisites
 
 - Python 3.13 or higher
 - CharmHealth API credentials (sandbox or production)
 - [uv](https://docs.astral.sh/uv/) to run the server
-- An MCP client (like Claude Desktop, Cody, or other MCP-compatible tools)
+- An MCP client that is HIPAA-compliant or operated under your HIPAA program
+- An LLM service that is HIPAA-compliant and covered by a signed BAA
 
 
 ## Installation
@@ -271,17 +282,16 @@ All CharmHealth API credentials can be configured via environment variables when
 
 ## MCP Client Configuration
 
-### Claude Desktop
+### MCP Clients with local LLMs (e.g., LM Studio)
 
-Add the following to your Claude Desktop configuration file:
+Use a local/on-device LLM-based MCP client to keep PHI within your environment. Configure your client to launch this server via stdio.
 
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows**: `%APPDATA%/Claude/claude_desktop_config.json`
+Example (for clients that accept a JSON-based configuration schema):
 
 ```json
 {
   "mcpServers": {
-    "charm-health": {
+    "charm-mcp-server": {
       "command": "uv",
       "args": [
                 "--directory",
@@ -302,6 +312,8 @@ Add the following to your Claude Desktop configuration file:
   }
 }
 ```
+
+Note: Do not use non-HIPAA consumer clients (e.g., Claude Desktop) with PHI.
 
 ### Other MCP Clients
 
@@ -364,6 +376,16 @@ Returns:
 ### Security
 - Secure credential management via environment variables
 - API key rotation support
+
+## HIPAA and PHI Compliance
+
+When handling PHI, you must ensure your entire toolchain is HIPAA compliant:
+
+- Only use HIPAA-compliant LLMs under a signed BAA. Configure zero data retention and disable model training.
+- Only use HIPAA-compliant MCP clients, or run clients within a controlled environment covered by your HIPAA program. Validate any third-party extensions or tools used by the client.
+- Enforce least-privilege access controls, audit logging, and encryption in transit and at rest.
+- Avoid sending PHI to logs or telemetry. Keep `COLLECT_METRICS=false` unless your telemetry backend is HIPAA-compliant and covered by a BAA.
+- Review and adhere to your organization’s HIPAA policies for data handling, retention, and breach notification.
 
 ## Development
 
