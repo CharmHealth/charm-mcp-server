@@ -111,51 +111,6 @@ class CharmHealthAPIClient:
             return await self._refresh_token()
     
 
-    # async def _refresh_token(self) -> str:
-    #     logger.info("Refreshing CharmHealth API token")
-    #     headers = {'Content-Type': 'application/json'}
-    #     params = {
-    #         'refresh_token': self.refresh_token,
-    #         'client_id': self.client_id,
-    #         'client_secret': self.client_secret,
-    #         'redirect_uri': self.redirect_uri,
-    #         'grant_type': 'refresh_token',
-    #     }
-
-    #     async with httpx.AsyncClient() as client:
-    #         try:
-    #             response = await client.post(
-    #                 self.token_url,
-    #                 params=params,
-    #                 headers=headers,
-    #                 timeout=self.timeout
-    #             )
-    #             current_time = time.time()
-    #             response.raise_for_status()
-    #             token_data = response.json()
-    #             new_token = token_data.get('access_token')
-    #             expires_in = token_data.get('expires_in', 3600)
-    #             if not new_token:
-    #                 raise ValueError(f"Failed to obtain new token with response: {response.text}")
-
-    #             self._auth_token = new_token
-    #             self._token_expires_at = current_time + expires_in
-
-    #             key = self._token_cache_key()
-    #             self.__class__._shared_token_cache[key] = {
-    #                 "token": new_token,
-    #                 "expires_at": self._token_expires_at,
-    #             }
-
-    #             scopes = token_data.get('scope', '')
-    #             scope_count = len(scopes.split()) if isinstance(scopes, str) else 0
-    #             logger.info(f"Token refreshed successfully (expires_in={expires_in}s, scopes={scope_count})")
-    #             return new_token
-
-    #         except Exception as e:
-    #             logger.error(f"Failed to refresh token: {e} with response: {response.text}")
-    #             raise
-
     async def _refresh_token(self) -> str:
         logger.info("Refreshing CharmHealth API token")
         headers = {
