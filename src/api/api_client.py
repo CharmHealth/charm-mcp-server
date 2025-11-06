@@ -113,8 +113,11 @@ class CharmHealthAPIClient:
 
     async def _refresh_token(self) -> str:
         logger.info("Refreshing CharmHealth API token")
-        headers = {'Content-Type': 'application/json'}
-        params = {
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
+        }
+        form = {
             'refresh_token': self.refresh_token,
             'client_id': self.client_id,
             'client_secret': self.client_secret,
@@ -126,7 +129,7 @@ class CharmHealthAPIClient:
             try:
                 response = await client.post(
                     self.token_url,
-                    params=params,
+                    data=form,
                     headers=headers,
                     timeout=self.timeout
                 )
