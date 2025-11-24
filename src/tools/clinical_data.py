@@ -1,4 +1,5 @@
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
+from fastmcp.server.dependencies import get_http_headers
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
@@ -30,6 +31,8 @@ async def managePatientVitals(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     limit: Optional[int] = None,
+    
+    ctx: Context = None,
 ) -> Dict[str, Any]:
     """
     Manage patient vitals and vital signs.
@@ -56,7 +59,43 @@ async def managePatientVitals(
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
     """
-    async with CharmHealthAPIClient() as client:
+    # Extract user tokens and environment from HTTP headers (proper FastMCP way)
+    access_token = None
+    refresh_token = None
+    base_url = None
+    token_url = None
+    
+    try:
+        headers = get_http_headers()
+        access_token = headers.get('x-user-access-token')
+        refresh_token = headers.get('x-user-refresh-token')
+        base_url = headers.get('x-charmhealth-base-url')
+        token_url = headers.get('x-charmhealth-token-url')
+        client_secret = headers.get('x-charmhealth-client-secret')
+        accounts_server = headers.get('x-charmhealth-accounts-server')
+        
+        # If accounts_server is provided, use it for token URL (mobile flow)
+        if accounts_server:
+            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
+        
+        # Normalize base URL to include API path
+        if base_url and not base_url.endswith('/api/ehr/v1'):
+            base_url = base_url.rstrip('/') + '/api/ehr/v1'
+        
+        if access_token:
+            logger.info(f"managePatientVitals using user credentials")
+        else:
+            logger.info("managePatientVitals using environment variable credentials")
+    except Exception as e:
+        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
+    
+    async with CharmHealthAPIClient(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        base_url=base_url,
+        token_url=token_url,
+        client_secret=client_secret
+    ) as client:
         try:
             match action:
                 case "list":
@@ -242,6 +281,8 @@ async def managePatientDrugs(
     
     # Workflow fields
     check_allergies: Optional[bool] = True,
+    
+    ctx: Context = None,
 ) -> Dict[str, Any]:
     """
     Manage patient drugs and supplements.
@@ -271,7 +312,43 @@ async def managePatientDrugs(
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
     """
-    async with CharmHealthAPIClient() as client:
+    # Extract user tokens and environment from HTTP headers (proper FastMCP way)
+    access_token = None
+    refresh_token = None
+    base_url = None
+    token_url = None
+    
+    try:
+        headers = get_http_headers()
+        access_token = headers.get('x-user-access-token')
+        refresh_token = headers.get('x-user-refresh-token')
+        base_url = headers.get('x-charmhealth-base-url')
+        token_url = headers.get('x-charmhealth-token-url')
+        client_secret = headers.get('x-charmhealth-client-secret')
+        accounts_server = headers.get('x-charmhealth-accounts-server')
+        
+        # If accounts_server is provided, use it for token URL (mobile flow)
+        if accounts_server:
+            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
+        
+        # Normalize base URL to include API path
+        if base_url and not base_url.endswith('/api/ehr/v1'):
+            base_url = base_url.rstrip('/') + '/api/ehr/v1'
+        
+        if access_token:
+            logger.info(f"managePatientDrugs using user credentials")
+        else:
+            logger.info("managePatientDrugs using environment variable credentials")
+    except Exception as e:
+        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
+    
+    async with CharmHealthAPIClient(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        base_url=base_url,
+        token_url=token_url,
+        client_secret=client_secret
+    ) as client:
         try:
             # Safety check: Review allergies before prescribing
             if action == "add" and check_allergies:
@@ -488,6 +565,8 @@ async def managePatientAllergies(
     allergy_status: Optional[str] = None,
     allergy_date: Optional[date] = None,
     comments: Optional[str] = None,
+    
+    ctx: Context = None,
 ) -> Dict[str, Any]:
     """
     Manage patient allergies.
@@ -511,7 +590,43 @@ async def managePatientAllergies(
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
     """
-    async with CharmHealthAPIClient() as client:
+    # Extract user tokens and environment from HTTP headers (proper FastMCP way)
+    access_token = None
+    refresh_token = None
+    base_url = None
+    token_url = None
+    
+    try:
+        headers = get_http_headers()
+        access_token = headers.get('x-user-access-token')
+        refresh_token = headers.get('x-user-refresh-token')
+        base_url = headers.get('x-charmhealth-base-url')
+        token_url = headers.get('x-charmhealth-token-url')
+        client_secret = headers.get('x-charmhealth-client-secret')
+        accounts_server = headers.get('x-charmhealth-accounts-server')
+        
+        # If accounts_server is provided, use it for token URL (mobile flow)
+        if accounts_server:
+            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
+        
+        # Normalize base URL to include API path
+        if base_url and not base_url.endswith('/api/ehr/v1'):
+            base_url = base_url.rstrip('/') + '/api/ehr/v1'
+        
+        if access_token:
+            logger.info(f"managePatientAllergies using user credentials")
+        else:
+            logger.info("managePatientAllergies using environment variable credentials")
+    except Exception as e:
+        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
+    
+    async with CharmHealthAPIClient(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        base_url=base_url,
+        token_url=token_url,
+        client_secret=client_secret
+    ) as client:
         try:
             match action:
                 case "list":
@@ -621,6 +736,8 @@ async def managePatientDiagnoses(
     encounter_id: Optional[str] = None,
     diagnosis_order: Optional[int] = None,
     comments: Optional[str] = None,
+    
+    ctx: Context = None,
 ) -> Dict[str, Any]:
     """
     Manage patient diagnoses.
@@ -644,7 +761,43 @@ async def managePatientDiagnoses(
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
     """
-    async with CharmHealthAPIClient() as client:
+    # Extract user tokens and environment from HTTP headers (proper FastMCP way)
+    access_token = None
+    refresh_token = None
+    base_url = None
+    token_url = None
+    
+    try:
+        headers = get_http_headers()
+        access_token = headers.get('x-user-access-token')
+        refresh_token = headers.get('x-user-refresh-token')
+        base_url = headers.get('x-charmhealth-base-url')
+        token_url = headers.get('x-charmhealth-token-url')
+        client_secret = headers.get('x-charmhealth-client-secret')
+        accounts_server = headers.get('x-charmhealth-accounts-server')
+        
+        # If accounts_server is provided, use it for token URL (mobile flow)
+        if accounts_server:
+            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
+        
+        # Normalize base URL to include API path
+        if base_url and not base_url.endswith('/api/ehr/v1'):
+            base_url = base_url.rstrip('/') + '/api/ehr/v1'
+        
+        if access_token:
+            logger.info(f"managePatientDiagnoses using user credentials")
+        else:
+            logger.info("managePatientDiagnoses using environment variable credentials")
+    except Exception as e:
+        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
+    
+    async with CharmHealthAPIClient(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        base_url=base_url,
+        token_url=token_url,
+        client_secret=client_secret
+    ) as client:
         try:
             match action:
                 case "list":

@@ -1,4 +1,5 @@
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
+from fastmcp.server.dependencies import get_http_headers
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
@@ -23,7 +24,8 @@ async def manageEncounter(
     visit_type_id: Optional[str] = None,
     encounter_mode: Optional[Literal["In Person", "Phone Call", "Video Consult"]] = "In Person",
     chief_complaint: Optional[str] = None,
-    reason: Optional[str] = None  # Required for unlock action
+    reason: Optional[str] = None,  # Required for unlock action
+    ctx: Context = None,
 ) -> Dict[str, Any]:
     """
     Manage encounters.
@@ -67,7 +69,43 @@ async def manageEncounter(
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
     """
-    async with CharmHealthAPIClient() as client:
+    # Extract user tokens and environment from HTTP headers (proper FastMCP way)
+    access_token = None
+    refresh_token = None
+    base_url = None
+    token_url = None
+    
+    try:
+        headers = get_http_headers()
+        access_token = headers.get('x-user-access-token')
+        refresh_token = headers.get('x-user-refresh-token')
+        base_url = headers.get('x-charmhealth-base-url')
+        token_url = headers.get('x-charmhealth-token-url')
+        client_secret = headers.get('x-charmhealth-client-secret')
+        accounts_server = headers.get('x-charmhealth-accounts-server')
+        
+        # If accounts_server is provided, use it for token URL (mobile flow)
+        if accounts_server:
+            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
+        
+        # Normalize base URL to include API path
+        if base_url and not base_url.endswith('/api/ehr/v1'):
+            base_url = base_url.rstrip('/') + '/api/ehr/v1'
+        
+        if access_token:
+            logger.info(f"manageEncounter using user credentials")
+        else:
+            logger.info("manageEncounter using environment variable credentials")
+    except Exception as e:
+        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
+    
+    async with CharmHealthAPIClient(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        base_url=base_url,
+        token_url=token_url,
+        client_secret=client_secret
+    ) as client:
         try:
             match action:
                 case "review":
@@ -118,8 +156,7 @@ async def manageEncounter(
                     
                     # Get vitals for this encounter
                     try:
-                        vitals_response = await client.get("/vitals", params={
-                            "patient_id": patient_id,
+                        vitals_response = await client.get(f"/patients/{patient_id}/vitals", params={
                             "encounter_id": encounter_id
                         })
                         encounter_details["vitals"] = vitals_response.get("vitals", [])
@@ -128,8 +165,7 @@ async def manageEncounter(
                     
                     # Get diagnoses for this encounter
                     try:
-                        diagnoses_response = await client.get("/diagnoses", params={
-                            "patient_id": patient_id,
+                        diagnoses_response = await client.get(f"/patients/{patient_id}/diagnoses", params={
                             "encounter_id": encounter_id
                         })
                         encounter_details["diagnoses"] = diagnoses_response.get("diagnoses", [])
@@ -138,11 +174,10 @@ async def manageEncounter(
                     
                     # Get medications for this encounter
                     try:
-                        medications_response = await client.get("/drugs", params={
-                            "patient_id": patient_id,
+                        medications_response = await client.get(f"/patients/{patient_id}/medications", params={
                             "encounter_id": encounter_id
                         })
-                        encounter_details["medications"] = medications_response.get("drugs", [])
+                        encounter_details["medications"] = medications_response.get("medications", [])
                     except:
                         encounter_details["medications"] = []
                     
