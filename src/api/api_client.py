@@ -21,6 +21,7 @@ class CharmHealthAPIClient:
                  base_url: Optional[str] = None,
                  api_key: Optional[str] = None,
                  refresh_token: Optional[str] = None,
+                 access_token: Optional[str] = None,
                  client_id: Optional[str] = None,
                  client_secret: Optional[str] = None,
                  redirect_uri: Optional[str] = None,
@@ -35,15 +36,27 @@ class CharmHealthAPIClient:
         self.redirect_uri = redirect_uri or os.getenv("CHARMHEALTH_REDIRECT_URI")
         self.token_url = token_url or os.getenv("CHARMHEALTH_TOKEN_URL")
 
-        if not all([self.api_key, self.refresh_token, self.client_id, self.client_secret]):
-            raise ValueError("Missing required CharmHealth API credentials")
+        # Flexible validation: require refresh_token and client_id (allow env vars OR passed credentials)
+        if not self.refresh_token:
+            raise ValueError("Missing refresh_token (required for token refresh)")
+        if not self.client_id:
+            raise ValueError("Missing client_id")
         
         self.max_retries = max_retries
         self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None
-        self._auth_token: Optional[str] = None
-        self._token_expires_at: float = 0
         self._token_lock = Lock()
+        
+        # Initialize with provided access token if available
+        if access_token:
+            self._auth_token = access_token
+            # Set expiry to 1 hour from now (typical access token lifetime)
+            # This allows the token to be used before attempting refresh
+            self._token_expires_at = time.time() + 3600
+            logger.info("API client initialized with provided access token (expires in ~1 hour)")
+        else:
+            self._auth_token = None
+            self._token_expires_at = 0
 
     async def __aenter__(self):
         logger.info("Entering CharmHealth API client context")
@@ -79,7 +92,8 @@ class CharmHealthAPIClient:
         token = await self._get_valid_token()
         return {
             "api_key": self.api_key,
-            "Authorization": f"Bearer {token}",
+            # "Authorization": f"Bearer {token}",
+            "Authorization": f"Zoho-oauthtoken {token}",
             "Content-Type": "application/json",
             "Cache-Control": "no-cache"
         }
@@ -113,6 +127,11 @@ class CharmHealthAPIClient:
 
     async def _refresh_token(self) -> str:
         logger.info("Refreshing CharmHealth API token")
+        logger.info(f"Token URL: {self.token_url}")
+        logger.info(f"Client ID: {self.client_id}")
+        logger.info(f"Client secret present: {bool(self.client_secret)} (length: {len(self.client_secret) if self.client_secret else 0})")
+        logger.info(f"Refresh token present: {bool(self.refresh_token)} (prefix: {self.refresh_token[:20] if self.refresh_token else 'None'}...)")
+        
         headers = {
             'Content-Type': 'application/x-www-form-urlencoded',
             'Accept': 'application/json',
@@ -260,7 +279,11 @@ class CharmHealthAPIClient:
         return self.client_id
     
     def _token_cache_key(self) -> str:
-        return self.client_id
+        # Create user-specific cache key using hash of refresh token
+        # This prevents token collision between different users
+        import hashlib
+        token_hash = hashlib.sha256(self.refresh_token.encode()).hexdigest()[:16]
+        return f"{self.client_id}:{token_hash}"
 
 
 
