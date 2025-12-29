@@ -27,10 +27,6 @@ async def managePatientVitals(
     vital_value: Optional[str] = None,
     vital_unit: Optional[str] = None,
     
-    # Filtering for list action
-    start_date: Optional[date] = None,
-    end_date: Optional[date] = None,
-    limit: Optional[int] = None,
     
     ctx: Context = None,
 ) -> Dict[str, Any]:
@@ -100,24 +96,13 @@ async def managePatientVitals(
             match action:
                 case "list":
                     params = {}
-                    if start_date:
-                        params["start_date"] = start_date.strftime("%Y-%m-%d")
-                    if end_date:
-                        params["end_date"] = end_date.strftime("%Y-%m-%d")
-                    if limit:
-                        params["limit"] = limit
                     
                     response = await client.get(f"/patients/{patient_id}/vitals", params=params)
                     
                     if response.get("vitals"):
                         vital_count = len(response["vitals"])
-                        date_range = ""
-                        if start_date and end_date:
-                            date_range = f" from {start_date} to {end_date}"
-                        elif start_date:
-                            date_range = f" since {start_date}"
                         
-                        response["guidance"] = f"Found {vital_count} vital sign records{date_range}. Use this data to track patient health trends and clinical progress."
+                        response["guidance"] = f"Found {vital_count} vital sign records. Use this data to track patient health trends and clinical progress."
                     else:
                         response["guidance"] = "No vital signs found for this patient. Use action='add' to record vitals during encounters."
                     
@@ -407,6 +392,10 @@ async def managePatientDrugs(
                             med_data[0]["start_date"] = start_date.isoformat()
                         if end_date:
                             med_data[0]["stop_date"] = end_date.isoformat()
+                        if encounter_id:
+                            med_data[0]["encounter_id"] = int(encounter_id)
+                        if comments:
+                            med_data[0]["comments"] = comments
                         
                         response = await client.post(f"/patients/{patient_id}/medications", data=med_data)
                         
