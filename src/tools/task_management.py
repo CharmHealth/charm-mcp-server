@@ -16,7 +16,7 @@ task_management_mcp = FastMCP(name="CharmHealth Task Management MCP Server")
 @task_management_mcp.tool
 @with_tool_metrics()
 async def manageTasks(
-    action: Literal["add", "update", "list", "change_status", "delete", "print"],
+    action: Literal["add", "update", "list", "change_status"],
 
     # Identifiers
     task_id: Optional[str] = None,
