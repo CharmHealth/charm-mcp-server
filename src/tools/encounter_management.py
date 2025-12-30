@@ -118,29 +118,32 @@ async def manageEncounter(
                     # Get comprehensive encounter details
                     encounter_details = {}
                     
-                    # Get basic encounter info
+                    # Get basic encounter info from list endpoint
                     encounter_response = await client.get("/encounters", params={
                         "patient_id": patient_id
                     })
-                    for encounter in encounter_response.get("encounters", []):
-                        if encounter.get("encounter_id") == encounter_id:
-                            encounter = encounter
+                    
+                    found_encounter = None
+                    for enc in encounter_response.get("encounters", []):
+                        if enc.get("encounter_id") == encounter_id:
+                            found_encounter = enc
                             break
-                    else:
+                    
+                    if not found_encounter:
                         return {
                             "error": "Encounter not found",
                             "guidance": f"No encounter found with ID {encounter_id} for patient {patient_id}. Verify the encounter_id is correct."
                         }
                     
-                    
+                    # Map API fields to our structure
                     encounter_details["encounter_info"] = {
-                        "encounter_id": encounter.get("encounter_id"),
-                        "encounter_date": encounter.get("encounter_date"),
-                        "provider": encounter.get("provider_name"),
-                        "facility": encounter.get("facility_name"),
-                        "encounter_mode": encounter.get("encounter_mode"),
-                        "visit_type": encounter.get("visit_type"),
-                        "status": encounter.get("status")
+                        "encounter_id": found_encounter.get("encounter_id"),
+                        "encounter_date": found_encounter.get("date"),  # Changed from encounter_date
+                        "provider": found_encounter.get("physician_name"),  # Changed from provider_name
+                        "facility": found_encounter.get("facility_id"),  # Note: This is ID not name
+                        "encounter_mode": found_encounter.get("appointment_mode"),  # Changed from encounter_mode
+                        "visit_type": found_encounter.get("visit_name"),  # Changed from visit_type
+                        "status": "signed" if found_encounter.get("is_approved") == "true" else "unsigned"  # Changed
                     }
                     
                     # Get patient demographics for context
@@ -156,33 +159,57 @@ async def manageEncounter(
                     
                     # Get vitals for this encounter
                     try:
-                        vitals_response = await client.get(f"/patients/{patient_id}/vitals", params={
-                            "encounter_id": encounter_id
-                        })
-                        encounter_details["vitals"] = vitals_response.get("vitals", [])
-                    except:
+                        vitals_response = await client.get(f"/patients/{patient_id}/vitals")
+                        all_vitals = vitals_response.get("vital_entries", [])
+                        encounter_details["vitals"] = [
+                            v for v in all_vitals 
+                            if v.get("encounter_id") == encounter_id
+                        ]
+                    except Exception as e:
+                        logger.error(f"Error fetching vitals: {e}")
                         encounter_details["vitals"] = []
-                    
+
                     # Get diagnoses for this encounter
                     try:
-                        diagnoses_response = await client.get(f"/patients/{patient_id}/diagnoses", params={
-                            "encounter_id": encounter_id
-                        })
-                        encounter_details["diagnoses"] = diagnoses_response.get("diagnoses", [])
-                    except:
+                        diagnoses_response = await client.get(f"/patients/{patient_id}/diagnoses")
+                        all_diagnoses = diagnoses_response.get("patient_diagnoses", [])
+                        encounter_details["diagnoses"] = [
+                            d for d in all_diagnoses 
+                            if str(d.get("encounter_id")) == str(encounter_id)
+                        ]
+                    except Exception as e:
+                        logger.error(f"Error fetching diagnoses: {e}")
                         encounter_details["diagnoses"] = []
-                    
+
                     # Get medications for this encounter
                     try:
-                        medications_response = await client.get(f"/patients/{patient_id}/medications", params={
-                            "encounter_id": encounter_id
-                        })
-                        encounter_details["medications"] = medications_response.get("medications", [])
-                    except:
+                        medications_response = await client.get(f"/patients/{patient_id}/medications")
+                        all_medications = medications_response.get("medications", [])
+                        
+                        # Try to filter by encounter_id first
+                        encounter_meds = [
+                            m for m in all_medications 
+                            if str(m.get("encounter_id")) == str(encounter_id) and m.get("encounter_id")
+                        ]
+                        
+                        # Fallback: match by date
+                        if not encounter_meds and encounter_details["encounter_info"]["encounter_date"]:
+                            # Extract just the date part (YYYY-MM-DD) from datetime
+                            encounter_date_str = encounter_details["encounter_info"]["encounter_date"].split()[0] if encounter_details["encounter_info"]["encounter_date"] else None
+                            if encounter_date_str:
+                                encounter_meds = [
+                                    m for m in all_medications 
+                                    if m.get("date_of_entry") == encounter_date_str or 
+                                    m.get("start_date") == encounter_date_str
+                                ]
+                        
+                        encounter_details["medications"] = encounter_meds
+                    except Exception as e:
+                        logger.error(f"Error fetching medications: {e}")
                         encounter_details["medications"] = []
                     
-                    # Get clinical notes from encounter
-                    clinical_notes = encounter.get("clinical_notes") or encounter.get("chief_complaints")
+                    # Get clinical notes
+                    clinical_notes = found_encounter.get("chief_complaints")
                     if clinical_notes:
                         encounter_details["clinical_notes"] = clinical_notes
                     
@@ -198,7 +225,7 @@ async def manageEncounter(
                         summary_items.append("✓ Clinical notes documented")
                     
                     # Check if already signed
-                    is_signed = encounter.get("status") == "signed"
+                    is_signed = encounter_details["encounter_info"]["status"] == "signed"
                     
                     return {
                         "action": "review",
@@ -207,28 +234,28 @@ async def manageEncounter(
                         "is_signed": is_signed,
                         "ready_to_sign": len(summary_items) > 0 and not is_signed,
                         "guidance": f"""
-    ENCOUNTER REVIEW - Please confirm all information is accurate:
+                ENCOUNTER REVIEW - Please confirm all information is accurate:
 
-    Patient: {encounter_details.get('patient_info', {}).get('name', 'Unknown')} ({encounter_details.get('patient_info', {}).get('record_id', 'No ID')})
-    Date: {encounter_details['encounter_info']['encounter_date']}
-    Provider: {encounter_details['encounter_info']['provider']}
-    Facility: {encounter_details['encounter_info']['facility']}
-    Status: {encounter_details['encounter_info']['status']}
+                Patient: {encounter_details.get('patient_info', {}).get('name', 'Unknown')} ({encounter_details.get('patient_info', {}).get('record_id', 'No ID')})
+                Date: {encounter_details['encounter_info']['encounter_date']}
+                Provider: {encounter_details['encounter_info']['provider']}
+                Facility: {encounter_details['encounter_info']['facility']}
+                Status: {encounter_details['encounter_info']['status']}
 
-    Documentation Summary:
-    {chr(10).join(summary_items) if summary_items else 'WARNING: No clinical documentation found'}
+                Documentation Summary:
+                {chr(10).join(summary_items) if summary_items else 'WARNING: No clinical documentation found'}
 
-    {'SIGNED: This encounter is already signed.' if is_signed else f'''
-    IMPORTANT: Review all details above carefully. Once signed, this encounter becomes legally binding and cannot be modified.
+                {'SIGNED: This encounter is already signed.' if is_signed else f'''
+                IMPORTANT: Review all details above carefully. Once signed, this encounter becomes legally binding and cannot be modified.
 
-    To sign after review: manageEncounter(patient_id='{patient_id}', encounter_id='{encounter_id}', action='sign')''' if summary_items else '''
-    WARNING: This encounter has minimal documentation. Consider adding vitals, diagnoses, or medications before signing.
+                To sign after review: manageEncounter(patient_id='{patient_id}', encounter_id='{encounter_id}', action='sign')''' if summary_items else '''
+                WARNING: This encounter has minimal documentation. Consider adding vitals, diagnoses, or medications before signing.
 
-    To add documentation:
-    - managePatientVitals(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')
-    - managePatientDiagnoses(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')
-    - managePatientDrugs(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')'''}
-    """
+                To add documentation:
+                - managePatientVitals(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')
+                - managePatientDiagnoses(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')
+                - managePatientDrugs(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')'''}
+                """
                     }
             
                 case "sign":

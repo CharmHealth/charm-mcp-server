@@ -37,6 +37,11 @@ from .clinical_support import (
     managePatientLabs
 )
 
+from .task_management import (
+    task_management_mcp,
+    manageTasks
+)
+
 __all__ = [
     "core_tools_mcp",
     "patient_management_mcp",
@@ -57,5 +62,7 @@ __all__ = [
     "managePatientNotes",     
     "managePatientRecalls",          
     "managePatientFiles",
-    "managePatientLabs"
+    "managePatientLabs",
+    "task_management_mcp",
+    "manageTasks"
 ]
