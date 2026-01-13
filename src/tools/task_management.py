@@ -174,7 +174,11 @@ async def manageTasks(
                     if patient_id:
                         params["patient_id"] = patient_id
 
-                    return await client.get("/tasks", params=params)
+                    response = await client.get("/tasks", params=params)
+                    if response.get("tasks"):
+                        task_count = len(response["tasks"])
+                        response["guidance"] = f"Found {task_count} tasks. Use action='add' to create new tasks, action='update' to modify existing tasks, or action='change_status' to update task status."
+                    return response
 
                 case "change_status":
                     if not task_id or not status:
