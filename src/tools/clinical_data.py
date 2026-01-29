@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals
+from common.filtering import filter_items
 import logging
 from telemetry import telemetry, with_tool_metrics
 
@@ -26,6 +27,12 @@ async def managePatientVitals(
     vital_name: Optional[str] = None,
     vital_value: Optional[str] = None,
     vital_unit: Optional[str] = None,
+
+    # List filters
+    vital_name_filter: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    limit: Optional[int] = None,
     
     
     ctx: Context = None,
@@ -41,7 +48,7 @@ async def managePatientVitals(
     <instructions>
     Actions:
     - "add": Record new vitals (requires patient_id + encounter_id + vitals dict OR individual vital fields). Check available vitals with getPracticeInfo(info_type='vitals') first to ensure all vital names and units are correct.
-    - "list": Show patient vital history (optionally filter by date range)
+    - "list": Show patient vital history (optionally filter by vital name and/or date range)
     - "update": Modify existing vital record (requires record_id + fields to change)
     - "delete": Remove incorrect vital record (requires record_id)
     
@@ -51,6 +58,11 @@ async def managePatientVitals(
     
     Common Vitals: Weight, Height, Blood Pressure (BP), Pulse Rate, Temperature, Respiratory Rate, Oxygen Saturation
     Use getPracticeInfo(info_type='vitals') to see available vital types and proper naming
+
+    List filters:
+    - vital_name_filter: e.g., vital_name_filter="Blood Pressure" (matches case-insensitively, substring ok)
+    - from_date / to_date: e.g., from_date="2025-01-01", to_date="2025-12-31"
+    - limit: e.g., limit=20
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -95,17 +107,86 @@ async def managePatientVitals(
         try:
             match action:
                 case "list":
-                    params = {}
-                    
-                    response = await client.get(f"/patients/{patient_id}/vitals", params=params)
-                    
+                    response = await client.get(f"/patients/{patient_id}/vitals", params={})
+
+                    entries = response.get("vitals") or []
+                    total_count = len(entries)
+
+                    # Optionally filter inner vitals by name (and drop entries with no remaining vitals).
+                    def _filter_entry_vitals(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                        if not vital_name_filter:
+                            return entry
+
+                        needle = str(vital_name_filter).casefold()
+                        out = dict(entry)
+
+                        if isinstance(out.get("vitals"), list):
+                            vitals_list = []
+                            for v in out.get("vitals", []):
+                                name = str((v or {}).get("vital_name", "")).casefold()
+                                if needle in name:
+                                    vitals_list.append(v)
+                            out["vitals"] = vitals_list
+                            return out if vitals_list else None
+
+                        if isinstance(out.get("vital_entries"), list):
+                            new_entries = []
+                            for ve in out.get("vital_entries", []):
+                                ve_out = dict(ve or {})
+                                if isinstance(ve_out.get("vitals"), list):
+                                    ve_out["vitals"] = [
+                                        v for v in ve_out.get("vitals", [])
+                                        if needle in str((v or {}).get("vital_name", "")).casefold()
+                                    ]
+                                if ve_out.get("vitals"):
+                                    new_entries.append(ve_out)
+                            out["vital_entries"] = new_entries
+                            return out if new_entries else None
+
+                        # Unknown schema; keep entry unchanged.
+                        return out
+
+                    processed = []
+                    for e in entries:
+                        kept = _filter_entry_vitals(e)
+                        if kept is not None:
+                            processed.append(kept)
+
+                    # Date filtering at entry level (best-effort across common keys)
+                    wrappers: List[Dict[str, Any]] = []
+                    for e in processed:
+                        entry_date = (
+                            e.get("entry_date")
+                            or e.get("date")
+                            or e.get("created_date")
+                            or e.get("recorded_date")
+                            or e.get("vital_date")
+                        )
+                        wrappers.append({**e, "_orig": e, "entry_date": entry_date})
+
+                    first_pass = wrappers
+                    if from_date:
+                        first_pass = filter_items(first_pass, {"entry_date": {"op": "gte", "value": from_date}})["items"]
+                    second_pass = first_pass
+                    if to_date:
+                        second_pass = filter_items(second_pass, {"entry_date": {"op": "lte", "value": to_date}})["items"]
+
+                    # Apply limit after all filters
+                    limited = filter_items(second_pass, filters=None, limit=limit)["items"] if limit is not None else second_pass
+
+                    filtered_count = len(second_pass)
+                    response["vitals"] = [w.get("_orig", w) for w in limited]
+                    response["total_count"] = total_count
+                    response["filtered_count"] = filtered_count
+
                     if response.get("vitals"):
-                        vital_count = len(response["vitals"])
-                        
-                        response["guidance"] = f"Found {vital_count} vital sign records. Use this data to track patient health trends and clinical progress."
+                        response["guidance"] = (
+                            f"Found {total_count} vital sign records; {filtered_count} match the provided filters."
+                            " Use this data to track patient health trends and clinical progress."
+                        )
                     else:
-                        response["guidance"] = "No vital signs found for this patient. Use action='add' to record vitals during encounters."
-                    
+                        response["guidance"] = "No vital signs found matching the provided filters. Use action='add' to record vitals during encounters."
+
                     return response
                     
                 case "add":
@@ -266,6 +347,10 @@ async def managePatientDrugs(
     
     # Workflow fields
     check_allergies: Optional[bool] = True,
+
+    # List filters
+    status_filter: Optional[Literal["active", "inactive"]] = None,
+    limit: Optional[int] = None,
     
     ctx: Context = None,
 ) -> Dict[str, Any]:
@@ -283,7 +368,7 @@ async def managePatientDrugs(
     - "add": Prescribe new drug (requires drug_name, directions for medications; drug_name, dosage for supplements)
     - "update": Modify existing prescription (requires record_id + fields to change)  
     - "discontinue": Stop drug (requires record_id)
-    - "list": Show all patient drugs by type (optionally filter by substance_type)
+    - "list": Show all patient drugs by type (filter by substance_type, optionally filter by status)
     
     Substance Types:
     - "medication": Prescription drugs (requires directions, refills)
@@ -291,6 +376,9 @@ async def managePatientDrugs(
     - "vitamin": Specific vitamins (requires dosage as integer)
     
     Safety: Automatically checks allergies before prescribing unless check_allergies=False
+    List filters:
+    - status_filter: e.g., status_filter="active"
+    - limit: e.g., limit=25
     For medications: Use clear directions like "Take 1 tablet by mouth twice daily with food"
     For supplements: Provide dosage as integer (e.g., 5) and use strength for units (e.g., "500mg")
 
@@ -353,16 +441,54 @@ async def managePatientDrugs(
                     if substance_type in ["medication"]:
                         response = await client.get(f"/patients/{patient_id}/medications")
                         if response.get("medications"):
-                            med_count = len(response["medications"])
+                            meds = response.get("medications", [])
+                            total_count = len(meds)
+
+                            wrappers = []
+                            for m in meds:
+                                derived_status = "active" if m.get("is_active") else "inactive"
+                                wrappers.append({**(m or {}), "_orig": m, "status": derived_status})
+
+                            filters: Dict[str, Any] = {}
+                            if status_filter:
+                                filters["status"] = status_filter
+
+                            filtered = filter_items(wrappers, filters=filters or None, limit=limit)
+                            response["medications"] = [w.get("_orig", w) for w in filtered["items"]]
+                            response["total_count"] = total_count
+                            response["filtered_count"] = filtered["filtered_count"]
+
                             active_meds = [med for med in response["medications"] if med.get("is_active")]
-                            response["guidance"] = f"Patient has {med_count} total medications, {len(active_meds)} active. Check managePatientAllergies() before prescribing new drugs."
+                            response["guidance"] = (
+                                f"Patient has {total_count} total medications; {filtered['filtered_count']} match the provided filters"
+                                f" ({len(active_meds)} active in returned list). Check managePatientAllergies() before prescribing new drugs."
+                            )
                     else:
                         # Get supplements
                         response = await client.get(f"/patients/{patient_id}/supplements")
                         if response.get("supplements"):
-                            supp_count = len(response["supplements"])
-                            active_supps = [s for s in response["supplements"] if s.get("status") == "Active"]
-                            response["guidance"] = f"Patient has {supp_count} total supplements/vitamins, {len(active_supps)} active. Use action='add' to document new supplements."
+                            supps = response.get("supplements", [])
+                            total_count = len(supps)
+
+                            wrappers = []
+                            for s in supps:
+                                derived_status = str((s or {}).get("status", "")).casefold()
+                                wrappers.append({**(s or {}), "_orig": s, "status": derived_status})
+
+                            filters: Dict[str, Any] = {}
+                            if status_filter:
+                                filters["status"] = str(status_filter).casefold()
+
+                            filtered = filter_items(wrappers, filters=filters or None, limit=limit)
+                            response["supplements"] = [w.get("_orig", w) for w in filtered["items"]]
+                            response["total_count"] = total_count
+                            response["filtered_count"] = filtered["filtered_count"]
+
+                            active_supps = [s for s in response["supplements"] if str(s.get("status", "")).casefold() == "active"]
+                            response["guidance"] = (
+                                f"Patient has {total_count} total supplements/vitamins; {filtered['filtered_count']} match the provided filters"
+                                f" ({len(active_supps)} active in returned list). Use action='add' to document new supplements."
+                            )
                     
                     return response
                     
@@ -554,6 +680,11 @@ async def managePatientAllergies(
     allergy_status: Optional[str] = None,
     allergy_date: Optional[date] = None,
     comments: Optional[str] = None,
+
+    # List filters
+    severity_filter: Optional[str] = None,
+    type_filter: Optional[str] = None,
+    limit: Optional[int] = None,
     
     ctx: Context = None,
 ) -> Dict[str, Any]:
@@ -568,13 +699,18 @@ async def managePatientAllergies(
     <instructions>
     Actions:
     - "add": Document new allergy (requires allergen, allergy_type, severity, reactions, allergy_date)
-    - "list": Show all patient allergies (requires only patient_id)
+    - "list": Show all patient allergies (optionally filter by severity/type)
     - "update": Modify existing allergy (requires record_id + fields to change)
     - "delete": Remove allergy record (requires record_id)
     
     Safety critical: Always check allergies before prescribing medications.
     Common allergens: "Penicillin", "Latex", "Shellfish", "Nuts", "Contrast dye"
     Severity levels: "Mild", "Moderate", "Severe", "Life-threatening"
+
+    List filters:
+    - severity_filter: e.g., severity_filter="Severe"
+    - type_filter: e.g., type_filter="Drug"
+    - limit: e.g., limit=50
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -621,8 +757,30 @@ async def managePatientAllergies(
                 case "list":
                     response = await client.get(f"/patients/{patient_id}/allergies")
                     if response.get("allergies"):
+                        allergies = response.get("allergies", [])
+                        total_count = len(allergies)
+
+                        wrappers = []
+                        for a in allergies:
+                            wrappers.append({
+                                **(a or {}),
+                                "_orig": a,
+                                "allergy_type": (a or {}).get("allergy_type") or (a or {}).get("type"),
+                            })
+
+                        filters: Dict[str, Any] = {}
+                        if severity_filter:
+                            filters["severity"] = severity_filter
+                        if type_filter:
+                            filters["allergy_type"] = type_filter
+
+                        filtered = filter_items(wrappers, filters=filters or None, limit=limit)
+                        response["allergies"] = [w.get("_orig", w) for w in filtered["items"]]
+                        response["total_count"] = total_count
+                        response["filtered_count"] = filtered["filtered_count"]
+
                         allergy_count = len(response["allergies"])
-                        severe_allergies = [a for a in response["allergies"] if a.get("severity", "").lower() in ["severe", "life-threatening"]]
+                        severe_allergies = [a for a in response["allergies"] if str(a.get("severity", "")).lower() in ["severe", "life-threatening"]]
                         
                         guidance = f"Patient has {allergy_count} documented allergies"
                         if severe_allergies:
@@ -725,6 +883,11 @@ async def managePatientDiagnoses(
     encounter_id: Optional[str] = None,
     diagnosis_order: Optional[int] = None,
     comments: Optional[str] = None,
+
+    # List filters (optional)
+    status_filter: Optional[str] = None,
+    code_type_filter: Optional[str] = None,
+    limit: Optional[int] = None,
     
     ctx: Context = None,
 ) -> Dict[str, Any]:
@@ -739,12 +902,17 @@ async def managePatientDiagnoses(
     <instructions>
     Actions:
     - "add": Add new diagnosis (requires diagnosis_name, diagnosis_code, code_type)
-    - "list": Show all patient diagnoses (optionally filter by encounter_id)
+    - "list": Show all patient diagnoses (optionally filter by status, code type, and/or date range)
     - "update": Modify existing diagnosis (requires record_id + fields to change)
     - "delete": Remove diagnosis (requires record_id). Ask the user if they are sure they want to delete the diagnosis before proceeding.
     
     Code types: "ICD10", "SNOMED"
     Status options: "Active", "Inactive", "Resolved"
+    List filters:
+    - status_filter: filter by diagnosis_status (e.g., status_filter="Active")
+    - code_type_filter: filter by code_type (e.g., code_type_filter="ICD10")
+    - from_date / to_date: best-effort date filtering (e.g., from_date="2025-01-01", to_date="2025-12-31")
+    - limit: e.g., limit=25
     Use encounter_id to link diagnosis to specific visit for billing and documentation
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
@@ -799,17 +967,53 @@ async def managePatientDiagnoses(
                         endpoint += "?" + "&".join([f"{k}={v}" for k, v in params.items()])
                     
                     response = await client.get(endpoint)
+                    diagnoses = response.get("diagnoses") or response.get("patient_diagnoses") or []
+                    total_count = len(diagnoses)
+
+                    wrappers = []
+                    for d in diagnoses:
+                        status_val = (d or {}).get("diagnosis_status") or (d or {}).get("status")
+                        code_val = (d or {}).get("code_type") or (d or {}).get("codeType")
+                        dx_date = (d or {}).get("from_date") or (d or {}).get("date") or (d or {}).get("created_date") or (d or {}).get("to_date")
+                        wrappers.append({
+                            **(d or {}),
+                            "_orig": d,
+                            "diagnosis_status": status_val,
+                            "code_type": code_val,
+                            "diagnosis_date": dx_date,
+                        })
+
+                    filters: Dict[str, Any] = {}
+                    if status_filter:
+                        filters["diagnosis_status"] = status_filter
+                    if code_type_filter:
+                        filters["code_type"] = code_type_filter
+
+                    filtered_wrappers = wrappers
+                    if filters:
+                        filtered_wrappers = filter_items(filtered_wrappers, filters=filters)["items"]
+                    if from_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, filters={"diagnosis_date": {"op": "gte", "value": from_date}})["items"]
+                    if to_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, filters={"diagnosis_date": {"op": "lte", "value": to_date}})["items"]
+
+                    filtered_count = len(filtered_wrappers)
+                    limited_wrappers = filter_items(filtered_wrappers, filters=None, limit=limit)["items"] if limit is not None else filtered_wrappers
+
+                    response["diagnoses"] = [w.get("_orig", w) for w in limited_wrappers]
+                    response["total_count"] = total_count
+                    response["filtered_count"] = filtered_count
+
                     if response.get("diagnoses"):
-                        dx_count = len(response["diagnoses"])
-                        active_dx = [d for d in response["diagnoses"] if d.get("status", "").lower() == "active"]
-                        
-                        guidance = f"Patient has {dx_count} documented diagnoses, {len(active_dx)} active"
+                        active_dx = [d for d in response["diagnoses"] if str(d.get("status") or d.get("diagnosis_status") or "").lower() == "active"]
+                        guidance = f"Patient has {total_count} documented diagnoses; {filtered_count} match the provided filters ({len(active_dx)} active in returned list)"
                         if encounter_id:
-                            guidance += f" (filtered by encounter {encounter_id})"
+                            guidance += f" (API filtered by encounter {encounter_id})"
                         guidance += ". Use manageMedications() or managePatientDrugs() to prescribe treatments for active diagnoses."
                         response["guidance"] = guidance
                     else:
-                        response["guidance"] = "No diagnoses found. Use action='add' to document patient conditions for proper care planning."
+                        response["guidance"] = "No diagnoses found matching the provided filters. Use action='add' to document patient conditions for proper care planning."
+
                     return response
                     
                 case "add":

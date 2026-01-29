@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals
+from common.filtering import filter_items
 import logging
 from telemetry import telemetry, with_tool_metrics
 
@@ -677,6 +678,10 @@ async def reviewPatientHistory(
     include_diagnoses: bool = True,
     include_encounters: bool = True,
     include_appointments: bool = True,
+    diagnosis_status_filter: Optional[str] = None,
+    medication_status_filter: Optional[str] = None,
+    vitals_limit: Optional[int] = None,
+    encounters_limit: Optional[int] = None,
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """
@@ -691,6 +696,14 @@ async def reviewPatientHistory(
     Returns a consolidated view of patient information organized by medical relevance.
     By default includes all sections (include_sections=None). Specify include_sections to focus on specific areas.
     Results include clinical context and suggestions for next actions.
+
+    Optional filters (apply to specific sections):
+    - diagnosis_status_filter: filter diagnoses by status (e.g., diagnosis_status_filter="Active")
+    - medication_status_filter: filter medications by status (e.g., medication_status_filter="active")
+    - vitals_limit: limit number of vital entries returned (e.g., vitals_limit=10)
+    - encounters_limit: limit number of encounters returned (e.g., encounters_limit=5)
+
+    For each filtered section, the response includes `<section>_total_count` and `<section>_filtered_count`.
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -755,7 +768,24 @@ async def reviewPatientHistory(
             # Get current medications
             if "medications" in include_sections:
                 meds_response = await client.get(f"/patients/{patient_id}/medications")
-                patient_summary["current_medications"] = meds_response.get("medications", [])
+                meds = meds_response.get("medications", []) or []
+                patient_summary["current_medications_total_count"] = len(meds)
+
+                wrappers = []
+                for m in meds:
+                    derived_status = "active" if (m or {}).get("is_active") else "inactive"
+                    wrappers.append({**(m or {}), "_orig": m, "med_status": derived_status})
+
+                filtered_wrappers = wrappers
+                if medication_status_filter:
+                    filtered_wrappers = filter_items(
+                        filtered_wrappers,
+                        {"med_status": {"op": "eq", "value": medication_status_filter}},
+                    )["items"]
+
+                patient_summary["current_medications_filtered_count"] = len(filtered_wrappers)
+                limited = filter_items(filtered_wrappers, filters=None, limit=None)["items"]
+                patient_summary["current_medications"] = [w.get("_orig", w) for w in limited]
             
             # Get allergies
             if "allergies" in include_sections:
@@ -765,21 +795,51 @@ async def reviewPatientHistory(
             # Get recent vitals
             if "vitals" in include_sections:
                 vitals_response = await client.get(f"/patients/{patient_id}/vitals")
-                patient_summary["recent_vitals"] = vitals_response.get("vitals", [])
+                vitals = vitals_response.get("vitals", []) or []
+                patient_summary["recent_vitals_total_count"] = len(vitals)
+                limited = filter_items(vitals, filters=None, limit=vitals_limit) if vitals_limit is not None else {"items": vitals, "filtered_count": len(vitals)}
+                patient_summary["recent_vitals"] = limited["items"]
+                patient_summary["recent_vitals_filtered_count"] = limited.get("filtered_count", len(vitals))
             
             # Get active diagnoses
             if "diagnoses" in include_sections:
                 diagnoses_response = await client.get(f"/patients/{patient_id}/diagnoses")
-                patient_summary["diagnoses"] = diagnoses_response.get("patient_diagnoses", [])
+                dx = diagnoses_response.get("patient_diagnoses") or diagnoses_response.get("diagnoses") or []
+                patient_summary["diagnoses_total_count"] = len(dx)
+
+                wrappers = []
+                for d in dx:
+                    status_val = (d or {}).get("diagnosis_status") or (d or {}).get("status")
+                    wrappers.append({**(d or {}), "_orig": d, "dx_status": status_val})
+
+                filtered_wrappers = wrappers
+                if diagnosis_status_filter:
+                    filtered_wrappers = filter_items(
+                        filtered_wrappers,
+                        {"dx_status": {"op": "eq", "value": diagnosis_status_filter}},
+                    )["items"]
+
+                patient_summary["diagnoses_filtered_count"] = len(filtered_wrappers)
+                patient_summary["diagnoses"] = [w.get("_orig", w) for w in filtered_wrappers]
             
             # Get recent encounters (last 10)
             if "encounters" in include_sections:
+                per_page = 10
+                if encounters_limit is not None:
+                    try:
+                        per_page = max(10, int(encounters_limit))
+                    except (TypeError, ValueError):
+                        per_page = 10
                 encounters_response = await client.get("/encounters", params={
                     "patient_id": patient_id,
-                    "per_page": 10,
+                    "per_page": per_page,
                     "sort_order": "D"
                 })
-                patient_summary["recent_encounters"] = encounters_response.get("encounters", [])
+                enc = encounters_response.get("encounters", []) or []
+                patient_summary["recent_encounters_total_count"] = len(enc)
+                limited = filter_items(enc, filters=None, limit=encounters_limit) if encounters_limit is not None else {"items": enc, "filtered_count": len(enc)}
+                patient_summary["recent_encounters"] = limited["items"]
+                patient_summary["recent_encounters_filtered_count"] = limited.get("filtered_count", len(enc))
             
             # Get upcoming appointments
             if "appointments" in include_sections:

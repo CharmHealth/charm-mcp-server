@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals
+from common.filtering import filter_items
 import logging
 from telemetry import telemetry, with_tool_metrics
 
@@ -18,6 +19,11 @@ async def managePatientNotes(
     patient_id: str,
     record_id: Optional[str] = None,
     notes: Optional[str] = None,
+
+    # List filters
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    limit: Optional[int] = None,
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """
@@ -31,12 +37,16 @@ async def managePatientNotes(
     <instructions>
     Actions:
     - "add": Add new clinical note (requires notes content)
-    - "list": Show all patient notes (requires only patient_id)
+    - "list": Show all patient notes (optionally filter by date range)
     - "update": Modify existing note (requires record_id + notes content)
     - "delete": Remove note (requires record_id). Ask the user if they are sure they want to delete the note before proceeding.
     
     Use for: Important care instructions, provider alerts, patient preferences, social determinants
     Formal encounter notes should use manageEncounter() instead
+
+    List filters:
+    - from_date / to_date: e.g., from_date="2025-01-01", to_date="2025-12-31"
+    - limit: e.g., limit=50
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -82,11 +92,34 @@ async def managePatientNotes(
             match action:
                 case "list":
                     response = await client.get(f"/patients/{patient_id}/quicknotes")
+                    notes_list = response.get("quick_notes") or []
+                    total_count = len(notes_list)
+
+                    wrappers = []
+                    for n in notes_list:
+                        note_date = (n or {}).get("created_date") or (n or {}).get("date") or (n or {}).get("createdDate")
+                        wrappers.append({**(n or {}), "_orig": n, "note_date": note_date})
+
+                    filtered_wrappers = wrappers
+                    if from_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, {"note_date": {"op": "gte", "value": from_date}})["items"]
+                    if to_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, {"note_date": {"op": "lte", "value": to_date}})["items"]
+
+                    filtered_count = len(filtered_wrappers)
+                    limited = filter_items(filtered_wrappers, filters=None, limit=limit)["items"] if limit is not None else filtered_wrappers
+
+                    response["quick_notes"] = [w.get("_orig", w) for w in limited]
+                    response["total_count"] = total_count
+                    response["filtered_count"] = filtered_count
+
                     if response.get("quick_notes"):
-                        note_count = len(response["quick_notes"])
-                        response["guidance"] = f"Patient has {note_count} clinical notes. These are visible to all providers during patient care. Use action='add' for new important clinical information."
+                        response["guidance"] = (
+                            f"Patient has {total_count} clinical notes; {filtered_count} match the provided filters."
+                            " These are visible to all providers during patient care. Use action='add' for new important clinical information."
+                        )
                     else:
-                        response["guidance"] = "No clinical notes found. Use action='add' to document important patient information for provider awareness."
+                        response["guidance"] = "No clinical notes found matching the provided filters. Use action='add' to document important patient information for provider awareness."
                     return response
                     
                 case "add":
@@ -155,6 +188,12 @@ async def managePatientRecalls(
     email_reminder_before: Optional[int] = None,
     send_text_reminder: Optional[bool] = None,
     text_reminder_before: Optional[int] = None,
+
+    # List filters
+    type_filter: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    limit: Optional[int] = None,
     
     ctx: Context = None,
 ) -> Dict[str, Any]:
@@ -169,13 +208,18 @@ async def managePatientRecalls(
     <instructions>
     Actions:
     - "add": Schedule new recall (requires recall_type, notes, provider_id, facility_id)
-    - "list": Show all patient recalls (requires only patient_id)
+    - "list": Show all patient recalls (optionally filter by type/date range)
     - "update": Modify existing recall (requires record_id + fields to change)
     - "delete": Remove recall (requires record_id). Ask the user if they are sure they want to delete the recall before proceeding.
     
     Common recall types: "Annual Physical", "Mammogram", "Colonoscopy", "Lab Follow-up", "Medication Review"
     Reminder timing: email_reminder_before/text_reminder_before in days (e.g., 7 for one week)
     Use getPracticeInfo() to get valid provider_id and facility_id values
+
+    List filters:
+    - type_filter: e.g., type_filter="Annual Physical"
+    - from_date / to_date: e.g., from_date="2025-01-01", to_date="2025-12-31" (compares against recall_date when available)
+    - limit: e.g., limit=25
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -221,15 +265,48 @@ async def managePatientRecalls(
             match action:
                 case "list":
                     response = await client.get(f"/patients/{patient_id}/recalls")
+                    recalls = response.get("recall") or []
+                    total_count = len(recalls)
+
+                    wrappers = []
+                    for r in recalls:
+                        recall_type_val = (r or {}).get("recall_type") or (r or {}).get("type")
+                        recall_date_val = (r or {}).get("recall_date") or (r or {}).get("date") or (r or {}).get("created_date")
+                        wrappers.append({
+                            **(r or {}),
+                            "_orig": r,
+                            "recall_type": recall_type_val,
+                            "recall_date": recall_date_val,
+                        })
+
+                    filters: Dict[str, Any] = {}
+                    if type_filter:
+                        filters["recall_type"] = type_filter
+
+                    filtered_wrappers = wrappers
+                    if filters:
+                        filtered_wrappers = filter_items(filtered_wrappers, filters=filters)["items"]
+                    if from_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, {"recall_date": {"op": "gte", "value": from_date}})["items"]
+                    if to_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, {"recall_date": {"op": "lte", "value": to_date}})["items"]
+
+                    filtered_count = len(filtered_wrappers)
+                    limited = filter_items(filtered_wrappers, filters=None, limit=limit)["items"] if limit is not None else filtered_wrappers
+
+                    response["recall"] = [w.get("_orig", w) for w in limited]
+                    response["total_count"] = total_count
+                    response["filtered_count"] = filtered_count
+
                     if response.get("recall"):
                         recall_count = len(response["recall"])
-                        active_recalls = [r for r in response["recall"] if r.get("status", "").lower() == "active"]
+                        active_recalls = [r for r in response["recall"] if str(r.get("status", "")).lower() == "active"]
                         
                         guidance = f"Patient has {recall_count} total recalls, {len(active_recalls)} active"
                         guidance += ". These ensure timely preventive care and follow-up visits. Schedule appointments with manageAppointments() when recalls are due."
                         response["guidance"] = guidance
                     else:
-                        response["guidance"] = "No recalls scheduled. Use action='add' to schedule preventive care reminders based on clinical guidelines and patient needs."
+                        response["guidance"] = "No recalls scheduled matching the provided filters. Use action='add' to schedule preventive care reminders based on clinical guidelines and patient needs."
                     return response
                     
                 case "add":
@@ -493,6 +570,10 @@ async def managePatientLabs(
     # Listing fields
     reviewer_id: Optional[str] = None,
     status: Optional[int] = None,  # 0 or 2
+    status_filter: Optional[int] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    limit: Optional[int] = None,
     start_index: Optional[int] = None,
     no_of_records: Optional[int] = None,
     sort_by: Optional[Literal["DATE", "FULL_NAME"]] = None,
@@ -513,13 +594,18 @@ async def managePatientLabs(
     
     <instructions>
     Actions:
-    - "list": Show lab results with filtering (optionally filter by patient_id, reviewer_id, status)
+    - "list": Show lab results with filtering (optionally filter by patient_id, reviewer_id, status, date range)
     - "get_details": Get detailed lab report (requires group_id OR lab_order_id)
     - "add_result": Add new lab results (requires patient_id + result_details)
     
     For detailed results: Use group_id for result groups or lab_order_id for specific orders
     For adding results: Provide structured result_details with tests, parameters, and values
     Status codes: 0 for pending, 2 for final results
+
+    List filters (in addition to API parameters):
+    - status_filter: 0 (pending) or 2 (final)
+    - from_date / to_date: e.g., from_date="2025-01-01", to_date="2025-12-31" (best-effort against common date fields)
+    - limit: e.g., limit=50
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -569,8 +655,9 @@ async def managePatientLabs(
                         params["reviewer_id"] = int(reviewer_id)
                     if patient_id:
                         params["patient_id"] = int(patient_id)
-                    if status is not None:
-                        params["status"] = status
+                    effective_status = status_filter if status_filter is not None else status
+                    if effective_status is not None:
+                        params["status"] = effective_status
                     if start_index:
                         params["start_index"] = start_index
                     if no_of_records:
@@ -581,7 +668,34 @@ async def managePatientLabs(
                         params["is_ascending"] = is_ascending
                     
                     response = await client.get("/labs/results", params=params)
-                    
+
+                    results = response.get("lab_results") or []
+                    total_count = len(results)
+
+                    wrappers = []
+                    for r in results:
+                        lab_date = (
+                            (r or {}).get("date")
+                            or (r or {}).get("result_date")
+                            or (r or {}).get("collected_date")
+                            or (r or {}).get("created_date")
+                            or (r or {}).get("order_date")
+                        )
+                        wrappers.append({**(r or {}), "_orig": r, "lab_date": lab_date})
+
+                    filtered_wrappers = wrappers
+                    if from_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, {"lab_date": {"op": "gte", "value": from_date}})["items"]
+                    if to_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, {"lab_date": {"op": "lte", "value": to_date}})["items"]
+
+                    filtered_count = len(filtered_wrappers)
+                    limited = filter_items(filtered_wrappers, filters=None, limit=limit)["items"] if limit is not None else filtered_wrappers
+
+                    response["lab_results"] = [w.get("_orig", w) for w in limited]
+                    response["total_count"] = total_count
+                    response["filtered_count"] = filtered_count
+
                     if response.get("lab_results"):
                         result_count = len(response["lab_results"])
                         if patient_id:

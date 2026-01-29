@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals
+from common.filtering import filter_items
 import logging
 from telemetry import telemetry, with_tool_metrics
 
@@ -55,6 +56,12 @@ async def manageAppointments(
     facility_ids: Optional[str] = None,  # Comma-separated
     member_ids: Optional[str] = None,   # Comma-separated
     status_ids: Optional[str] = None,   # Comma-separated
+
+    # Additional list filters (applied client-side after fetching)
+    status_filter: Optional[str] = None,
+    provider_filter: Optional[str] = None,  # provider_id or provider_name (substring match)
+    mode_filter: Optional[str] = None,
+    limit: Optional[int] = None,
     
     ctx: Context = None,
 ) -> Dict[str, Any]:
@@ -71,12 +78,18 @@ async def manageAppointments(
     - "schedule": Create new appointment (requires patient_id, provider_id, facility_id, appointment_date, appointment_time). Check the provider's availability with manageAppointments(action='list') and provider_id, and across all facilities for the provider before suggesting a time.
     - "reschedule": Change existing appointment time (requires appointment_id + new scheduling details)
     - "cancel": Cancel appointment (requires appointment_id + cancel_reason)
-    - "list": Show appointments with filtering (requires start_date, end_date_range, facility_ids)
+    - "list": Show appointments with filtering (requires start_date, end_date_range, facility_ids; optionally filter by status/provider/mode)
     
     Time format: Use 12-hour format like "09:30 AM" or "02:15 PM"
     For recurring: Set repetition to "Weekly" or "Daily" and provide frequency + end_date
     For double booking: Use provider_double_booking="allow" or resource_double_booking="allow" to override checks
     For cancellation: Use delete_type "Current" for single appointment or "Entire" for recurring series
+
+    List filters (applied after fetching all appointments in the date range):
+    - status_filter: e.g., status_filter="Confirmed"
+    - provider_filter: provider_id or provider_name substring (e.g., provider_filter="12345" or provider_filter="Smith")
+    - mode_filter: e.g., mode_filter="Video Consult"
+    - limit: e.g., limit=25
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -271,11 +284,44 @@ async def manageAppointments(
                         params["status_ids"] = status_ids
                     
                     response = await client.get("/appointments", params=params)
-                    
+
+                    appts = response.get("appointments") or []
+                    total_count = len(appts)
+
+                    wrappers = []
+                    for a in appts:
+                        status_val = (a or {}).get("appointment_status") or (a or {}).get("status")
+                        mode_val = (a or {}).get("mode")
+                        provider_id_val = (a or {}).get("member_id") or (a or {}).get("provider_id")
+                        provider_name_val = (a or {}).get("member_name") or (a or {}).get("physician_name")
+                        provider_search = f"{provider_id_val or ''} {provider_name_val or ''}".strip()
+                        wrappers.append({
+                            **(a or {}),
+                            "_orig": a,
+                            "status": status_val,
+                            "mode": mode_val,
+                            "provider_search": provider_search,
+                        })
+
+                    filters: Dict[str, Any] = {}
+                    if status_filter:
+                        filters["status"] = status_filter
+                    if mode_filter:
+                        filters["mode"] = mode_filter
+                    if provider_filter:
+                        filters["provider_search"] = {"op": "contains", "value": provider_filter}
+
+                    filtered = filter_items(wrappers, filters=filters or None, limit=limit)
+                    response["appointments"] = [w.get("_orig", w) for w in filtered["items"]]
+                    response["total_count"] = total_count
+                    response["filtered_count"] = filtered["filtered_count"]
+
                     if response.get("appointments"):
-                        appt_count = len(response["appointments"])
-                        response["guidance"] = f"Found {appt_count} appointments in the specified date range. Use action='reschedule' or action='cancel' to modify appointments."
-                    
+                        response["guidance"] = (
+                            f"Found {total_count} appointments in the specified date range; {filtered['filtered_count']} match the provided filters."
+                            " Use action='reschedule' or action='cancel' to modify appointments."
+                        )
+
                     return response
                     
         except Exception as e:
