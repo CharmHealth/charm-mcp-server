@@ -3,7 +3,7 @@ from fastmcp.server.dependencies import get_http_headers
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
-from common.utils import build_params_from_locals
+from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
 import logging
 from telemetry import telemetry, with_tool_metrics
@@ -120,7 +120,7 @@ async def managePatientNotes(
                         )
                     else:
                         response["guidance"] = "No clinical notes found matching the provided filters. Use action='add' to document important patient information for provider awareness."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "add":
                     if not notes:
@@ -132,7 +132,7 @@ async def managePatientNotes(
                     response = await client.post(f"/patients/{patient_id}/quicknotes", data={"notes": notes})
                     if response.get("data"):
                         response["guidance"] = f"Clinical note added successfully. This important information is now visible to all providers during patient care. For detailed encounter documentation, use manageEncounter()()."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "update":
                     if not record_id or not notes:
@@ -144,7 +144,7 @@ async def managePatientNotes(
                     response = await client.put(f"patients/quicknotes/{record_id}", data={"notes": notes})
                     if response.get("code") == "0":
                         response["guidance"] = f"Clinical note {record_id} updated successfully. Updated information is now available to all providers."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "delete":
                     if not record_id:
@@ -156,7 +156,7 @@ async def managePatientNotes(
                     response = await client.delete(f"patients/quicknotes/{record_id}")
                     if response.get("code") == "0":
                         response["guidance"] = f"Clinical note {record_id} deleted successfully. Information is no longer visible to providers."
-                    return response
+                    return strip_empty_values(response)
                     
         except Exception as e:
             logger.error(f"Error in managePatientNotes: {e}")
@@ -307,7 +307,7 @@ async def managePatientRecalls(
                         response["guidance"] = guidance
                     else:
                         response["guidance"] = "No recalls scheduled matching the provided filters. Use action='add' to schedule preventive care reminders based on clinical guidelines and patient needs."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "add":
                     required = [recall_type, notes, provider_id, facility_id]
@@ -339,7 +339,7 @@ async def managePatientRecalls(
                         if send_email_reminder or send_text_reminder:
                             reminder_info = " Patient will receive automated reminders."
                         response["guidance"] = f"Recall for '{recall_type}' scheduled successfully.{reminder_info} Use manageAppointments() to schedule the actual appointment when due."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "update":
                     if not record_id:
@@ -363,7 +363,7 @@ async def managePatientRecalls(
                     response = await client.put(f"/patients/{patient_id}/recalls/{record_id}", data=update_data)
                     if response.get("recalls"):
                         response["guidance"] = f"Recall {record_id} updated successfully. Updated reminder settings are now active."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "delete":
                     if not record_id:
@@ -375,7 +375,7 @@ async def managePatientRecalls(
                     response = await client.delete(f"/patients/{patient_id}/recalls/{record_id}")
                     if response.get("code") == "0":
                         response["guidance"] = f"Recall {record_id} deleted successfully. Patient will no longer receive reminders for this recall."
-                    return response
+                    return strip_empty_values(response)
                     
         except Exception as e:
             logger.error(f"Error in managePatientRecalls: {e}")
@@ -479,7 +479,7 @@ async def managePatientFiles(
                     else:
                         response["guidance"] = "Photo upload failed. Verify the file path exists and the file is a valid image format (JPG, PNG)."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "delete_photo":
                     response = await client.delete(f"/patients/{patient_id}/photo")
@@ -489,7 +489,7 @@ async def managePatientFiles(
                     else:
                         response["guidance"] = "Photo deletion failed. Verify the patient has an existing photo to delete."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "upload_id":
                     if not id_file or not id_qualifier:
@@ -527,7 +527,7 @@ async def managePatientFiles(
                     else:
                         response["guidance"] = "ID document upload failed. Verify the file path exists and the file is a valid image or PDF format."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "send_phr_invite":
                     if not email:
@@ -549,7 +549,7 @@ async def managePatientFiles(
                     else:
                         response["guidance"] = "PHR invitation failed. Verify the email address is valid and the patient doesn't already have an active PHR account."
                     
-                    return response
+                    return strip_empty_values(response)
                     
         except Exception as e:
             logger.error(f"Error in managePatientFiles: {e}")
@@ -705,7 +705,7 @@ async def managePatientLabs(
                     else:
                         response["guidance"] = "No lab results found matching the criteria. Check your filter parameters or patient_id."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "get_details":
                     if not group_id and not lab_order_id:
@@ -726,7 +726,7 @@ async def managePatientLabs(
                     else:
                         response["guidance"] = "Lab details not found. Verify the group_id or lab_order_id is correct using action='list' first."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "add_result":
                     if not patient_id or not result_details:
@@ -747,7 +747,7 @@ async def managePatientLabs(
                     else:
                         response["guidance"] = "Lab result upload failed. Verify the result_details structure includes required fields (tests, parameters, values) and patient_id is valid."
                     
-                    return response
+                    return strip_empty_values(response)
                     
         except Exception as e:
             logger.error(f"Error in managePatientLabs: {e}")

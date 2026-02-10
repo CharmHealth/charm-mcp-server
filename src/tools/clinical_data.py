@@ -3,7 +3,7 @@ from fastmcp.server.dependencies import get_http_headers
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
-from common.utils import build_params_from_locals
+from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
 import logging
 from telemetry import telemetry, with_tool_metrics
@@ -187,7 +187,7 @@ async def managePatientVitals(
                     else:
                         response["guidance"] = "No vital signs found matching the provided filters. Use action='add' to record vitals during encounters."
 
-                    return response
+                    return strip_empty_values(response)
                     
                 case "add":
                     if not encounter_id:
@@ -244,7 +244,7 @@ async def managePatientVitals(
                     else:
                         response["guidance"] = "Vitals recording failed. Verify encounter_id exists and vital names match practice standards. Use getPracticeInfo(info_type='vitals') for valid vital types."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "update":
                     if not record_id:
@@ -306,7 +306,7 @@ async def managePatientVitals(
                     else:
                         response["guidance"] = "Vital update failed. Verify the record_id exists and the new values are valid."
                     
-                    return response
+                    return strip_empty_values(response)
                 
                     
         except Exception as e:
@@ -490,7 +490,7 @@ async def managePatientDrugs(
                                 f" ({len(active_supps)} active in returned list). Use action='add' to document new supplements."
                             )
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "add":
                     if substance_type == "medication":
@@ -589,7 +589,7 @@ async def managePatientDrugs(
                         if response.get("supplements"):
                             response["guidance"] = f"Supplement '{drug_name}' documented successfully. This will appear in the patient's medication list for reference during prescribing."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "update":
                     if not record_id:
@@ -634,7 +634,7 @@ async def managePatientDrugs(
                         if response.get("supplements"):
                             response["guidance"] = f"Supplement {record_id} updated successfully. Changes are reflected in the patient's supplement list."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "discontinue":
                     if not record_id:
@@ -656,7 +656,7 @@ async def managePatientDrugs(
                         if response.get("supplements"):
                             response["guidance"] = f"Supplement {record_id} discontinued. This supplement is no longer part of the patient's active regimen."
                     
-                    return response
+                    return strip_empty_values(response)
                 
         except Exception as e:
             logger.error(f"Error in managePatientDrugs: {e}")
@@ -789,7 +789,7 @@ async def managePatientAllergies(
                         response["guidance"] = guidance
                     else:
                         response["guidance"] = "No allergies documented. Before prescribing medications, confirm with patient if they have any known allergies."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "add":
                     required = [allergen, allergy_type, severity, reactions, allergy_date]
@@ -817,7 +817,7 @@ async def managePatientAllergies(
                         if severity.lower() in ["severe"]:
                             severity_warning = "SEVERE ALLERGY ALERT: This will trigger warnings during prescribing."
                         response["guidance"] = f"Allergy to '{allergen}' documented successfully.{severity_warning} All providers will see this allergy alert when prescribing medications."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "update":
                     if not record_id:
@@ -845,7 +845,7 @@ async def managePatientAllergies(
                     response = await client.put(f"/patients/{patient_id}/allergies/{record_id}", data=update_data)
                     if response.get("patient_allergy"):
                         response["guidance"] = f"Allergy record {record_id} updated successfully. Updated allergy information is now active in safety alerts."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "delete":
                     if not record_id:
@@ -857,7 +857,7 @@ async def managePatientAllergies(
                     response = await client.delete(f"/patients/{patient_id}/allergies/{record_id}")
                     if response.get("code") == "0":
                         response["guidance"] = f"Allergy record {record_id} deleted successfully. This allergy will no longer appear in clinical alerts. Ensure this is correct before prescribing."
-                    return response
+                    return strip_empty_values(response)
                     
         except Exception as e:
             logger.error(f"Error in managePatientAllergies: {e}")
@@ -1014,7 +1014,7 @@ async def managePatientDiagnoses(
                     else:
                         response["guidance"] = "No diagnoses found matching the provided filters. Use action='add' to document patient conditions for proper care planning."
 
-                    return response
+                    return strip_empty_values(response)
                     
                 case "add":
                     required = [diagnosis_name, diagnosis_code, code_type]
@@ -1051,7 +1051,7 @@ async def managePatientDiagnoses(
                             guidance += f" Linked to encounter {encounter_id} for billing."
                         guidance += " Consider appropriate treatments (medications, supplements, etc.) with managePatientDrugs() or schedule follow-up with manageAppointments()."
                         response["guidance"] = guidance
-                    return response
+                    return strip_empty_values(response)
                     
                 case "update":
                     if not record_id:
@@ -1074,7 +1074,7 @@ async def managePatientDiagnoses(
                     if response.get("patient_diagnoses"):
                         status_msg = f" Status updated to '{diagnosis_status}'." if diagnosis_status else ""
                         response["guidance"] = f"Diagnosis {record_id} updated successfully.{status_msg} Changes are reflected in the patient's active problem list."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "delete":
                     if not record_id:
@@ -1086,7 +1086,7 @@ async def managePatientDiagnoses(
                     response = await client.delete(f"/patients/{patient_id}/diagnoses/{record_id}")
                     if response.get("code") == "0":
                         response["guidance"] = f"Diagnosis {record_id} removed from problem list. Ensure this doesn't affect ongoing treatment plans."
-                    return response
+                    return strip_empty_values(response)
                     
         except Exception as e:
             logger.error(f"Error in managePatientDiagnoses: {e}")

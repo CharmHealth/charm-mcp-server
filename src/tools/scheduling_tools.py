@@ -3,7 +3,7 @@ from fastmcp.server.dependencies import get_http_headers
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
-from common.utils import build_params_from_locals
+from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
 import logging
 from telemetry import telemetry, with_tool_metrics
@@ -195,7 +195,7 @@ async def manageAppointments(
                         else:
                             response["guidance"] = "Scheduling failed. Verify all IDs are correct and the time slot is in the future during business hours."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "reschedule":
                     required = [appointment_id, facility_id, patient_id, provider_id, appointment_date, appointment_time]
@@ -239,7 +239,7 @@ async def manageAppointments(
                         else:
                             response["guidance"] = "Rescheduling failed. Verify the appointment exists and new details are valid."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "cancel":
                     if not appointment_id or not cancel_reason:
@@ -259,7 +259,7 @@ async def manageAppointments(
                     else:
                         response["guidance"] = "Cancellation failed. Verify the appointment_id exists and is not already cancelled."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "list":
                     required = [start_date, end_date_range, facility_ids]
@@ -322,7 +322,7 @@ async def manageAppointments(
                             " Use action='reschedule' or action='cancel' to modify appointments."
                         )
 
-                    return response
+                    return strip_empty_values(response)
                     
         except Exception as e:
             logger.error(f"Error in manageAppointments: {e}")

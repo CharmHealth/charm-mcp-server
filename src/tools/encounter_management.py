@@ -3,7 +3,7 @@ from fastmcp.server.dependencies import get_http_headers
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
-from common.utils import build_params_from_locals
+from common.utils import build_params_from_locals, strip_empty_values
 import logging
 from telemetry import telemetry, with_tool_metrics
 
@@ -227,7 +227,7 @@ async def manageEncounter(
                     # Check if already signed
                     is_signed = encounter_details["encounter_info"]["status"] == "signed"
                     
-                    return {
+                    return strip_empty_values({
                         "action": "review",
                         "encounter_details": encounter_details,
                         "summary": summary_items,
@@ -256,7 +256,7 @@ async def manageEncounter(
                 - managePatientDiagnoses(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')
                 - managePatientDrugs(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')'''}
                 """
-                    }
+                    })
             
                 case "sign":
                     if not encounter_id:
@@ -281,14 +281,14 @@ async def manageEncounter(
                     )
                     
                     if sign_response.get("code") == "0":
-                        return {
+                        return strip_empty_values({
                             "action": "sign",
                             "encounter_id": encounter_id,
                             "signed": True,
                             "message": sign_response.get("message", "Encounter signed successfully"),
                             "signed_encounter": sign_response.get("encounter", {}),
                             "guidance": "Encounter signed successfully! The encounter is now finalized and legally binding. No further modifications can be made unless you unlock the encounter."
-                        }
+                        })
                     else:
                         return {
                             "action": "sign",
@@ -319,14 +319,14 @@ async def manageEncounter(
                     )
                     
                     if unlock_response.get("code") == "0":
-                        return {
+                        return strip_empty_values({
                             "action": "unlock",
                             "encounter_id": encounter_id,
                             "unlocked": True,
                             "message": unlock_response.get("message", "Chart note unlocked successfully"),
                             "reason": reason,
                             "guidance": "Encounter unlocked successfully! The signed encounter can now be modified. Remember to sign it again after making necessary changes using action='sign'."
-                        }
+                        })
                     else:
                         return {
                             "action": "unlock",
@@ -406,7 +406,7 @@ async def manageEncounter(
     3. Sign when complete:
     - manageEncounter(patient_id='{patient_id}', encounter_id='{encounter_id}', action='sign')"""
                     }
-                    return result
+                    return strip_empty_values(result)
                 
                 case "update":
                     if not encounter_id:
@@ -421,13 +421,13 @@ async def manageEncounter(
                         update_data["chief_complaints"] = chief_complaint
                     update_response = await client.post(f"/soap/encounters/{encounter_id}", data=update_data)
                     if update_response.get("code") == "0":
-                        return {
+                        return strip_empty_values({
                             "action": "update",
                             "encounter_id": encounter_id,
                             "updated": True,
                             "message": "Encounter updated successfully",
                             "guidance": "Encounter updated successfully! The encounter is now updated."
-                        }
+                        })
                     else:
                         return {
                             "error": "Failed to update encounter",

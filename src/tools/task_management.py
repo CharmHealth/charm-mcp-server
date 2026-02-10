@@ -5,7 +5,7 @@ from datetime import date
 import logging
 
 from api import CharmHealthAPIClient
-from common.utils import build_params_from_locals
+from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
 from telemetry import with_tool_metrics
 
@@ -141,7 +141,7 @@ async def manageTasks(
                     if reminder_options:
                         task_data["reminder_options"] = reminder_options
 
-                    return await client.post("/tasks", data=task_data)
+                    return strip_empty_values(await client.post("/tasks", data=task_data))
 
                 case "update":
                     if not task_id:
@@ -171,7 +171,7 @@ async def manageTasks(
                     if not update_data:
                         return {"error": "No fields provided to update"}
 
-                    return await client.put(f"/tasks/{task_id}", data=update_data)
+                    return strip_empty_values(await client.put(f"/tasks/{task_id}", data=update_data))
 
                 case "list":
                     params = {}
@@ -234,12 +234,12 @@ async def manageTasks(
                             f"Found {total_count} tasks; {filtered['filtered_count']} match the provided filters."
                             " Use action='add' to create new tasks, action='update' to modify existing tasks, or action='change_status' to update task status."
                         )
-                    return response
+                    return strip_empty_values(response)
 
                 case "change_status":
                     if not task_id or not status:
                         return {"error": "task_id and status are required for change_status"}
-                    return await client.put(f"/tasks/{task_id}/status", data={"status": status})
+                    return strip_empty_values(await client.put(f"/tasks/{task_id}/status", data={"status": status}))
         except Exception as e:
             logger.error(f"Error in manageTasks: {e}")
             return {

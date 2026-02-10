@@ -3,7 +3,7 @@ from fastmcp.server.dependencies import get_http_headers
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
-from common.utils import build_params_from_locals
+from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
 import logging
 from telemetry import telemetry, with_tool_metrics
@@ -394,7 +394,7 @@ async def managePatient(
                         new_patient_id = response["patient"].get("patient_id")
                         response["guidance"] = f"Patient created successfully with ID: {new_patient_id}. Complete demographic and social history captured. Use reviewPatientHistory('{new_patient_id}') to view full details or manageAppointments() to schedule their first visit."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "update":
                     if not patient_id:
@@ -632,7 +632,7 @@ async def managePatient(
                         update_mode = "specific fields" if update_specific_details else "complete record"
                         response["guidance"] = f"Patient {patient_id} updated successfully ({update_mode}). Use reviewPatientHistory('{patient_id}') to see the updated information."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "activate":
                     if not patient_id:
@@ -645,7 +645,7 @@ async def managePatient(
                     if response.get("code") == 200:
                         response["guidance"] = f"Patient {patient_id} activated successfully. They can now receive care and schedule appointments."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "deactivate":
                     if not patient_id:
@@ -658,7 +658,7 @@ async def managePatient(
                     if response.get("code") == 200:
                         response["guidance"] = f"Patient {patient_id} deactivated. Use action='activate' to reactivate them later."
                     
-                    return response
+                    return strip_empty_values(response)
                     
         except Exception as e:
             logger.error(f"Error in managePatient: {e}")
@@ -674,12 +674,14 @@ async def reviewPatientHistory(
     include_demographics: bool = True,
     include_vitals: bool = True,
     include_medications: bool = True,
+    include_supplements: bool = True,
     include_allergies: bool = True,
     include_diagnoses: bool = True,
     include_encounters: bool = True,
     include_appointments: bool = True,
     diagnosis_status_filter: Optional[str] = None,
     medication_status_filter: Optional[str] = None,
+    supplement_status_filter: Optional[str] = None,
     vitals_limit: Optional[int] = None,
     encounters_limit: Optional[int] = None,
     ctx: Context = None,
@@ -700,6 +702,7 @@ async def reviewPatientHistory(
     Optional filters (apply to specific sections):
     - diagnosis_status_filter: filter diagnoses by status (e.g., diagnosis_status_filter="Active")
     - medication_status_filter: filter medications by status (e.g., medication_status_filter="active")
+    - supplement_status_filter: filter supplements by status (e.g., supplement_status_filter="active")
     - vitals_limit: limit number of vital entries returned (e.g., vitals_limit=10)
     - encounters_limit: limit number of encounters returned (e.g., encounters_limit=5)
 
@@ -750,6 +753,7 @@ async def reviewPatientHistory(
                 "demographics" if include_demographics else None,
                 "vitals" if include_vitals else None,
                 "medications" if include_medications else None,
+                "supplements" if include_supplements else None,
                 "allergies" if include_allergies else None,
                 "diagnoses" if include_diagnoses else None,
                 "encounters" if include_encounters else None,
@@ -786,6 +790,27 @@ async def reviewPatientHistory(
                 patient_summary["current_medications_filtered_count"] = len(filtered_wrappers)
                 limited = filter_items(filtered_wrappers, filters=None, limit=None)["items"]
                 patient_summary["current_medications"] = [w.get("_orig", w) for w in limited]
+            
+            # Get current supplements/vitamins
+            if "supplements" in include_sections:
+                supps_response = await client.get(f"/patients/{patient_id}/supplements")
+                supps = supps_response.get("supplements", []) or []
+                patient_summary["current_supplements_total_count"] = len(supps)
+
+                wrappers = []
+                for s in supps:
+                    derived_status = str((s or {}).get("status", "")).casefold()
+                    wrappers.append({**(s or {}), "_orig": s, "supp_status": derived_status})
+
+                filtered_wrappers = wrappers
+                if supplement_status_filter:
+                    filtered_wrappers = filter_items(
+                        filtered_wrappers,
+                        {"supp_status": {"op": "eq", "value": str(supplement_status_filter).casefold()}},
+                    )["items"]
+
+                patient_summary["current_supplements_filtered_count"] = len(filtered_wrappers)
+                patient_summary["current_supplements"] = [w.get("_orig", w) for w in filtered_wrappers]
             
             # Get allergies
             if "allergies" in include_sections:
@@ -866,6 +891,10 @@ async def reviewPatientHistory(
                 med_count = len(patient_summary["current_medications"])
                 insights.append(f"Patient currently on {med_count} medications - check for interactions")
             
+            if patient_summary.get("current_supplements"):
+                supp_count = len(patient_summary["current_supplements"])
+                insights.append(f"Patient currently on {supp_count} supplements/vitamins - review for interactions")
+            
             if patient_summary.get("recent_vitals"):
                 vital_count = len(patient_summary["recent_vitals"])
                 insights.append(f"Patient has {vital_count} recent vital sign records - review trends for clinical changes")
@@ -913,7 +942,7 @@ async def reviewPatientHistory(
             patient_summary["guidance"] = "Clinical review complete. " + "; ".join(workflow_guidance[:2]) + "."
             
             logger.info(f"reviewPatientHistory completed for patient {patient_id}")
-            return patient_summary
+            return strip_empty_values(patient_summary)
             
         except Exception as e:
             logger.error(f"Error in reviewPatientHistory: {e}")
