@@ -5,9 +5,7 @@ from opentelemetry import trace, metrics
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.resources import Resource
 from prometheus_client import start_http_server
@@ -56,18 +54,13 @@ class TelemetryConfig:
         self.service_version = os.getenv("OTEL_SERVICE_VERSION")
         self.environment = os.getenv("ENV")
         
-        # New Relic configuration
-        self.newrelic_license_key = os.getenv("NEW_RELIC_LICENSE_KEY")
-        self.newrelic_traces_endpoint = os.getenv("NEW_RELIC_TRACES_ENDPOINT")
-        self.newrelic_metrics_endpoint = os.getenv("NEW_RELIC_METRICS_ENDPOINT")
-        
-        # Local fallback if New Relic not configured
-        self.otlp_traces_endpoint = self.newrelic_traces_endpoint if self.newrelic_license_key else os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-        self.otlp_metrics_endpoint = self.newrelic_metrics_endpoint if self.newrelic_license_key else os.getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
-        
-        # Prometheus if necessary
-        self.prometheus_port = int(os.getenv("PROMETHEUS_PORT"))
-        self.enable_prometheus = os.getenv("ENABLE_PROMETHEUS")
+        # OTLP traces endpoint (Grafana Alloy in-cluster or local collector)
+        self.otlp_traces_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+        self.otel_enabled = os.getenv("MCP_OTEL_ENABLED", "false").lower() in ("true", "1", "yes")
+
+        # Prometheus metrics (scraped by Grafana Alloy via pod annotations)
+        self.prometheus_port = int(os.getenv("PROMETHEUS_PORT", "9464"))
+        self.enable_prometheus = os.getenv("ENABLE_PROMETHEUS", "false").lower() in ("true", "1", "yes")
         
         # Initialize providers
         self.tracer_provider: Optional[TracerProvider] = None
@@ -80,74 +73,49 @@ class TelemetryConfig:
         self.tool_duration_histogram = None
         self.api_calls_counter = None
         
-    def _get_auth_headers(self) -> dict:
-        """Get authentication headers for New Relic"""
-        if self.newrelic_license_key:
-            return {"api-key": self.newrelic_license_key}
-        return {}
-        
     def setup_tracing(self):
-        """Configure OpenTelemetry tracing"""
+        """Configure OpenTelemetry tracing (pushes to Grafana Alloy or local collector)"""
+        if not self.otel_enabled or not self.otlp_traces_endpoint:
+            logger.info("OTEL tracing disabled (MCP_OTEL_ENABLED not set or no endpoint configured)")
+            return
+
         resource = Resource.create({
             "service.name": self.service_name,
             "service.version": self.service_version,
             "deployment.environment": self.environment,
         })
-        
+
         self.tracer_provider = TracerProvider(resource=resource)
-        
-        # Configure OTLP exporter with New Relic headers
-        otlp_exporter = OTLPSpanExporter(
-            endpoint=self.otlp_traces_endpoint,
-            headers=self._get_auth_headers()
-        )
+
+        otlp_exporter = OTLPSpanExporter(endpoint=self.otlp_traces_endpoint)
         span_processor = BatchSpanProcessor(otlp_exporter)
         self.tracer_provider.add_span_processor(span_processor)
         trace.set_tracer_provider(self.tracer_provider)
-        
-        if self.newrelic_license_key:
-            logger.info(f"Tracing configured for New Relic: {self.otlp_traces_endpoint}")
-        else:
-            logger.info(f"Tracing configured with local OTLP endpoint: {self.otlp_traces_endpoint}")
+
+        logger.info(f"OTLP tracing configured: {self.otlp_traces_endpoint}")
         
     def setup_metrics(self):
-        """Configure OpenTelemetry metrics"""
+        """Configure OpenTelemetry metrics (exposed via Prometheus scrape endpoint)"""
         resource = Resource.create({
             "service.name": self.service_name,
             "service.version": self.service_version,
             "deployment.environment": self.environment,
         })
-        
+
         metric_readers = []
-        
-        # Add OTLP metrics exporter (New Relic or local)
-        otlp_metrics_exporter = OTLPMetricExporter(
-            endpoint=self.otlp_metrics_endpoint,
-            headers=self._get_auth_headers()
-        )
-        otlp_reader = PeriodicExportingMetricReader(
-            exporter=otlp_metrics_exporter,
-            export_interval_millis=5000
-        )
-        metric_readers.append(otlp_reader)
-        
+
         if self.enable_prometheus:
             prometheus_reader = PrometheusMetricReader()
             metric_readers.append(prometheus_reader)
             start_http_server(self.prometheus_port)
-            logger.info(f"Prometheus metrics enabled on port: {self.prometheus_port}")
-        
+            logger.info(f"Prometheus metrics endpoint on port {self.prometheus_port}")
+
         self.meter_provider = MeterProvider(
             resource=resource,
             metric_readers=metric_readers
         )
         metrics.set_meter_provider(self.meter_provider)
-        
-        if self.newrelic_license_key:
-            logger.info(f"Metrics configured for New Relic: {self.otlp_metrics_endpoint}")
-        else:
-            logger.info(f"Metrics configured with local OTLP endpoint: {self.otlp_metrics_endpoint}")
-        
+
         self._setup_metrics_instruments()
         
     def _setup_metrics_instruments(self):

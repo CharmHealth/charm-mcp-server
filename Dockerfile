@@ -49,6 +49,6 @@ ENV PATH="/opt/venv/bin:$PATH" \
 RUN chown -R chrmuser:chrmuser /app /opt/venv
 USER chrmuser
 
-EXPOSE 8080
+EXPOSE 8080 9464
 
 ENTRYPOINT [ "python3", "src/mcp_server.py" ]
