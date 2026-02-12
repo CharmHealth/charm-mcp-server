@@ -119,17 +119,17 @@ Optional runtime settings:
 | --- | --- | --- |
 | `ENV` | Logging mode (`dev` or `prod`) | `dev` |
 
-Optional telemetry (Prometheus scrape + OTLP traces):
+Optional telemetry (Prometheus scrape on `/metrics` + OTLP traces):
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `OTEL_SERVICE_NAME` | Service name for telemetry | `charm-mcp-server` (recommend) |
-| `OTEL_SERVICE_VERSION` | Service version | unset |
-| `COLLECT_METRICS` | Master switch for all telemetry | `false` |
-| `ENABLE_PROMETHEUS` | Enable Prometheus `/metrics` scrape endpoint | `false` |
-| `PROMETHEUS_PORT` | Port for Prometheus metrics endpoint | `9464` |
-| `MCP_OTEL_ENABLED` | Enable OTLP trace export to Alloy/collector | `false` |
+| `COLLECT_METRICS` | Master switch for all telemetry (`true`/`false`) | `false` |
+| `ENABLE_PROMETHEUS` | Enable Prometheus `/metrics` endpoint on port 8080 (`true`/`false`) | `false` |
+| `PROMETHEUS_MULTIPROC_DIR` | Directory for multiprocess metric files (required for multi-worker) | `/tmp/prometheus_multiproc` |
+| `MCP_OTEL_ENABLED` | Enable OTLP trace export to Alloy/collector (`true`/`false`) | `false` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint (e.g. Grafana Alloy in-cluster) | unset |
+
+Resource labels are hardcoded: `service.name=smartlink`, `service.namespace=charm-svcs`, `servicegroup=smartlink`.
 
 ## Docker Compose (optional)
 

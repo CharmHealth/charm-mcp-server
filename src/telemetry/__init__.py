@@ -1,5 +1,7 @@
 from .telemetry_config import (
-    TelemetryConfig, 
+    TelemetryConfig,
+    NullTelemetry,
+    NullMetricInstrument,
     telemetry
 )
 from .tool_metrics import (
@@ -14,11 +16,13 @@ from .tool_metrics import (
 __all__ = [
     # TelemetryConfig
     "TelemetryConfig",
+    "NullTelemetry",
+    "NullMetricInstrument",
     "telemetry",
     # Tool metrics
     "with_tool_metrics",
     "record_api_call",
-    "start_api_call", 
+    "start_api_call",
     "end_api_call",
     # Set client context
     "set_client_context"

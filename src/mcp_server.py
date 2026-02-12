@@ -9,7 +9,7 @@ import sys
 import os
 from datetime import datetime, timezone
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 
 mcp_composite_server = FastMCP(name="CharmHealth API Assistant")
@@ -35,7 +35,10 @@ mcp_composite_server.mount(server=task_management_mcp)
 async def health_check(request: Request) -> JSONResponse:
     return JSONResponse({"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()})
 
-
+@mcp_composite_server.custom_route("/metrics", methods=["GET"])
+async def metrics_endpoint(request: Request) -> Response:
+    body, content_type = telemetry.generate_metrics()
+    return Response(content=body, media_type=content_type)
 
 
 formatter = logging.Formatter(
@@ -46,6 +49,9 @@ console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(formatter)
 logging.basicConfig(level=logging.INFO if os.getenv("ENV") == "prod" else logging.DEBUG, handlers=[console_handler], force=True)
 logger = logging.getLogger(__name__)
+
+# Initialize telemetry after logging is configured so init messages are visible
+telemetry.initialize()
 
 
 if __name__ == "__main__":
