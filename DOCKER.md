@@ -129,7 +129,7 @@ Optional telemetry (Prometheus scrape on `/metrics` + OTLP traces):
 | `MCP_OTEL_ENABLED` | Enable OTLP trace export to Alloy/collector (`true`/`false`) | `false` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint (e.g. Grafana Alloy in-cluster) | unset |
 
-Resource labels are hardcoded: `service.name=smartlink`, `service.namespace=charm-svcs`, `servicegroup=smartlink`.
+Resource labels are hardcoded: `service.name=charm-mcp-server`, `service.namespace=charm-aisvcs`, `servicegroup=charm-mcp-server`.
 
 ## Docker Compose (optional)
 

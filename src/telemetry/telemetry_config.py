@@ -89,9 +89,9 @@ class TelemetryConfig:
             return
 
         resource = Resource.create({
-            "service.name": "smartlink",
-            "service.namespace": "charm-svcs",
-            "servicegroup": "smartlink",
+            "service.name": "charm-mcp-server",
+            "service.namespace": "charm-aisvcs",
+            "servicegroup": "charm-mcp-server",
         })
 
         self.tracer_provider = TracerProvider(resource=resource)
