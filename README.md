@@ -17,7 +17,7 @@ An [MCP](https://modelcontextprotocol.io/) server for CharmHealth EHR that allow
 
 ## Features
 
-The server provides **14 comprehensive tools** for complete EHR functionality:
+The server provides **15 comprehensive tools** for complete EHR functionality:
 
 - **Encounter Management**: Complete SOAP note workflow and clinical findings
 - **Patient Search & Records**: Advanced patient search with demographics, location, and medical criteria
@@ -33,6 +33,7 @@ The server provides **14 comprehensive tools** for complete EHR functionality:
 - **Laboratory Management**: Lab results tracking and detailed reporting
 - **Practice Setup**: Facilities, providers, and vital sign templates
 - **Appointment Management**: Complete appointment lifecycle with scheduling and rescheduling
+- **Task Management**: Complete task lifecycle
 
 ## Quick Start
 
