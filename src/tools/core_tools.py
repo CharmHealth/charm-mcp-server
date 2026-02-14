@@ -3,7 +3,7 @@ from fastmcp.server.dependencies import get_http_headers
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
-from common.utils import build_params_from_locals
+from common.utils import build_params_from_locals, strip_empty_values
 import logging
 from telemetry import telemetry, with_tool_metrics
 
@@ -152,12 +152,16 @@ async def findPatients(
             match search_type:
                 case "name":
                     if query:
-                        if " " in query:
-                            # Full name search
-                            params["full_name_contains"] = query
+                        parts = query.strip().split()
+                        if len(parts) >= 2:
+                            # Multi-word: search first + last name fields directly
+                            # Avoids matching against "First (Nickname) Last" full_name format
+                            params["first_name_contains"] = parts[0]
+                            params["last_name_contains"] = parts[-1]
                         else:
-                            # Partial name - search both first and last
-                            params["first_name_contains"] = query
+                            # Single word: use full_name_contains to catch first names,
+                            # last names, AND nicknames (e.g. "Bob" matches "Robert (Bob) Smith")
+                            params["full_name_contains"] = query
                             
                 case "phone":
                     if query:
@@ -291,7 +295,7 @@ async def findPatients(
                 response["guidance"] = "No patients found. Check your search criteria and try again. Use search_type='name' for basic name searches or search_type='advanced' for complex filtering."
             
             logger.info(f"findPatients completed: {search_type} search with {patient_count if response.get('patients') else 0} results")
-            return response
+            return strip_empty_values(response)
             
         except Exception as e:
             logger.error(f"Error in findPatients: {e}")
@@ -395,7 +399,7 @@ async def getPracticeInfo(
                     result["guidance"] = "Practice overview complete. Use specific info_type values to get detailed lists with IDs needed for patient operations."
             
             logger.info(f"getPracticeInfo completed for {info_type}")
-            return result
+            return strip_empty_values(result)
             
         except Exception as e:
             logger.error(f"Error in getPracticeInfo: {e}")

@@ -3,7 +3,8 @@ from fastmcp.server.dependencies import get_http_headers
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
-from common.utils import build_params_from_locals
+from common.utils import build_params_from_locals, strip_empty_values
+from common.filtering import filter_items
 import logging
 from telemetry import telemetry, with_tool_metrics
 
@@ -18,6 +19,11 @@ async def managePatientNotes(
     patient_id: str,
     record_id: Optional[str] = None,
     notes: Optional[str] = None,
+
+    # List filters
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    limit: Optional[int] = None,
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """
@@ -31,12 +37,16 @@ async def managePatientNotes(
     <instructions>
     Actions:
     - "add": Add new clinical note (requires notes content)
-    - "list": Show all patient notes (requires only patient_id)
+    - "list": Show all patient notes (optionally filter by date range)
     - "update": Modify existing note (requires record_id + notes content)
     - "delete": Remove note (requires record_id). Ask the user if they are sure they want to delete the note before proceeding.
     
     Use for: Important care instructions, provider alerts, patient preferences, social determinants
     Formal encounter notes should use manageEncounter() instead
+
+    List filters:
+    - from_date / to_date: e.g., from_date="2025-01-01", to_date="2025-12-31"
+    - limit: e.g., limit=50
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -82,12 +92,35 @@ async def managePatientNotes(
             match action:
                 case "list":
                     response = await client.get(f"/patients/{patient_id}/quicknotes")
+                    notes_list = response.get("quick_notes") or []
+                    total_count = len(notes_list)
+
+                    wrappers = []
+                    for n in notes_list:
+                        note_date = (n or {}).get("created_date") or (n or {}).get("date") or (n or {}).get("createdDate")
+                        wrappers.append({**(n or {}), "_orig": n, "note_date": note_date})
+
+                    filtered_wrappers = wrappers
+                    if from_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, {"note_date": {"op": "gte", "value": from_date}})["items"]
+                    if to_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, {"note_date": {"op": "lte", "value": to_date}})["items"]
+
+                    filtered_count = len(filtered_wrappers)
+                    limited = filter_items(filtered_wrappers, filters=None, limit=limit)["items"] if limit is not None else filtered_wrappers
+
+                    response["quick_notes"] = [w.get("_orig", w) for w in limited]
+                    response["total_count"] = total_count
+                    response["filtered_count"] = filtered_count
+
                     if response.get("quick_notes"):
-                        note_count = len(response["quick_notes"])
-                        response["guidance"] = f"Patient has {note_count} clinical notes. These are visible to all providers during patient care. Use action='add' for new important clinical information."
+                        response["guidance"] = (
+                            f"Patient has {total_count} clinical notes; {filtered_count} match the provided filters."
+                            " These are visible to all providers during patient care. Use action='add' for new important clinical information."
+                        )
                     else:
-                        response["guidance"] = "No clinical notes found. Use action='add' to document important patient information for provider awareness."
-                    return response
+                        response["guidance"] = "No clinical notes found matching the provided filters. Use action='add' to document important patient information for provider awareness."
+                    return strip_empty_values(response)
                     
                 case "add":
                     if not notes:
@@ -99,7 +132,7 @@ async def managePatientNotes(
                     response = await client.post(f"/patients/{patient_id}/quicknotes", data={"notes": notes})
                     if response.get("data"):
                         response["guidance"] = f"Clinical note added successfully. This important information is now visible to all providers during patient care. For detailed encounter documentation, use manageEncounter()()."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "update":
                     if not record_id or not notes:
@@ -111,7 +144,7 @@ async def managePatientNotes(
                     response = await client.put(f"patients/quicknotes/{record_id}", data={"notes": notes})
                     if response.get("code") == "0":
                         response["guidance"] = f"Clinical note {record_id} updated successfully. Updated information is now available to all providers."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "delete":
                     if not record_id:
@@ -123,7 +156,7 @@ async def managePatientNotes(
                     response = await client.delete(f"patients/quicknotes/{record_id}")
                     if response.get("code") == "0":
                         response["guidance"] = f"Clinical note {record_id} deleted successfully. Information is no longer visible to providers."
-                    return response
+                    return strip_empty_values(response)
                     
         except Exception as e:
             logger.error(f"Error in managePatientNotes: {e}")
@@ -155,6 +188,12 @@ async def managePatientRecalls(
     email_reminder_before: Optional[int] = None,
     send_text_reminder: Optional[bool] = None,
     text_reminder_before: Optional[int] = None,
+
+    # List filters
+    type_filter: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    limit: Optional[int] = None,
     
     ctx: Context = None,
 ) -> Dict[str, Any]:
@@ -169,13 +208,18 @@ async def managePatientRecalls(
     <instructions>
     Actions:
     - "add": Schedule new recall (requires recall_type, notes, provider_id, facility_id)
-    - "list": Show all patient recalls (requires only patient_id)
+    - "list": Show all patient recalls (optionally filter by type/date range)
     - "update": Modify existing recall (requires record_id + fields to change)
     - "delete": Remove recall (requires record_id). Ask the user if they are sure they want to delete the recall before proceeding.
     
     Common recall types: "Annual Physical", "Mammogram", "Colonoscopy", "Lab Follow-up", "Medication Review"
     Reminder timing: email_reminder_before/text_reminder_before in days (e.g., 7 for one week)
     Use getPracticeInfo() to get valid provider_id and facility_id values
+
+    List filters:
+    - type_filter: e.g., type_filter="Annual Physical"
+    - from_date / to_date: e.g., from_date="2025-01-01", to_date="2025-12-31" (compares against recall_date when available)
+    - limit: e.g., limit=25
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -221,16 +265,49 @@ async def managePatientRecalls(
             match action:
                 case "list":
                     response = await client.get(f"/patients/{patient_id}/recalls")
+                    recalls = response.get("recall") or []
+                    total_count = len(recalls)
+
+                    wrappers = []
+                    for r in recalls:
+                        recall_type_val = (r or {}).get("recall_type") or (r or {}).get("type")
+                        recall_date_val = (r or {}).get("recall_date") or (r or {}).get("date") or (r or {}).get("created_date")
+                        wrappers.append({
+                            **(r or {}),
+                            "_orig": r,
+                            "recall_type": recall_type_val,
+                            "recall_date": recall_date_val,
+                        })
+
+                    filters: Dict[str, Any] = {}
+                    if type_filter:
+                        filters["recall_type"] = type_filter
+
+                    filtered_wrappers = wrappers
+                    if filters:
+                        filtered_wrappers = filter_items(filtered_wrappers, filters=filters)["items"]
+                    if from_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, {"recall_date": {"op": "gte", "value": from_date}})["items"]
+                    if to_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, {"recall_date": {"op": "lte", "value": to_date}})["items"]
+
+                    filtered_count = len(filtered_wrappers)
+                    limited = filter_items(filtered_wrappers, filters=None, limit=limit)["items"] if limit is not None else filtered_wrappers
+
+                    response["recall"] = [w.get("_orig", w) for w in limited]
+                    response["total_count"] = total_count
+                    response["filtered_count"] = filtered_count
+
                     if response.get("recall"):
                         recall_count = len(response["recall"])
-                        active_recalls = [r for r in response["recall"] if r.get("status", "").lower() == "active"]
+                        active_recalls = [r for r in response["recall"] if str(r.get("status", "")).lower() == "active"]
                         
                         guidance = f"Patient has {recall_count} total recalls, {len(active_recalls)} active"
                         guidance += ". These ensure timely preventive care and follow-up visits. Schedule appointments with manageAppointments() when recalls are due."
                         response["guidance"] = guidance
                     else:
-                        response["guidance"] = "No recalls scheduled. Use action='add' to schedule preventive care reminders based on clinical guidelines and patient needs."
-                    return response
+                        response["guidance"] = "No recalls scheduled matching the provided filters. Use action='add' to schedule preventive care reminders based on clinical guidelines and patient needs."
+                    return strip_empty_values(response)
                     
                 case "add":
                     required = [recall_type, notes, provider_id, facility_id]
@@ -262,7 +339,7 @@ async def managePatientRecalls(
                         if send_email_reminder or send_text_reminder:
                             reminder_info = " Patient will receive automated reminders."
                         response["guidance"] = f"Recall for '{recall_type}' scheduled successfully.{reminder_info} Use manageAppointments() to schedule the actual appointment when due."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "update":
                     if not record_id:
@@ -286,7 +363,7 @@ async def managePatientRecalls(
                     response = await client.put(f"/patients/{patient_id}/recalls/{record_id}", data=update_data)
                     if response.get("recalls"):
                         response["guidance"] = f"Recall {record_id} updated successfully. Updated reminder settings are now active."
-                    return response
+                    return strip_empty_values(response)
                     
                 case "delete":
                     if not record_id:
@@ -298,7 +375,7 @@ async def managePatientRecalls(
                     response = await client.delete(f"/patients/{patient_id}/recalls/{record_id}")
                     if response.get("code") == "0":
                         response["guidance"] = f"Recall {record_id} deleted successfully. Patient will no longer receive reminders for this recall."
-                    return response
+                    return strip_empty_values(response)
                     
         except Exception as e:
             logger.error(f"Error in managePatientRecalls: {e}")
@@ -402,7 +479,7 @@ async def managePatientFiles(
                     else:
                         response["guidance"] = "Photo upload failed. Verify the file path exists and the file is a valid image format (JPG, PNG)."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "delete_photo":
                     response = await client.delete(f"/patients/{patient_id}/photo")
@@ -412,7 +489,7 @@ async def managePatientFiles(
                     else:
                         response["guidance"] = "Photo deletion failed. Verify the patient has an existing photo to delete."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "upload_id":
                     if not id_file or not id_qualifier:
@@ -450,7 +527,7 @@ async def managePatientFiles(
                     else:
                         response["guidance"] = "ID document upload failed. Verify the file path exists and the file is a valid image or PDF format."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "send_phr_invite":
                     if not email:
@@ -472,7 +549,7 @@ async def managePatientFiles(
                     else:
                         response["guidance"] = "PHR invitation failed. Verify the email address is valid and the patient doesn't already have an active PHR account."
                     
-                    return response
+                    return strip_empty_values(response)
                     
         except Exception as e:
             logger.error(f"Error in managePatientFiles: {e}")
@@ -493,6 +570,10 @@ async def managePatientLabs(
     # Listing fields
     reviewer_id: Optional[str] = None,
     status: Optional[int] = None,  # 0 or 2
+    status_filter: Optional[int] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    limit: Optional[int] = None,
     start_index: Optional[int] = None,
     no_of_records: Optional[int] = None,
     sort_by: Optional[Literal["DATE", "FULL_NAME"]] = None,
@@ -513,13 +594,18 @@ async def managePatientLabs(
     
     <instructions>
     Actions:
-    - "list": Show lab results with filtering (optionally filter by patient_id, reviewer_id, status)
+    - "list": Show lab results with filtering (optionally filter by patient_id, reviewer_id, status, date range)
     - "get_details": Get detailed lab report (requires group_id OR lab_order_id)
     - "add_result": Add new lab results (requires patient_id + result_details)
     
     For detailed results: Use group_id for result groups or lab_order_id for specific orders
     For adding results: Provide structured result_details with tests, parameters, and values
     Status codes: 0 for pending, 2 for final results
+
+    List filters (in addition to API parameters):
+    - status_filter: 0 (pending) or 2 (final)
+    - from_date / to_date: e.g., from_date="2025-01-01", to_date="2025-12-31" (best-effort against common date fields)
+    - limit: e.g., limit=50
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -569,8 +655,9 @@ async def managePatientLabs(
                         params["reviewer_id"] = int(reviewer_id)
                     if patient_id:
                         params["patient_id"] = int(patient_id)
-                    if status is not None:
-                        params["status"] = status
+                    effective_status = status_filter if status_filter is not None else status
+                    if effective_status is not None:
+                        params["status"] = effective_status
                     if start_index:
                         params["start_index"] = start_index
                     if no_of_records:
@@ -581,7 +668,34 @@ async def managePatientLabs(
                         params["is_ascending"] = is_ascending
                     
                     response = await client.get("/labs/results", params=params)
-                    
+
+                    results = response.get("lab_results") or []
+                    total_count = len(results)
+
+                    wrappers = []
+                    for r in results:
+                        lab_date = (
+                            (r or {}).get("date")
+                            or (r or {}).get("result_date")
+                            or (r or {}).get("collected_date")
+                            or (r or {}).get("created_date")
+                            or (r or {}).get("order_date")
+                        )
+                        wrappers.append({**(r or {}), "_orig": r, "lab_date": lab_date})
+
+                    filtered_wrappers = wrappers
+                    if from_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, {"lab_date": {"op": "gte", "value": from_date}})["items"]
+                    if to_date:
+                        filtered_wrappers = filter_items(filtered_wrappers, {"lab_date": {"op": "lte", "value": to_date}})["items"]
+
+                    filtered_count = len(filtered_wrappers)
+                    limited = filter_items(filtered_wrappers, filters=None, limit=limit)["items"] if limit is not None else filtered_wrappers
+
+                    response["lab_results"] = [w.get("_orig", w) for w in limited]
+                    response["total_count"] = total_count
+                    response["filtered_count"] = filtered_count
+
                     if response.get("lab_results"):
                         result_count = len(response["lab_results"])
                         if patient_id:
@@ -591,7 +705,7 @@ async def managePatientLabs(
                     else:
                         response["guidance"] = "No lab results found matching the criteria. Check your filter parameters or patient_id."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "get_details":
                     if not group_id and not lab_order_id:
@@ -612,7 +726,7 @@ async def managePatientLabs(
                     else:
                         response["guidance"] = "Lab details not found. Verify the group_id or lab_order_id is correct using action='list' first."
                     
-                    return response
+                    return strip_empty_values(response)
                     
                 case "add_result":
                     if not patient_id or not result_details:
@@ -633,7 +747,7 @@ async def managePatientLabs(
                     else:
                         response["guidance"] = "Lab result upload failed. Verify the result_details structure includes required fields (tests, parameters, values) and patient_id is valid."
                     
-                    return response
+                    return strip_empty_values(response)
                     
         except Exception as e:
             logger.error(f"Error in managePatientLabs: {e}")

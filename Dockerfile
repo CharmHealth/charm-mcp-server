@@ -45,8 +45,13 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+# Create prometheus multiprocess directory for file-backed metrics
+RUN mkdir -p /tmp/prometheus_multiproc
+
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
+
 # Change ownership to non-root user
-RUN chown -R chrmuser:chrmuser /app /opt/venv
+RUN chown -R chrmuser:chrmuser /app /opt/venv /tmp/prometheus_multiproc
 USER chrmuser
 
 EXPOSE 8080

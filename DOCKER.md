@@ -14,7 +14,7 @@ Dockerfile:
 - Encounter Management: list/create encounters, fetch details, save encounter notes (standard or SOAP APIs)
 - Practice Information: list facilities, members, and available vitals
 - Health check endpoint at `/health`
-- Optional OpenTelemetry metrics/traces with OTLP/New Relic and Prometheus support
+- Optional OpenTelemetry metrics (Prometheus scrape) and traces (OTLP push to Grafana Alloy)
 
 ## Build
 
@@ -119,19 +119,17 @@ Optional runtime settings:
 | --- | --- | --- |
 | `ENV` | Logging mode (`dev` or `prod`) | `dev` |
 
-Optional telemetry (OpenTelemetry/New Relic/Prometheus):
+Optional telemetry (Prometheus scrape on `/metrics` + OTLP traces):
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `OTEL_SERVICE_NAME` | Service name for telemetry | `charm-mcp-server` (recommend) |
-| `OTEL_SERVICE_VERSION` | Service version | unset |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP traces endpoint (used if New Relic not set) | unset |
-| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | OTLP metrics endpoint (used if New Relic not set) | unset |
-| `NEW_RELIC_LICENSE_KEY` | New Relic ingest key (enables NR exporters) | unset |
-| `NEW_RELIC_TRACES_ENDPOINT` | New Relic OTLP traces endpoint | unset |
-| `NEW_RELIC_METRICS_ENDPOINT` | New Relic OTLP metrics endpoint | unset |
-| `ENABLE_PROMETHEUS` | Enable Prometheus metrics scraping (`true`/`false`) | unset/false |
-| `PROMETHEUS_PORT` | Prometheus metrics port (must be set if telemetry module is imported) | `9464` |
+| `COLLECT_METRICS` | Master switch for all telemetry (`true`/`false`) | `false` |
+| `ENABLE_PROMETHEUS` | Enable Prometheus `/metrics` endpoint on port 8080 (`true`/`false`) | `false` |
+| `PROMETHEUS_MULTIPROC_DIR` | Directory for multiprocess metric files (required for multi-worker) | `/tmp/prometheus_multiproc` |
+| `MCP_OTEL_ENABLED` | Enable OTLP trace export to Alloy/collector (`true`/`false`) | `false` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint (e.g. Grafana Alloy in-cluster) | unset |
+
+Resource labels are hardcoded: `service.name=charm-mcp-server`, `service.namespace=charm-aisvcs`, `servicegroup=charm-mcp-server`.
 
 ## Docker Compose (optional)
 
