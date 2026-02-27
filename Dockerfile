@@ -43,7 +43,10 @@ COPY --from=builder /build/src/ ./src/
 # Set up Python environment
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \ 
+    MCPSERVER_HOST=0.0.0.0 \
+    MCPSERVER_PORT=8080
+
 
 # Create prometheus multiprocess directory for file-backed metrics
 RUN mkdir -p /tmp/prometheus_multiproc
