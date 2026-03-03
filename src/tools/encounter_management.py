@@ -25,6 +25,8 @@ async def manageEncounter(
     encounter_mode: Optional[Literal["In Person", "Phone Call", "Video Consult"]] = "In Person",
     chief_complaint: Optional[str] = None,
     reason: Optional[str] = None,  # Required for unlock action
+    template_ids: Optional[str] = None,  # comma-separated template IDs to attach (update action)
+    entries: Optional[str] = None,  # JSON array: [{"entry_id": "...", "answer": "..."}] (update action)
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """
@@ -58,6 +60,13 @@ async def manageEncounter(
     - Requires: patient_id, encounter_id, reason
     - Used to unlock signed encounters when modifications are needed
     - Must provide a valid reason for unlocking the encounter
+
+    For updating encounters with template data:
+    - action="update" with chief_complaint always saved as narrative fallback
+    - template_ids: comma-separated IDs of templates to attach to the encounter
+    - entries: JSON array string of populated template entries, e.g. '[{"entry_id":"123","answer":"text"}]'
+    - Templates are attached first, then entries + chief_complaints saved together
+    - entry_id values must come from getPracticeInfo(info_type='template_details') — hallucinated IDs are dropped client-side
     
     Recommended workflow:
     1. Create encounter: manageEncounter(patient_id, provider_id, facility_id, encounter_date, action="create")
@@ -414,24 +423,43 @@ async def manageEncounter(
                             "error": "encounter_id required for updating",
                             "guidance": "To update an encounter, provide the encounter_id. Use action='review' first to verify encounter status."
                         }
-                    
-                    # Update the encounter
+
+                    # Step 1: Attach templates (must happen before saving entries,
+                    # since entries reference entry_ids that belong to attached templates)
+                    templates_attached = []
+                    if template_ids:
+                        ids = [t.strip() for t in template_ids.split(",") if t.strip()]
+                        for position, template_id in enumerate(ids):
+                            try:
+                                await client.post(
+                                    f"/soap/encounters/{encounter_id}/template",
+                                    data={"template_id": template_id, "position": str(position)}
+                                )
+                                templates_attached.append(template_id)
+                            except Exception as e:
+                                logger.warning(f"Failed to attach template {template_id}: {e}")
+
+                    # Step 2: Save chief_complaints narrative + template entries together
                     update_data = {}
                     if chief_complaint:
                         update_data["chief_complaints"] = chief_complaint
+                    if entries:
+                        update_data["entries"] = entries
+
                     update_response = await client.post(f"/soap/encounters/{encounter_id}", data=update_data)
                     if update_response.get("code") == "0":
                         return strip_empty_values({
                             "action": "update",
                             "encounter_id": encounter_id,
                             "updated": True,
+                            "templates_attached": templates_attached,
                             "message": "Encounter updated successfully",
-                            "guidance": "Encounter updated successfully! The encounter is now updated."
+                            "guidance": "Encounter updated successfully with narrative and template data."
                         })
                     else:
                         return {
                             "error": "Failed to update encounter",
-                            "guidance": "Check that patient_id and encounter_id are correct. If using appointment_id, verify the appointment exists and hasn't been converted to an encounter already."
+                            "guidance": "Check that patient_id and encounter_id are correct. If templates were attached, entries must use valid entry_ids from those templates."
                         }
             
         except Exception as e:

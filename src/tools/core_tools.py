@@ -307,7 +307,8 @@ async def findPatients(
 @core_tools_mcp.tool
 @with_tool_metrics()
 async def getPracticeInfo(
-    info_type: Literal["facilities", "providers", "vitals", "overview"] = "overview",
+    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details"] = "overview",
+    template_ids: Optional[str] = None,  # comma-separated, required for template_details
     ctx: Context = None
 ) -> Dict[str, Any]:
     """
@@ -320,9 +321,11 @@ async def getPracticeInfo(
     
     <instructions>
     - "facilities": List all practice locations with IDs needed for scheduling
-    - "providers": List all providers with IDs needed for appointments and encounters  
+    - "providers": List all providers with IDs needed for appointments and encounters
     - "vitals": Available vital sign templates for documentation
     - "overview": Summary of practice setup with key counts and recent activity
+    - "templates": List all available SOAP templates (id, name, type) for the practice
+    - "template_details": Full template schema (widgets + entries) for given template_ids (comma-separated)
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -388,15 +391,41 @@ async def getPracticeInfo(
                     facilities_response = await client.get("/facilities")
                     result["facilities"] = facilities_response.get("facilities", [])
                     result["facility_count"] = len(result["facilities"])
-                    
+
                     providers_response = await client.get("/members", params={"privilege": "sign_encounter"})
                     result["providers"] = providers_response.get("members", [])
                     result["provider_count"] = len(result["providers"])
-                    
+
                     vitals_response = await client.get("/vitals/metrics")
                     result["available_vitals"] = vitals_response.get("vitals", [])
                     result["vital_types_count"] = len(result["available_vitals"])
-                    result["guidance"] = "Practice overview complete. Use specific info_type values to get detailed lists with IDs needed for patient operations."
+
+                    try:
+                        templates_response = await client.get("/templates", params={"template_filter": "all_templates", "per_page": 100})
+                        result["templates"] = templates_response.get("templates", [])
+                        result["template_count"] = len(result["templates"])
+                    except Exception as e:
+                        logger.warning(f"Could not fetch templates in overview: {e}")
+                        result["templates"] = []
+                        result["template_count"] = 0
+
+                    result["guidance"] = "Practice overview complete. Use specific info_type values to get detailed lists with IDs needed for patient operations. Use info_type='template_details' with template_ids to get full entry schemas for SOAP templates."
+
+                case "templates":
+                    templates_response = await client.get("/templates", params={"template_filter": "all_templates", "per_page": 100})
+                    result["templates"] = templates_response.get("templates", [])
+                    result["template_count"] = len(result["templates"])
+                    result["guidance"] = "Use template_id values from this list with info_type='template_details' to fetch full entry schemas. Filter by template_type (e.g. 'SOAP', 'Chief Complaints', 'Symptoms', 'Physical Examination', 'Assessment Notes', 'Diagnosis') to find relevant templates."
+
+                case "template_details":
+                    if not template_ids:
+                        return {
+                            "error": "template_ids required for template_details",
+                            "guidance": "Provide comma-separated template IDs. Use info_type='templates' first to get available template IDs."
+                        }
+                    soap_response = await client.get("/soap/templates", params={"template_ids": template_ids})
+                    result["soap_templates"] = soap_response.get("soap_templates", [])
+                    result["guidance"] = "Each soap_template contains soap_templates_inner (widget placements) → soap_widgets → soap_widget_entries. Use entry_id values when populating entries in manageEncounter(action='update'). Entry types: 'Simple Question'/'Text Box'/'Radio' → free text; 'Yes/No Question' → 'Yes' or 'No'; 'Header' → skip (display only)."
             
             logger.info(f"getPracticeInfo completed for {info_type}")
             return strip_empty_values(result)
