@@ -44,9 +44,10 @@ async def manageEncounter(
     - "sign": Electronically sign encounter after review and confirmation
     - "unlock": Unlock a previously signed encounter to allow modifications
     
-    For creating encounters:
-    - Requires: patient_id, provider_id, facility_id, encounter_date
-    - Optional: appointment_id (to create from existing appointment), visit_type_id, encounter_mode, chief_complaint
+    For creating encounters (two paths):
+    - From appointment: patient_id + appointment_id (provider/facility/date come from the appointment)
+    - From scratch: patient_id + provider_id + facility_id + encounter_date
+    - Optional: visit_type_id, encounter_mode, chief_complaint
     
     For reviewing encounters:
     - Requires: patient_id, encounter_id
@@ -69,7 +70,7 @@ async def manageEncounter(
     - entry_id values must come from getPracticeInfo(info_type='template_details') — hallucinated IDs are dropped client-side
     
     Recommended workflow:
-    1. Create encounter: manageEncounter(patient_id, provider_id, facility_id, encounter_date, action="create")
+    1. Create encounter: manageEncounter(patient_id, appointment_id, action="create") — or without appointment: manageEncounter(patient_id, provider_id, facility_id, encounter_date, action="create")
     2. Add clinical data using managePatientVitals(), managePatientDrugs(), managePatientDiagnoses()
     3. Review before signing: manageEncounter(patient_id, encounter_id, action="review")
     4. Sign to finalize: manageEncounter(patient_id, encounter_id, action="sign")
@@ -379,7 +380,7 @@ async def manageEncounter(
                     if not encounter_response.get("encounter"):
                         return {
                             "error": "Failed to create encounter",
-                            "guidance": "Check that patient_id and provider_id are valid. If using appointment_id, verify the appointment exists and hasn't been converted to an encounter already."
+                            "guidance": "Check that patient_id is valid. If using appointment_id, verify the appointment exists and hasn't been converted to an encounter already. If creating from scratch, check that provider_id and facility_id are valid."
                         }
                     encounter_id = encounter_response["encounter"].get("encounter_id")
                     documentation_steps = [f"✓ Encounter created (ID: {encounter_id})"]
