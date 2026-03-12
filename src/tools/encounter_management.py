@@ -348,10 +348,10 @@ async def manageEncounter(
                 
             
                 case "create":
-                    if not provider_id or not facility_id or not encounter_date:
+                    if not appointment_id and (not provider_id or not facility_id or not encounter_date):
                         return {
                             "error": "Missing required parameters for encounter creation",
-                            "guidance": "To create an encounter, provide: patient_id, provider_id, facility_id, encounter_date. Use action='review' or 'sign' for existing encounters."
+                            "guidance": "To create an encounter, provide: patient_id, provider_id, facility_id, encounter_date — OR provide appointment_id to create from an existing appointment. Use action='review' or 'sign' for existing encounters."
                         }
                         
                     encounter_response = None
