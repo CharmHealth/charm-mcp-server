@@ -42,6 +42,12 @@ from .task_management import (
     manageTasks
 )
 
+from .communication import (
+    communication_mcp,
+    manageMessages,
+    manageFax
+)
+
 __all__ = [
     "core_tools_mcp",
     "patient_management_mcp",
@@ -64,5 +70,8 @@ __all__ = [
     "managePatientFiles",
     "managePatientLabs",
     "task_management_mcp",
-    "manageTasks"
+    "manageTasks",
+    "communication_mcp",
+    "manageMessages",
+    "manageFax"
 ]
