@@ -141,7 +141,7 @@ async def manageMessages(
                         case "secure":
                             return await _send_secure_message(
                                 client, patient_id, content, subject,
-                                recipient_member_ids,
+                                recipient_member_ids, facility_id,
                             )
                         case _:
                             return {
@@ -273,6 +273,7 @@ async def _send_secure_message(
     content: str,
     subject: Optional[str],
     recipient_member_ids: Optional[str],
+    facility_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Send secure portal message."""
     data: Dict[str, Any] = {
@@ -281,6 +282,8 @@ async def _send_secure_message(
         "patients": patient_id,
     }
 
+    if facility_id:
+        data["facility_id"] = int(facility_id)
     if recipient_member_ids:
         data["members"] = recipient_member_ids
 

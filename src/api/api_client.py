@@ -231,6 +231,7 @@ class CharmHealthAPIClient:
                     pass
                 return await self._make_request(method, endpoint, params, data, retry_count + 1)
             logger.error(f"HTTP error {e.response.status_code}: {e}")
+            logger.error(f"Response body: {e.response.text}")
             return {"error": f"HTTP {e.response.status_code}: {e.response.text}"}
             
         except httpx.RequestError as e:
