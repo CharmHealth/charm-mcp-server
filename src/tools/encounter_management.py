@@ -218,6 +218,39 @@ async def manageEncounter(
                         logger.error(f"Error fetching medications: {e}")
                         encounter_details["medications"] = []
                     
+                    # Get supplements for this encounter
+                    try:
+                        supps_response = await client.get(f"/patients/{patient_id}/supplements")
+                        all_supps = supps_response.get("supplements", []) or []
+                        encounter_supps = [
+                            s for s in all_supps
+                            if str(s.get("encounter_id")) == str(encounter_id) and s.get("encounter_id")
+                        ]
+                        if not encounter_supps and encounter_details["encounter_info"]["encounter_date"]:
+                            encounter_date_str = encounter_details["encounter_info"]["encounter_date"].split()[0] if encounter_details["encounter_info"]["encounter_date"] else None
+                            if encounter_date_str:
+                                encounter_supps = [
+                                    s for s in all_supps
+                                    if s.get("start_date") == encounter_date_str
+                                ]
+                        encounter_details["supplements"] = encounter_supps
+                    except Exception as e:
+                        logger.error(f"Error fetching supplements: {e}")
+                        encounter_details["supplements"] = []
+
+                    # Get lab orders for this encounter
+                    try:
+                        labs_response = await client.get(f"/patients/{patient_id}/lab-orders")
+                        all_labs = labs_response.get("lab_orders", []) or []
+                        encounter_labs = [
+                            l for l in all_labs
+                            if str(l.get("encounter_id")) == str(encounter_id) and l.get("encounter_id")
+                        ]
+                        encounter_details["lab_orders"] = encounter_labs
+                    except Exception as e:
+                        logger.error(f"Error fetching lab orders: {e}")
+                        encounter_details["lab_orders"] = []
+
                     # Get clinical notes
                     clinical_notes = found_encounter.get("chief_complaints")
                     if clinical_notes:
@@ -231,6 +264,10 @@ async def manageEncounter(
                         summary_items.append(f"✓ {len(encounter_details['diagnoses'])} diagnosis/diagnoses documented")
                     if encounter_details["medications"]:
                         summary_items.append(f"✓ {len(encounter_details['medications'])} medication(s) prescribed/reviewed")
+                    if encounter_details.get("supplements"):
+                        summary_items.append(f"✓ {len(encounter_details['supplements'])} supplement(s) documented")
+                    if encounter_details.get("lab_orders"):
+                        summary_items.append(f"✓ {len(encounter_details['lab_orders'])} lab order(s)")
                     if encounter_details.get("clinical_notes"):
                         summary_items.append("✓ Clinical notes documented")
                     
