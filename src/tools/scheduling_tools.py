@@ -198,6 +198,20 @@ async def manageAppointments(
                     return strip_empty_values(response)
                     
                 case "reschedule":
+                    # Auto-fill missing fields from the existing appointment
+                    if appointment_id and (not patient_id or not facility_id or not provider_id):
+                        try:
+                            appt_response = await client.get(f"/appointment/{appointment_id}")
+                            appt = appt_response.get("output_string") or appt_response.get("appointment") or {}
+                            if appt:
+                                patient_id = patient_id or str(appt.get("practice_patient_id", ""))
+                                facility_id = facility_id or str(appt.get("facility_id", ""))
+                                provider_id = provider_id or str(appt.get("member_id", ""))
+                                if mode == "In Person" and appt.get("appointment_type"):
+                                    mode = appt["appointment_type"]
+                        except Exception as e:
+                            logger.warning(f"Could not auto-fill reschedule fields from appointment {appointment_id}: {e}")
+
                     required = [appointment_id, facility_id, patient_id, provider_id, appointment_date, appointment_time]
                     if not all(required):
                         return {
