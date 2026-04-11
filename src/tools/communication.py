@@ -91,19 +91,21 @@ async def manageMessages(
 
     <instructions>
     Actions:
-    - "send": Send a message to a patient (requires patient_id and content).
+    - "send": Send a message to a patient (requires patient_id, content, and facility_id).
       Channel options:
         - "sms": Send via text message (patient must have TEXT_NOTIFY_ENABLED)
         - "whatsapp": Send via WhatsApp (patient must be opted in)
         - "secure": Send via secure portal message (requires subject)
         - "auto": Automatically select best available channel (default)
+      facility_id is required for all channels. Use getPracticeInfo() to look up facility IDs.
       For WhatsApp templates, provide template_name and placeholder values.
       For secure messages to providers, use recipient_member_ids.
 
-    - "list": Show recent messages from inbox.
-      Filter by section: "FROM_PATIENTS", "TO_PATIENTS", or "ALL".
-      For SMS messages, filter by message_type: "incoming", "outgoing", or "all".
+    - "list": Show recent secure portal messages from inbox.
+      Filter by section: "FROM_PATIENTS" (inbox) or "TO_PATIENTS" (sent).
       Use facility_id to filter by facility.
+      Note: SMS and WhatsApp conversations are not available via list — use action='get_thread'
+      with a patient_id to retrieve those.
 
     - "get_thread": Get full conversation history with a specific patient (requires patient_id).
       Filter by thread_channel to see only SMS, WhatsApp, secure, or all channels.
@@ -203,9 +205,17 @@ async def _send_sms(
     facility_id: Optional[str],
 ) -> Dict[str, Any]:
     """Send SMS to a patient."""
-    data: Dict[str, Any] = {"content": content}
-    if facility_id:
-        data["facility_id"] = int(facility_id)
+    if not facility_id:
+        return {
+            "error": "facility_id is required to send SMS",
+            "guidance": "Provide facility_id. Use getPracticeInfo() to look up facility IDs."
+        }
+
+    data: Dict[str, Any] = {
+        "content": content,
+        "type": "plain_text",
+        "facility_id": int(facility_id),
+    }
 
     response = await client.post(
         f"/textmessages/patient/{patient_id}/outgoing",
@@ -276,21 +286,31 @@ async def _send_secure_message(
     facility_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Send secure portal message."""
+    if not facility_id:
+        return {
+            "error": "facility_id is required to send a secure message",
+            "guidance": "Provide facility_id. Use getPracticeInfo() to look up facility IDs."
+        }
+
+    receivers: Dict[str, Any] = {
+        "patients": [{"patient_id": int(patient_id)}]
+    }
+    if recipient_member_ids:
+        member_ids = [mid.strip() for mid in recipient_member_ids.split(",") if mid.strip()]
+        receivers["members"] = [{"member_id": int(mid)} for mid in member_ids]
+
     data: Dict[str, Any] = {
         "content": content,
         "subject": subject or "Message from your care team",
-        "patients": patient_id,
+        "related_patient_id": int(patient_id),
+        "facility_id": int(facility_id),
+        "receivers": receivers,
     }
-
-    if facility_id:
-        data["facility_id"] = int(facility_id)
-    if recipient_member_ids:
-        data["members"] = recipient_member_ids
 
     response = await client.post("/messages", data=data)
 
     if response.get("error"):
-        response["guidance"] = "Secure message send failed. Verify patient has portal access."
+        response["guidance"] = "Secure message send failed. Verify patient has portal access and facility_id is correct."
     else:
         response["channel_used"] = "secure"
         response["guidance"] = "Secure message sent successfully. Patient will see it in their portal."
@@ -306,31 +326,23 @@ async def _list_messages(
     page: Optional[int],
     page_size: Optional[int],
 ) -> Dict[str, Any]:
-    """List messages from inbox."""
+    """List secure portal messages from inbox. SMS messages require a patient_id — use action='get_thread' instead."""
     results: Dict[str, Any] = {"messages": []}
 
-    # Fetch SMS messages
-    sms_params: Dict[str, Any] = {"page": page or 1}
-    if message_type and message_type != "all":
-        sms_params["type"] = message_type.upper()
-    else:
-        sms_params["type"] = "BOTH"
-    if facility_id:
-        sms_params["facilityIds"] = facility_id
+    # Secure messages inbox — section is required by the API
+    resolved_section = "inbox"
+    if section == "FROM_PATIENTS":
+        resolved_section = "inbox"
+    elif section == "TO_PATIENTS":
+        resolved_section = "sent"
 
-    sms_response = await client.get("/textmessages", params=sms_params)
-    sms_messages = sms_response.get("messages", [])
-    for msg in sms_messages:
-        msg["channel"] = "sms"
-    results["messages"].extend(sms_messages)
-
-    # Fetch secure messages
     secure_params: Dict[str, Any] = {
-        "startIndex": ((page or 1) - 1) * (page_size or 20) + 1,
-        "noOfRecords": page_size or 20,
+        "section": resolved_section,
+        "page": page or 1,
+        "per_page": page_size or 20,
     }
-    if section and section != "ALL":
-        secure_params["section"] = section
+    if facility_id:
+        secure_params["facility_id"] = int(facility_id)
 
     secure_response = await client.get("/messages", params=secure_params)
     secure_messages = secure_response.get("messages", [])
@@ -342,9 +354,9 @@ async def _list_messages(
     results["page"] = page or 1
 
     if results["messages"]:
-        results["guidance"] = f"Found {results['total_count']} messages. Use action='get_thread' with a patient_id to see the full conversation."
+        results["guidance"] = f"Found {results['total_count']} secure messages. Use action='get_thread' with a patient_id to see SMS/WhatsApp conversations."
     else:
-        results["guidance"] = "No messages found matching the criteria."
+        results["guidance"] = "No messages found. Use action='get_thread' with a patient_id to check SMS conversations."
 
     return strip_empty_values(results)
 

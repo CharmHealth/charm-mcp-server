@@ -61,7 +61,7 @@ async def manageTasks(
     <instructions>
     Actions:
     - "add": Create new task (requires task, owner_id (look up members using getPracticeInfo()), priority (0-Low, 1-Medium, 2-High, 3-Critical), status (Pending, In-progress, Completed), comments, due_date, reminder_options, tasklist. optional: patient_id if task is related to a patient)
-    - "update": Modify existing task (requires task_id (use manageTasks(action='list') to get task_id) + fields to change)
+    - "update": Modify existing task (requires task_id, task, owner_id, priority, status, tasklist — use manageTasks(action='list') first to get current values, then pass all required fields with your changes)
     - "list": Show tasks with filtering (supports view/date range/pagination plus client-side filters)
     - "change_status": Change the status of a task (requires task_id (use manageTasks(action='list') to get task_id) + new_status (Pending, In-progress, Completed))
 
@@ -144,34 +144,40 @@ async def manageTasks(
                     return strip_empty_values(await client.post("/tasks", data=task_data))
 
                 case "update":
-                    if not task_id:
-                        return {"error": "task_id is required for update"}
+                    missing = [k for k, v in {
+                        "task_id": task_id,
+                        "task": task,
+                        "owner_id": owner_id,
+                        "priority": priority,
+                        "status": status,
+                        "tasklist": tasklist,
+                    }.items() if not v]
+                    if missing:
+                        return {
+                            "error": f"Missing required fields for update: {', '.join(missing)}",
+                            "guidance": "Use manageTasks(action='list') first to retrieve the current task values, then pass all required fields: task_id, task, owner_id, priority, status, tasklist."
+                        }
 
-                    update_data = {}
-                    # identifiers / fields to change
-                    if patient_id:
-                        update_data["patient_id"] = patient_id
-                    if task:
-                        update_data["task"] = task
-                    if owner_id:
-                        update_data["owner_id"] = owner_id
-                    if priority:
-                        update_data["priority"] = priority
-                    if status:
-                        update_data["status"] = status
-                    if comments:
+                    update_data = {
+                        "task": task,
+                        "owner_id": owner_id,
+                        "priority": priority,
+                        "status": status,
+                        "tasklist": tasklist,
+                    }
+                    if comments is not None:
                         update_data["comments"] = comments
                     if due_date:
                         update_data["due_date"] = due_date.isoformat()
                     if reminder_options:
                         update_data["reminder_options"] = reminder_options
-                    if tasklist:
-                        update_data["tasklist"] = tasklist
+                    if patient_id:
+                        update_data["patient_id"] = patient_id
 
-                    if not update_data:
-                        return {"error": "No fields provided to update"}
-
-                    return strip_empty_values(await client.put(f"/tasks/{task_id}", data=update_data))
+                    response = strip_empty_values(await client.put(f"/tasks/{task_id}", data=update_data))
+                    if (response.get("output_string") or {}).get("message", "").startswith("Success"):
+                        response["guidance"] = f"Task {task_id} updated successfully."
+                    return response
 
                 case "list":
                     params = {}

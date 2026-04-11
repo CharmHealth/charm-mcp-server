@@ -209,10 +209,11 @@ async def managePatientRecalls(
     Actions:
     - "add": Schedule new recall (requires recall_type, notes, provider_id, facility_id)
     - "list": Show all patient recalls (optionally filter by type/date range)
-    - "update": Modify existing recall (requires record_id + fields to change)
+    - "update": Modify existing recall (requires record_id, recall_type, notes — use action='list' first to get current values, then pass all required fields with your changes)
     - "delete": Remove recall (requires record_id). Ask the user if they are sure they want to delete the recall before proceeding.
     
-    Common recall types: "Annual Physical", "Mammogram", "Colonoscopy", "Lab Follow-up", "Medication Review"
+    recall_type is a free-form string set by the practice (e.g. "Office Visit", "Follow-up", "Imaging", "Annual Physical"). Do not invent verbose names — use short descriptive terms.
+    Scheduling: PREFER recall_date (ISO date string, e.g. "2026-07-10"). If using recall_time/recall_timeunit instead, recall_period is also REQUIRED (e.g. recall_time=3, recall_timeunit="Months", recall_period="after") — omitting recall_period causes a server error.
     Reminder timing: email_reminder_before/text_reminder_before in days (e.g., 7 for one week)
     Use getPracticeInfo() to get valid provider_id and facility_id values
 
@@ -316,24 +317,34 @@ async def managePatientRecalls(
                             "error": "Missing required fields for recall",
                             "guidance": "For recalls, provide: recall_type, notes, provider_id, and facility_id. Use getPracticeInfo() to get valid provider and facility IDs."
                         }
-                    
-                    recall_data = [{
+
+                    # Build payload with only present fields — CharmHealth 500s on null values
+                    recall_entry: Dict[str, Any] = {
                         "recall_type": recall_type,
                         "notes": notes,
-                        "provider_id": provider_id,
-                        "facility_id": facility_id,
-                        "recall_date": recall_date.isoformat() if recall_date else None,
-                        "recall_time": recall_time,
-                        "recall_timeunit": recall_timeunit,
-                        "recall_period": recall_period,
-                        "encounter_id": encounter_id,
-                        "send_email_reminder": send_email_reminder,
-                        "email_reminder_before": str(email_reminder_before) if email_reminder_before else None,
-                        "send_text_reminder": send_text_reminder,
-                        "text_reminder_before": str(text_reminder_before) if text_reminder_before else None
-                    }]
-                    
-                    response = await client.post(f"/patients/{patient_id}/recalls", data=recall_data)
+                        "provider_id": int(provider_id),
+                        "facility_id": int(facility_id),
+                    }
+                    if recall_date:
+                        recall_entry["recall_date"] = recall_date.isoformat()
+                    if recall_time is not None:
+                        recall_entry["recall_time"] = recall_time
+                    if recall_timeunit:
+                        recall_entry["recall_timeunit"] = recall_timeunit
+                    if recall_period:
+                        recall_entry["recall_period"] = recall_period
+                    if encounter_id:
+                        recall_entry["encounter_id"] = int(encounter_id)
+                    if send_email_reminder is not None:
+                        recall_entry["send_email_reminder"] = send_email_reminder
+                    if email_reminder_before is not None:
+                        recall_entry["email_reminder_before"] = str(email_reminder_before)
+                    if send_text_reminder is not None:
+                        recall_entry["send_text_reminder"] = send_text_reminder
+                    if text_reminder_before is not None:
+                        recall_entry["text_reminder_before"] = str(text_reminder_before)
+
+                    response = await client.post(f"/patients/{patient_id}/recalls", data=[recall_entry])
                     if response.get("recalls"):
                         reminder_info = ""
                         if send_email_reminder or send_text_reminder:
@@ -342,24 +353,40 @@ async def managePatientRecalls(
                     return strip_empty_values(response)
                     
                 case "update":
-                    if not record_id:
+                    missing = [k for k, v in {
+                        "record_id": record_id,
+                        "recall_type": recall_type,
+                        "notes": notes,
+                    }.items() if not v]
+                    if missing:
                         return {
-                            "error": "record_id required for updates",
-                            "guidance": "Use action='list' to find the recall record_id first."
+                            "error": f"Missing required fields for update: {', '.join(missing)}",
+                            "guidance": "Use action='list' first to get current recall values (patient_recall_id, recall_type, notes), then pass all required fields with your changes."
                         }
-                    
-                    update_data = {}
-                    if recall_type:
-                        update_data["recall_type"] = recall_type
-                    if notes:
-                        update_data["notes"] = notes
+
+                    update_data: Dict[str, Any] = {
+                        "recall_type": recall_type,
+                        "notes": notes,
+                    }
                     if recall_date:
                         update_data["recall_date"] = recall_date.isoformat()
+                    if recall_time is not None:
+                        update_data["recall_time"] = recall_time
+                    if recall_timeunit:
+                        update_data["recall_timeunit"] = recall_timeunit
+                    if recall_period:
+                        update_data["recall_period"] = recall_period
+                    if provider_id:
+                        update_data["provider_id"] = int(provider_id)
                     if send_email_reminder is not None:
                         update_data["send_email_reminder"] = send_email_reminder
+                    if email_reminder_before is not None:
+                        update_data["email_reminder_before"] = str(email_reminder_before)
                     if send_text_reminder is not None:
                         update_data["send_text_reminder"] = send_text_reminder
-                    
+                    if text_reminder_before is not None:
+                        update_data["text_reminder_before"] = str(text_reminder_before)
+
                     response = await client.put(f"/patients/{patient_id}/recalls/{record_id}", data=update_data)
                     if response.get("recalls"):
                         response["guidance"] = f"Recall {record_id} updated successfully. Updated reminder settings are now active."
@@ -561,7 +588,7 @@ async def managePatientFiles(
 @clinical_support_mcp.tool
 @with_tool_metrics()
 async def managePatientLabs(
-    action: Literal["list", "get_details", "add_result"],
+    action: Literal["list", "get_details"],
     # Common fields
     patient_id: Optional[str] = None,
     group_id: Optional[str] = None,
@@ -579,27 +606,21 @@ async def managePatientLabs(
     sort_by: Optional[Literal["DATE", "FULL_NAME"]] = None,
     is_ascending: Optional[bool] = None,
     
-    # Adding lab results
-    result_details: Optional[Dict[str, Any]] = None,
-    
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """
     Manage patient laboratory results.
     
     <usecase>
-    Complete laboratory results management - list lab results, get detailed reports, 
-    and add new lab results. Handles the full lab workflow for clinical decision-making.
+    Laboratory results management - list lab results and get detailed reports.
+    Lab results arrive automatically from integrated labs (LabCorp, Quest). For manual entry, use the CharmHealth web portal.
     </usecase>
     
     <instructions>
     Actions:
     - "list": Show lab results with filtering (optionally filter by patient_id, reviewer_id, status, date range)
     - "get_details": Get detailed lab report (requires group_id OR lab_order_id)
-    - "add_result": Add new lab results (requires patient_id + result_details)
-    
     For detailed results: Use group_id for result groups or lab_order_id for specific orders
-    For adding results: Provide structured result_details with tests, parameters, and values
     Status codes: 0 for pending, 2 for final results
 
     List filters (in addition to API parameters):
@@ -725,27 +746,6 @@ async def managePatientLabs(
                         response["guidance"] = "Detailed lab results retrieved successfully. Review the test parameters and values for clinical interpretation."
                     else:
                         response["guidance"] = "Lab details not found. Verify the group_id or lab_order_id is correct using action='list' first."
-                    
-                    return strip_empty_values(response)
-                    
-                case "add_result":
-                    if not patient_id or not result_details:
-                        return {
-                            "error": "patient_id and result_details required",
-                            "guidance": "Provide patient_id and structured result_details containing lab test information, parameters, and values."
-                        }
-                    
-                    add_data = {
-                        "patient_id": patient_id,
-                        "result_details": result_details
-                    }
-                    
-                    response = await client.post("/labs/results/upload", data=add_data)
-                    
-                    if response.get("code") == "0":
-                        response["guidance"] = "Lab results added successfully. Results are now available in the patient's lab history and can be used for clinical decision-making."
-                    else:
-                        response["guidance"] = "Lab result upload failed. Verify the result_details structure includes required fields (tests, parameters, values) and patient_id is valid."
                     
                     return strip_empty_values(response)
                     

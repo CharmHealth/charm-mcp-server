@@ -33,8 +33,10 @@ async def managePatientVitals(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     limit: Optional[int] = None,
-    
-    
+
+    # Date for add without encounter
+    entry_date: Optional[date] = None,
+
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """
@@ -47,17 +49,20 @@ async def managePatientVitals(
     
     <instructions>
     Actions:
-    - "add": Record new vitals (requires patient_id + encounter_id + vitals dict OR individual vital fields). Check available vitals with getPracticeInfo(info_type='vitals') first to ensure all vital names and units are correct.
+    - "add": Record new vitals (requires patient_id + vitals dict OR individual vital fields, plus encounter_id OR entry_date; defaults to today if neither provided). Check available vitals with getPracticeInfo(info_type='vitals') first to ensure all vital names and units are correct.
     - "list": Show patient vital history (optionally filter by vital name and/or date range)
     - "update": Modify existing vital record (requires record_id + fields to change)
     - "delete": Remove incorrect vital record (requires record_id)
     
-    Vitals Format: 
-    - As dict: {"Weight": "70 kg", "BP": "120/80 mmHg", "Pulse": "72 bpm", "Temperature": "98.6 F"}
-    - Individual: vital_name="Weight", vital_value="70", vital_unit="kg"
-    
-    Common Vitals: Weight, Height, Blood Pressure (BP), Pulse Rate, Temperature, Respiratory Rate, Oxygen Saturation
-    Use getPracticeInfo(info_type='vitals') to see available vital types and proper naming
+    Vitals Format:
+    - As dict: keys are EXACT CharmHealth vital names, values are "value unit" strings.
+      Example: {"Systolic BP": "120 mmHg", "Diastolic BP": "80 mmHg", "Weight": "150 lbs", "Temp": "98 F"}
+    - Individual: vital_name="Systolic BP", vital_value="120", vital_unit="mmHg"
+
+    IMPORTANT: vital_name must be the exact CharmHealth API name. NEVER include units inside the name.
+    Correct: "Systolic BP" | Wrong: "Systolic BP (mmHg)" or "Blood Pressure"
+    Known names: Weight, Height, BMI, Temp, Systolic BP, Diastolic BP, Pulse Rate, Pulse Pattern, Pulse Volume, Vision
+    Call getPracticeInfo(info_type='vitals') to get the full list of valid names and units for this practice.
 
     List filters:
     - vital_name_filter: e.g., vital_name_filter="Blood Pressure" (matches case-insensitively, substring ok)
@@ -190,14 +195,8 @@ async def managePatientVitals(
                     return strip_empty_values(response)
                     
                 case "add":
-                    if not encounter_id:
-                        return {
-                            "error": "encounter_id required for adding vitals",
-                            "guidance": "Vitals must be linked to an encounter. Use manageEncounter()() first to create an encounter, then record vitals."
-                        }
-                    
                     vitals_list = []
-                    
+
                     # Handle vitals dict format
                     if vitals:
                         for vital_name_key, vital_value_with_unit in vitals.items():
@@ -205,13 +204,13 @@ async def managePatientVitals(
                             parts = vital_value_with_unit.split()
                             value = parts[0] if parts else vital_value_with_unit
                             unit = " ".join(parts[1:]) if len(parts) > 1 else ""
-                            
+
                             vitals_list.append({
                                 "vital_name": vital_name_key,
                                 "vital_value": value,
                                 "vital_unit": unit
                             })
-                    
+
                     # Handle individual vital fields
                     elif vital_name and vital_value:
                         vitals_list.append({
@@ -224,26 +223,29 @@ async def managePatientVitals(
                             "error": "Either vitals dict or individual vital fields required",
                             "guidance": "Provide vitals as dict like {'Weight': '70 kg', 'BP': '120/80 mmHg'} OR individual fields (vital_name, vital_value, vital_unit)."
                         }
-                    
+
                     if not vitals_list:
                         return {
                             "error": "No valid vitals data provided",
                             "guidance": "Check your vitals format. Use getPracticeInfo(info_type='vitals') to see available vital types."
                         }
-                    
-                    vitals_data = [{
-                        "encounter_id": encounter_id,
-                        "vitals": vitals_list
-                    }]
-                    
-                    response = await client.post(f"/patients/{patient_id}/vitals", data=vitals_data)
-                    
-                    if response.get("vitals"):
-                        recorded_vitals = [v["vital_name"] for v in vitals_list]
-                        response["guidance"] = f"Vitals recorded successfully: {', '.join(recorded_vitals)}. These are now part of the patient's clinical record for encounter {encounter_id}."
+
+                    # Build the vitals entry — link to encounter if provided, otherwise use entry_date (defaulting to today)
+                    vitals_entry: Dict[str, Any] = {"vitals": vitals_list}
+                    if encounter_id:
+                        vitals_entry["encounter_id"] = encounter_id
                     else:
-                        response["guidance"] = "Vitals recording failed. Verify encounter_id exists and vital names match practice standards. Use getPracticeInfo(info_type='vitals') for valid vital types."
-                    
+                        vitals_entry["entry_date"] = (entry_date or date.today()).isoformat()
+
+                    response = await client.post(f"/patients/{patient_id}/vitals", data=[vitals_entry])
+
+                    if response.get("vital_entries"):
+                        recorded_vitals = [v["vital_name"] for v in vitals_list]
+                        context_label = f"encounter {encounter_id}" if encounter_id else "today's visit"
+                        response["guidance"] = f"Vitals recorded successfully: {', '.join(recorded_vitals)}. These are now part of the patient's clinical record for {context_label}."
+                    else:
+                        response["guidance"] = "Vitals recording failed. Verify vital names match practice standards. Use getPracticeInfo(info_type='vitals') for valid vital types."
+
                     return strip_empty_values(response)
                     
                 case "update":
@@ -300,7 +302,7 @@ async def managePatientVitals(
                     
                     response = await client.put(f"/patients/{patient_id}/vitals/{record_id}", data=update_data)
                     
-                    if response.get("vitals"):
+                    if response.get("vital_entries"):
                         updated_vitals = [v["vital_name"] for v in vitals_list]
                         response["guidance"] = f"Vital record {record_id} updated successfully: {', '.join(updated_vitals)}. The corrected vital signs are now in the patient's record."
                     else:
@@ -366,7 +368,7 @@ async def managePatientDrugs(
     <instructions>
     Actions:
     - "add": Prescribe new drug (requires drug_name, directions for medications; drug_name, dosage for supplements)
-    - "update": Modify existing prescription (requires record_id + fields to change)  
+    - "update": Modify existing prescription (requires record_id + fields to change). IMPORTANT: drug name and strength CANNOT be changed via update — use discontinue + add instead. Updatable fields: directions, dispense, refills, status.
     - "discontinue": Stop drug (requires record_id)
     - "list": Show all patient drugs by type (filter by substance_type, optionally filter by status)
     
@@ -597,22 +599,50 @@ async def managePatientDrugs(
                             "error": "record_id required for updates",
                             "guidance": "Use action='list' to find the medication/supplement record_id first."
                         }
-                    
+
                     if substance_type == "medication":
-                        update_data = {}
-                        if drug_name:
-                            update_data["drug_name"] = drug_name
+                        # GET current record to preserve required fields the API mandates on every PUT
+                        current_resp = await client.get(f"/patients/{patient_id}/medications")
+                        current_meds = current_resp.get("medications", [])
+                        current_med = next(
+                            (m for m in current_meds if str(m.get("patient_medication_id")) == str(record_id)),
+                            None,
+                        )
+                        if not current_med:
+                            return {
+                                "error": f"Medication record {record_id} not found",
+                                "guidance": "Use action='list' to verify the record_id exists for this patient."
+                            }
+
+                        if drug_name or strength:
+                            return {
+                                "error": "Drug name and strength cannot be changed via update — these are catalog fields set at prescribing time.",
+                                "guidance": "To change the drug or strength, use action='discontinue' on the current record, then action='add' to prescribe the new drug/strength."
+                            }
+
+                        # Build payload with all API-required fields, then overlay changes
+                        # NOTE: PUT /medications/{id} only accepts: is_active, directions, dispense, refills,
+                        # substitute_generic, manufacturing_type, and optional start_date/stop_date/dispense_unit/route/note_to_pharmacy
+                        update_data: Dict[str, Any] = {
+                            "is_active": current_med.get("is_active", True),
+                            "directions": current_med.get("directions", ""),
+                            "dispense": float(current_med.get("dispense") or 30),
+                            "refills": str(current_med.get("refills", "0")),
+                            "substitute_generic": current_med.get("substitute_generic", False),
+                            "manufacturing_type": current_med.get("manufacturing_type", "Manufactured"),
+                        }
+                        _enc_id = current_med.get("encounter_id")
+                        if _enc_id:
+                            update_data["encounter_id"] = int(_enc_id)
                         if directions:
                             update_data["directions"] = directions
                         if refills:
                             update_data["refills"] = refills
                         if status:
                             update_data["is_active"] = status == "active"
-                        if strength:
-                            update_data["strength_description"] = strength
-                        
+
                         response = await client.put(f"/patients/{patient_id}/medications/{record_id}", data=update_data)
-                        
+
                         if response.get("medications"):
                             response["guidance"] = f"Medication {record_id} updated successfully. Changes are now active in the patient's medication profile."
                     else:
@@ -642,13 +672,36 @@ async def managePatientDrugs(
                             "error": "record_id required to discontinue drug",
                             "guidance": "Use action='list' to find the medication/supplement record_id first."
                         }
-                    
+
                     if substance_type == "medication":
-                        # Set medication to inactive
-                        response = await client.put(f"/patients/{patient_id}/medications/{record_id}", data={"is_active": False})
-                        
+                        # GET current record to preserve required fields the API mandates on every PUT
+                        current_resp = await client.get(f"/patients/{patient_id}/medications")
+                        current_meds = current_resp.get("medications", [])
+                        current_med = next(
+                            (m for m in current_meds if str(m.get("patient_medication_id")) == str(record_id)),
+                            None,
+                        )
+                        if not current_med:
+                            return {
+                                "error": f"Medication record {record_id} not found",
+                                "guidance": "Use action='list' to verify the record_id exists for this patient."
+                            }
+
+                        discontinue_data: Dict[str, Any] = {
+                            "is_active": False,
+                            "directions": current_med.get("directions", ""),
+                            "dispense": float(current_med.get("dispense") or 30),
+                            "refills": str(current_med.get("refills", "0")),
+                            "substitute_generic": current_med.get("substitute_generic", False),
+                            "manufacturing_type": current_med.get("manufacturing_type", "Manufactured"),
+                        }
+                        _enc_id = current_med.get("encounter_id")
+                        if _enc_id:
+                            discontinue_data["encounter_id"] = int(_enc_id)
+                        response = await client.put(f"/patients/{patient_id}/medications/{record_id}", data=discontinue_data)
+
                         if response.get("medications"):
-                            response["guidance"] = f"Medication {record_id} discontinued. Patient should stop taking this medication. Document discontinuation reason in next encounter with manageEncounter()()."
+                            response["guidance"] = f"Medication {record_id} discontinued. Patient should stop taking this medication. Document discontinuation reason in next encounter with manageEncounter()."
                     else:
                         # Set supplement to inactive
                         response = await client.put(f"/patients/{patient_id}/supplements/{record_id}", data={"status": "Inactive"})
@@ -700,12 +753,14 @@ async def managePatientAllergies(
     Actions:
     - "add": Document new allergy (requires allergen, allergy_type, severity, reactions, allergy_date)
     - "list": Show all patient allergies (optionally filter by severity/type)
-    - "update": Modify existing allergy (requires record_id + fields to change)
+    - "update": Modify existing allergy (requires record_id, allergen, allergy_type, severity, allergy_status — use action='list' first to get current values, then pass all required fields with your changes)
     - "delete": Remove allergy record (requires record_id)
     
     Safety critical: Always check allergies before prescribing medications.
     Common allergens: "Penicillin", "Latex", "Shellfish", "Nuts", "Contrast dye"
-    Severity levels: "Mild", "Moderate", "Severe", "Life-threatening"
+    Severity levels: "Mild", "Moderate", "Severe"
+    Allergy types: "Medication", "Drug Substance", "Environmental", "Food", "Plant", "Animal", "Latex"
+    Status values: "Active", "Inactive"
 
     List filters:
     - severity_filter: e.g., severity_filter="Severe"
@@ -820,28 +875,30 @@ async def managePatientAllergies(
                     return strip_empty_values(response)
                     
                 case "update":
-                    if not record_id:
+                    missing = [k for k, v in {
+                        "record_id": record_id,
+                        "allergen": allergen,
+                        "allergy_type": allergy_type,
+                        "severity": severity,
+                        "allergy_status": allergy_status,
+                        "reactions": reactions,
+                        "allergy_date": allergy_date,
+                    }.items() if v is None or v == ""]
+                    if missing:
                         return {
-                            "error": "record_id required for updates",
-                            "guidance": "Use action='list' to find the allergy record_id first."
+                            "error": f"Missing required fields for update: {', '.join(missing)}",
+                            "guidance": "Use action='list' first to get current allergy values, then pass all required fields: record_id, allergen, allergy_type, severity, allergy_status, reactions (use empty string if none), allergy_date (observed_on from list)."
                         }
-                    
-                    update_data = {}
-                    if allergen:
-                        update_data["allergen"] = allergen
-                    if allergy_type:
-                        update_data["type"] = allergy_type
-                    if severity:
-                        update_data["severity"] = severity
-                    if reactions:
-                        update_data["reactions"] = reactions
-                    if allergy_status:
-                        update_data["status"] = allergy_status
-                    if allergy_date:
-                        update_data["date"] = allergy_date.isoformat()
-                    if comments:
-                        update_data["comments"] = comments
-                    
+
+                    update_data = {
+                        "allergen": allergen,
+                        "type": allergy_type,
+                        "severity": severity,
+                        "status": allergy_status,
+                        "reactions": reactions,
+                        "date": allergy_date.isoformat(),
+                    }
+
                     response = await client.put(f"/patients/{patient_id}/allergies/{record_id}", data=update_data)
                     if response.get("patient_allergy"):
                         response["guidance"] = f"Allergy record {record_id} updated successfully. Updated allergy information is now active in safety alerts."
