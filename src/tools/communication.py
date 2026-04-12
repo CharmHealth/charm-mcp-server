@@ -153,7 +153,7 @@ async def manageMessages(
 
                 case "list":
                     return await _list_messages(
-                        client, section, message_type, facility_id,
+                        client, section, facility_id,
                         page, page_size,
                     )
 
@@ -247,7 +247,13 @@ async def _send_whatsapp(
     body_placeholders: Optional[List[str]],
 ) -> Dict[str, Any]:
     """Send WhatsApp message to a patient."""
-    data: Dict[str, Any] = {}
+    if not facility_id:
+        return {
+            "error": "facility_id is required to send a WhatsApp message",
+            "guidance": "Provide facility_id. Use getPracticeInfo() to look up facility IDs."
+        }
+
+    data: Dict[str, Any] = {"facility_id": int(facility_id)}
 
     if template_name:
         data["template_name"] = template_name
@@ -259,9 +265,6 @@ async def _send_whatsapp(
         data["content"] = template_content
     else:
         data["freeform_content"] = content
-
-    if facility_id:
-        data["facility_id"] = int(facility_id)
 
     response = await client.post(
         f"/messages/whatsapp/patient/{patient_id}/send",
@@ -321,7 +324,6 @@ async def _send_secure_message(
 async def _list_messages(
     client: CharmHealthAPIClient,
     section: Optional[str],
-    message_type: Optional[str],
     facility_id: Optional[str],
     page: Optional[int],
     page_size: Optional[int],

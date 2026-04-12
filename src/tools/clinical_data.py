@@ -881,13 +881,14 @@ async def managePatientAllergies(
                         "allergy_type": allergy_type,
                         "severity": severity,
                         "allergy_status": allergy_status,
-                        "reactions": reactions,
                         "allergy_date": allergy_date,
-                    }.items() if v is None or v == ""]
+                    }.items() if v is None or v == ""] + (
+                        ["reactions"] if reactions is None else []
+                    )
                     if missing:
                         return {
                             "error": f"Missing required fields for update: {', '.join(missing)}",
-                            "guidance": "Use action='list' first to get current allergy values, then pass all required fields: record_id, allergen, allergy_type, severity, allergy_status, reactions (use empty string if none), allergy_date (observed_on from list)."
+                            "guidance": "Use action='list' first to get current allergy values, then pass all required fields: record_id, allergen, allergy_type, severity, allergy_status, reactions (pass empty string if no reactions), allergy_date (observed_on from list)."
                         }
 
                     update_data = {
