@@ -1,7 +1,15 @@
 from fastmcp import FastMCP, Context
 from fastmcp.server.dependencies import get_http_headers
-from typing import Optional, List, Dict, Any, Literal, TypedDict
+from typing import Optional, List, Dict, Any, Literal, TypedDict, Union
 from datetime import date
+from pydantic import BaseModel, Field
+
+
+class VitalEntry(BaseModel):
+    """A single vital sign reading with name, value, and unit."""
+    vital_name: str = Field(description="Exact CharmHealth vital name (e.g., 'Height', 'Weight', 'Systolic BP')")
+    vital_value: str = Field(description="The vital value")
+    vital_unit: str = Field(default="", description="Unit of measurement (e.g., 'ft', 'ins', 'lbs', 'mmHg')")
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
@@ -20,8 +28,8 @@ async def managePatientVitals(
     encounter_id: Optional[str] = None,
     record_id: Optional[str] = None,
     
-    # Vital signs data - can provide as dict or individual fields
-    vitals: Optional[Dict[str, str]] = None,
+    # Vital signs data - can provide as dict, list of entries, or individual fields
+    vitals: Optional[Union[Dict[str, str], List[VitalEntry]]] = None,
     
     # Individual vital fields
     vital_name: Optional[str] = None,
@@ -197,19 +205,24 @@ async def managePatientVitals(
                 case "add":
                     vitals_list = []
 
-                    # Handle vitals dict format
                     if vitals:
-                        for vital_name_key, vital_value_with_unit in vitals.items():
-                            # Parse value and unit
-                            parts = vital_value_with_unit.split()
-                            value = parts[0] if parts else vital_value_with_unit
-                            unit = " ".join(parts[1:]) if len(parts) > 1 else ""
-
-                            vitals_list.append({
-                                "vital_name": vital_name_key,
-                                "vital_value": value,
-                                "vital_unit": unit
-                            })
+                        if isinstance(vitals, list):
+                            # List of VitalEntry — supports duplicate vital names (e.g., Height ft + ins)
+                            vitals_list = [
+                                {"vital_name": v.vital_name, "vital_value": v.vital_value, "vital_unit": v.vital_unit}
+                                for v in vitals
+                            ]
+                        else:
+                            # Dict format — parse "value unit" strings (legacy, no duplicate keys)
+                            for vital_name_key, vital_value_with_unit in vitals.items():
+                                parts = vital_value_with_unit.split()
+                                value = parts[0] if parts else vital_value_with_unit
+                                unit = " ".join(parts[1:]) if len(parts) > 1 else ""
+                                vitals_list.append({
+                                    "vital_name": vital_name_key,
+                                    "vital_value": value,
+                                    "vital_unit": unit
+                                })
 
                     # Handle individual vital fields
                     elif vital_name and vital_value:
@@ -257,20 +270,25 @@ async def managePatientVitals(
                     
                     # Build vitals list for update
                     vitals_list = []
-                    
-                    # Handle vitals dict format
+
                     if vitals:
-                        for vital_name_key, vital_value_with_unit in vitals.items():
-                            # Parse value and unit
-                            parts = vital_value_with_unit.split()
-                            value = parts[0] if parts else vital_value_with_unit
-                            unit = " ".join(parts[1:]) if len(parts) > 1 else ""
-                            
-                            vitals_list.append({
-                                "vital_name": vital_name_key,
-                                "vital_value": value,
-                                "vital_unit": unit
-                            })
+                        if isinstance(vitals, list):
+                            # List of VitalEntry — supports duplicate vital names
+                            vitals_list = [
+                                {"vital_name": v.vital_name, "vital_value": v.vital_value, "vital_unit": v.vital_unit}
+                                for v in vitals
+                            ]
+                        else:
+                            # Dict format — parse "value unit" strings (legacy)
+                            for vital_name_key, vital_value_with_unit in vitals.items():
+                                parts = vital_value_with_unit.split()
+                                value = parts[0] if parts else vital_value_with_unit
+                                unit = " ".join(parts[1:]) if len(parts) > 1 else ""
+                                vitals_list.append({
+                                    "vital_name": vital_name_key,
+                                    "vital_value": value,
+                                    "vital_unit": unit
+                                })
                     
                     # Handle individual vital fields
                     elif vital_name and vital_value:
