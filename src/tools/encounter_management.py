@@ -15,7 +15,7 @@ encounter_management_mcp = FastMCP(name="CharmHealth Encounter Management MCP Se
 @with_tool_metrics()
 async def manageEncounter(
     patient_id: str,
-    action: Literal["create", "review", "sign", "unlock", "update"] = "create",
+    action: Literal["create", "review", "sign", "unlock", "update", "list"] = "create",
     provider_id: Optional[str] = None,
     facility_id: Optional[str] = None,
     encounter_date: Optional[date] = None,
@@ -27,6 +27,14 @@ async def manageEncounter(
     reason: Optional[str] = None,  # Required for unlock action
     template_ids: Optional[str] = None,  # comma-separated template IDs to attach (update action)
     entries: Optional[str] = None,  # JSON array: [{"entry_id": "...", "answer": "..."}] (update action)
+
+    # List action fields
+    filter_by: Optional[Literal["Status.Signed", "Status.Unsigned", "Status.All"]] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    per_page: Optional[int] = None,
+    page: Optional[int] = None,
+
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """
@@ -39,6 +47,7 @@ async def manageEncounter(
     
     <instructions>
     Actions:
+    - "list": List encounters for a patient (requires patient_id; optionally filter by filter_by, start_date, end_date, per_page, page)
     - "create": Create new encounter and document clinical findings (default)
     - "review": Display complete encounter details for review before signing
     - "sign": Electronically sign encounter after review and confirmation
@@ -118,6 +127,35 @@ async def manageEncounter(
     ) as client:
         try:
             match action:
+                case "list":
+                    params: Dict[str, Any] = {"patient_id": int(patient_id)}
+                    if filter_by:
+                        params["filter_by"] = filter_by
+                    if facility_id:
+                        params["facility_id"] = int(facility_id)
+                    if provider_id:
+                        params["member_id"] = int(provider_id)
+                    if start_date:
+                        params["start_date"] = start_date.isoformat()
+                    if end_date:
+                        params["end_date"] = end_date.isoformat()
+                    if per_page:
+                        params["per_page"] = per_page
+                    if page:
+                        params["page"] = page
+
+                    response = await client.get("/encounters", params=params)
+                    encounters = response.get("encounters") or []
+                    response["total_count"] = len(encounters)
+                    if encounters:
+                        response["guidance"] = (
+                            f"Found {len(encounters)} encounters for this patient."
+                            " Use action='review' with an encounter_id to see full details."
+                        )
+                    else:
+                        response["guidance"] = "No encounters found matching the filters."
+                    return strip_empty_values(response)
+
                 case "review":
                     if not encounter_id:
                         return {
@@ -218,6 +256,39 @@ async def manageEncounter(
                         logger.error(f"Error fetching medications: {e}")
                         encounter_details["medications"] = []
                     
+                    # Get supplements for this encounter
+                    try:
+                        supps_response = await client.get(f"/patients/{patient_id}/supplements")
+                        all_supps = supps_response.get("supplements", []) or []
+                        encounter_supps = [
+                            s for s in all_supps
+                            if str(s.get("encounter_id")) == str(encounter_id) and s.get("encounter_id")
+                        ]
+                        if not encounter_supps and encounter_details["encounter_info"]["encounter_date"]:
+                            encounter_date_str = encounter_details["encounter_info"]["encounter_date"].split()[0] if encounter_details["encounter_info"]["encounter_date"] else None
+                            if encounter_date_str:
+                                encounter_supps = [
+                                    s for s in all_supps
+                                    if s.get("start_date") == encounter_date_str
+                                ]
+                        encounter_details["supplements"] = encounter_supps
+                    except Exception as e:
+                        logger.error(f"Error fetching supplements: {e}")
+                        encounter_details["supplements"] = []
+
+                    # Get lab orders for this encounter
+                    try:
+                        labs_response = await client.get(f"/patients/{patient_id}/lab-orders")
+                        all_labs = labs_response.get("lab_orders", []) or []
+                        encounter_labs = [
+                            l for l in all_labs
+                            if str(l.get("encounter_id")) == str(encounter_id) and l.get("encounter_id")
+                        ]
+                        encounter_details["lab_orders"] = encounter_labs
+                    except Exception as e:
+                        logger.error(f"Error fetching lab orders: {e}")
+                        encounter_details["lab_orders"] = []
+
                     # Get clinical notes
                     clinical_notes = found_encounter.get("chief_complaints")
                     if clinical_notes:
@@ -231,6 +302,10 @@ async def manageEncounter(
                         summary_items.append(f"✓ {len(encounter_details['diagnoses'])} diagnosis/diagnoses documented")
                     if encounter_details["medications"]:
                         summary_items.append(f"✓ {len(encounter_details['medications'])} medication(s) prescribed/reviewed")
+                    if encounter_details.get("supplements"):
+                        summary_items.append(f"✓ {len(encounter_details['supplements'])} supplement(s) documented")
+                    if encounter_details.get("lab_orders"):
+                        summary_items.append(f"✓ {len(encounter_details['lab_orders'])} lab order(s)")
                     if encounter_details.get("clinical_notes"):
                         summary_items.append("✓ Clinical notes documented")
                     

@@ -198,26 +198,43 @@ async def manageAppointments(
                     return strip_empty_values(response)
                     
                 case "reschedule":
+                    # Auto-fill missing fields from the existing appointment
+                    if appointment_id and (not patient_id or not facility_id or not provider_id or not visit_type_id):
+                        try:
+                            appt_response = await client.get(f"/appointment/{appointment_id}")
+                            appt = appt_response.get("output_string") or appt_response.get("appointment") or {}
+                            if appt:
+                                patient_id = patient_id or str(appt.get("practice_patient_id", ""))
+                                facility_id = facility_id or str(appt.get("facility_id", ""))
+                                provider_id = provider_id or str(appt.get("member_id", ""))
+                                if not visit_type_id and appt.get("visit_type_id"):
+                                    visit_type_id = int(appt["visit_type_id"])
+                                if mode == "In Person" and appt.get("appointment_type"):
+                                    mode = appt["appointment_type"]
+                        except Exception as e:
+                            logger.warning(f"Could not auto-fill reschedule fields from appointment {appointment_id}: {e}")
+
                     required = [appointment_id, facility_id, patient_id, provider_id, appointment_date, appointment_time]
                     if not all(required):
                         return {
                             "error": "Missing required fields for rescheduling",
                             "guidance": "For rescheduling, provide: appointment_id, facility_id, patient_id, provider_id, appointment_date, appointment_time"
                         }
-                    
-                    # Build reschedule data
+
+                    # Build reschedule data (IDs must be integers, matching CharmHealth API Long type)
                     reschedule_data = {
-                        "facility_id": facility_id,
-                        "patient_id": patient_id,
-                        "member_id": provider_id,
+                        "facility_id": int(facility_id),
+                        "patient_id": int(patient_id),
+                        "member_id": int(provider_id),
                         "mode": mode,
                         "repetition": repetition or "Single Date",
                         "start_date": appointment_date.isoformat(),
                         "start_time": appointment_time,
                         "duration_in_minutes": duration_minutes,
                         "appointment_status": status,
-                        "visit_type_id": visit_type_id
                     }
+                    if visit_type_id:
+                        reschedule_data["visit_type_id"] = int(visit_type_id)
                     
                     if reason:
                         reschedule_data["reason"] = reason
@@ -226,9 +243,7 @@ async def manageAppointments(
                     if resource_id:
                         reschedule_data["resource_id"] = resource_id
                     
-                    data = {"data": reschedule_data}
-                    
-                    response = await client.post(f"/appointment/{appointment_id}/reschedule", data=data)
+                    response = await client.post(f"/appointment/{appointment_id}/reschedule", data=reschedule_data)
                     
                     if response.get("output_string"):
                         response["guidance"] = f"Appointment {appointment_id} rescheduled successfully. Patient will be notified of the new time."
