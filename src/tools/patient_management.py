@@ -820,7 +820,7 @@ async def reviewPatientHistory(
             # Get recent vitals
             if "vitals" in include_sections:
                 vitals_response = await client.get(f"/patients/{patient_id}/vitals")
-                vitals = vitals_response.get("vitals", []) or []
+                vitals = vitals_response.get("vital_entries", []) or vitals_response.get("vitals", []) or []
                 patient_summary["recent_vitals_total_count"] = len(vitals)
                 limited = filter_items(vitals, filters=None, limit=vitals_limit) if vitals_limit is not None else {"items": vitals, "filtered_count": len(vitals)}
                 patient_summary["recent_vitals"] = limited["items"]
