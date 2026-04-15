@@ -721,9 +721,30 @@ async def managePatientDrugs(
                         if response.get("medications"):
                             response["guidance"] = f"Medication {record_id} discontinued. Patient should stop taking this medication. Document discontinuation reason in next encounter with manageEncounter()."
                     else:
-                        # Set supplement to inactive
-                        response = await client.put(f"/patients/{patient_id}/supplements/{record_id}", data={"status": "Inactive"})
-                        
+                        # GET current supplement to carry supplement_name — API rejects the PUT without it
+                        current_resp = await client.get(f"/patients/{patient_id}/supplements")
+                        current_supps = current_resp.get("supplements", [])
+                        current_supp = next(
+                            (
+                                s for s in current_supps
+                                if str(s.get("supplement_id") or s.get("patient_supplement_id")) == str(record_id)
+                            ),
+                            None,
+                        )
+                        if not current_supp:
+                            return {
+                                "error": f"Supplement record {record_id} not found",
+                                "guidance": "Use action='list' to verify the record_id exists for this patient."
+                            }
+
+                        response = await client.put(
+                            f"/patients/{patient_id}/supplements/{record_id}",
+                            data={
+                                "supplement_name": current_supp.get("supplement_name", ""),
+                                "status": "Inactive",
+                            },
+                        )
+
                         if response.get("supplements"):
                             response["guidance"] = f"Supplement {record_id} discontinued. This supplement is no longer part of the patient's active regimen."
                     
