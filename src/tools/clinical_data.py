@@ -664,10 +664,25 @@ async def managePatientDrugs(
                         if response.get("medications"):
                             response["guidance"] = f"Medication {record_id} updated successfully. Changes are now active in the patient's medication profile."
                     else:
-                        # Update supplement
-                        update_data = {}
-                        if drug_name:
-                            update_data["supplement_name"] = drug_name
+                        # GET current supplement to carry supplement_name — API rejects the PUT without it
+                        current_resp = await client.get(f"/patients/{patient_id}/supplements")
+                        current_supps = current_resp.get("supplements", [])
+                        current_supp = next(
+                            (
+                                s for s in current_supps
+                                if str(s.get("supplement_id") or s.get("patient_supplement_id")) == str(record_id)
+                            ),
+                            None,
+                        )
+                        if not current_supp:
+                            return {
+                                "error": f"Supplement record {record_id} not found",
+                                "guidance": "Use action='list' to verify the record_id exists for this patient."
+                            }
+
+                        update_data: Dict[str, Any] = {
+                            "supplement_name": drug_name or current_supp.get("supplement_name", ""),
+                        }
                         if dosage:
                             update_data["dosage"] = dosage
                         if strength:
@@ -676,7 +691,11 @@ async def managePatientDrugs(
                             update_data["status"] = status.title()
                         if frequency:
                             update_data["frequency"] = frequency
-                        
+                        if comments:
+                            update_data["comments"] = comments
+                        elif directions:
+                            update_data["comments"] = directions
+
                         response = await client.put(f"/patients/{patient_id}/supplements/{record_id}", data=update_data)
                         
                         if response.get("supplements"):
@@ -721,9 +740,30 @@ async def managePatientDrugs(
                         if response.get("medications"):
                             response["guidance"] = f"Medication {record_id} discontinued. Patient should stop taking this medication. Document discontinuation reason in next encounter with manageEncounter()."
                     else:
-                        # Set supplement to inactive
-                        response = await client.put(f"/patients/{patient_id}/supplements/{record_id}", data={"status": "Inactive"})
-                        
+                        # GET current supplement to carry supplement_name — API rejects the PUT without it
+                        current_resp = await client.get(f"/patients/{patient_id}/supplements")
+                        current_supps = current_resp.get("supplements", [])
+                        current_supp = next(
+                            (
+                                s for s in current_supps
+                                if str(s.get("supplement_id") or s.get("patient_supplement_id")) == str(record_id)
+                            ),
+                            None,
+                        )
+                        if not current_supp:
+                            return {
+                                "error": f"Supplement record {record_id} not found",
+                                "guidance": "Use action='list' to verify the record_id exists for this patient."
+                            }
+
+                        response = await client.put(
+                            f"/patients/{patient_id}/supplements/{record_id}",
+                            data={
+                                "supplement_name": current_supp.get("supplement_name", ""),
+                                "status": "Inactive",
+                            },
+                        )
+
                         if response.get("supplements"):
                             response["guidance"] = f"Supplement {record_id} discontinued. This supplement is no longer part of the patient's active regimen."
                     
