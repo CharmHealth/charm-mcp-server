@@ -17,7 +17,7 @@ An [MCP](https://modelcontextprotocol.io/) server for CharmHealth EHR that allow
 
 ## Features
 
-The server provides **15 comprehensive tools** for complete EHR functionality:
+The server provides **17 comprehensive tools** for complete EHR functionality:
 
 - **Encounter Management**: Complete SOAP note workflow and clinical findings
 - **Patient Search & Records**: Advanced patient search with demographics, location, and medical criteria
@@ -34,6 +34,8 @@ The server provides **15 comprehensive tools** for complete EHR functionality:
 - **Practice Setup**: Facilities, providers, and vital sign templates
 - **Appointment Management**: Complete appointment lifecycle with scheduling and rescheduling
 - **Task Management**: Complete task lifecycle
+- **Patient Messaging**: Secure portal, SMS, and WhatsApp messaging with conversation threads
+- **Fax**: Send faxes and track delivery status
 
 ## Quick Start
 
@@ -325,7 +327,7 @@ For other MCP clients, configure them to run the server using:
 
 ## Available Tools
 
-The server provides **14 comprehensive tools** for complete EHR functionality:
+The server provides **17 comprehensive tools** for complete EHR functionality:
 
 ### Patient and Encounter Management (12 tools)
 
@@ -346,6 +348,15 @@ The server provides **14 comprehensive tools** for complete EHR functionality:
 
 - **`getPracticeInfo`** - Get essential practice information including available facilities, providers, and vital signs templates.
 - **`manageAppointments`** - Complete appointment lifecycle management including scheduling, rescheduling, cancellation, and flexible filtering.
+
+### Communication (2 tools)
+
+- **`manageMessages`** - Patient messaging across secure portal, SMS, and WhatsApp channels. Send messages, list portal inbox/sent, and retrieve full conversation threads per patient. Secure portal messages reach the patient's PHR.
+- **`manageFax`** - Send faxes for clinical documents, referrals, and records, and check delivery status.
+
+### Task Management (1 tool)
+
+- **`manageTasks`** - Complete task lifecycle management including creating, updating, listing, and changing the status of practice tasks.
 
 ## Health Check
 
@@ -400,7 +411,7 @@ charm-mcp-server/
 │   │   └── api_client.py            # CharmHealth API client
 │   ├── tools/
 │   │   ├── __init__.py
-│   │   └── charm_mcp_tools.py       # All 14 MCP tools
+│   │   └── *.py                     # All 17 MCP tools, grouped by sub-server
 │   ├── common/
 │   │   ├── __init__.py
 │   │   └── utils.py                 # Utility helpers
