@@ -120,7 +120,9 @@ async def managePatient(
     send_phr_invite: Optional[bool] = False,
     duplicate_check: Optional[bool] = True,
     update_specific_details: Optional[bool] = True,
-    
+
+    response_format: Optional[Literal["concise", "detailed"]] = None,  # reserved for cortex; no behavior change yet (J13/CH-695)
+
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """
@@ -684,6 +686,9 @@ async def reviewPatientHistory(
     supplement_status_filter: Optional[str] = None,
     vitals_limit: Optional[int] = None,
     encounters_limit: Optional[int] = None,
+
+    response_format: Optional[Literal["concise", "detailed"]] = None,  # reserved for cortex; no behavior change yet (J13/CH-695)
+
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """

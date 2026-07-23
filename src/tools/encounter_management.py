@@ -35,6 +35,8 @@ async def manageEncounter(
     per_page: Optional[int] = None,
     page: Optional[int] = None,
 
+    response_format: Optional[Literal["concise", "detailed"]] = None,  # reserved for cortex; no behavior change yet (J13/CH-695)
+
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """

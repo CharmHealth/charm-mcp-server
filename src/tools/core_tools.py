@@ -48,7 +48,9 @@ async def findPatients(
     sort_by: Optional[Literal["name", "created_date", "modified_date"]] = "name",
     sort_order: Optional[Literal["asc", "desc"]] = "asc",
     page: Optional[int] = 1,
-    
+
+    response_format: Optional[Literal["concise", "detailed"]] = None,  # reserved for cortex; no behavior change yet (J13/CH-695)
+
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """

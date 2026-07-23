@@ -605,7 +605,9 @@ async def managePatientLabs(
     no_of_records: Optional[int] = None,
     sort_by: Optional[Literal["DATE", "FULL_NAME"]] = None,
     is_ascending: Optional[bool] = None,
-    
+
+    response_format: Optional[Literal["concise", "detailed"]] = None,  # reserved for cortex; no behavior change yet (J13/CH-695)
+
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """
