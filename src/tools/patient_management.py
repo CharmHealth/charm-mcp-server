@@ -391,11 +391,16 @@ async def managePatient(
                         patient_data["duplicate_check"] = duplicate_check
                     
                     response = await client.post("/patients", data=patient_data)
-                    
+
                     if response.get("patient"):
                         new_patient_id = response["patient"].get("patient_id")
+                        # Canonical display-name field (additive, J13/CH-695):
+                        # this response mirrors GET /patients/{id}, which
+                        # already returns full_name (persisted, server-computed).
+                        if "full_name" in response["patient"]:
+                            response["patient"].setdefault("patient_name", response["patient"]["full_name"])
                         response["guidance"] = f"Patient created successfully with ID: {new_patient_id}. Complete demographic and social history captured. Use reviewPatientHistory('{new_patient_id}') to view full details or manageAppointments() to schedule their first visit."
-                    
+
                     return strip_empty_values(response)
                     
                 case "update":
@@ -629,11 +634,15 @@ async def managePatient(
                         patient_data["duplicate_check"] = duplicate_check
                     
                     response = await client.put(f"/patients/{patient_id}", data=patient_data)
-                    
+
                     if response.get("patient"):
+                        # Canonical display-name field (additive, J13/CH-695) —
+                        # same rationale as the "create" action above.
+                        if "full_name" in response["patient"]:
+                            response["patient"].setdefault("patient_name", response["patient"]["full_name"])
                         update_mode = "specific fields" if update_specific_details else "complete record"
                         response["guidance"] = f"Patient {patient_id} updated successfully ({update_mode}). Use reviewPatientHistory('{patient_id}') to see the updated information."
-                    
+
                     return strip_empty_values(response)
                     
                 case "activate":

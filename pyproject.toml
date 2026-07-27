@@ -15,6 +15,12 @@ dependencies = [
     "prometheus-client>=0.20.0"
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -23,3 +29,7 @@ build-backend = "setuptools.build_meta"
 package-dir = {"" = "src"}
 packages = { find = { where = ["src"] } }
 py-modules = ["mcp_server"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -230,7 +230,15 @@ async def findPatients(
                     params["is_phr_account_available"] = has_phr_account
             
             response = await client.get("/patients", params=params)
-            
+
+            # Canonical display-name field (additive, J13/CH-695): /patients
+            # already returns full_name (persisted, server-computed) per
+            # patient — just expose it under the name cortex's entity-cache
+            # convention expects too, without touching the existing field.
+            for _patient in response.get("patients") or []:
+                if isinstance(_patient, dict) and "full_name" in _patient:
+                    _patient.setdefault("patient_name", _patient["full_name"])
+
             # Enhanced response with intelligent guidance
             if response.get("patients"):
                 patient_count = len(response["patients"])
@@ -372,7 +380,18 @@ async def getPracticeInfo(
     ) as client:
         try:
             result = {"practice_info_type": info_type}
-            
+
+            def _add_provider_name(providers: list) -> list:
+                # Canonical display-name field (additive, J13/CH-695):
+                # /members already returns full_name (persisted,
+                # server-computed) per provider — expose it under the name
+                # cortex's entity-cache convention expects too, without
+                # touching the existing field.
+                for provider in providers:
+                    if isinstance(provider, dict) and "full_name" in provider:
+                        provider.setdefault("provider_name", provider["full_name"])
+                return providers
+
             # Use match for single-purpose info types, handle overview separately
             match info_type:
                 case "facilities":
@@ -382,7 +401,7 @@ async def getPracticeInfo(
                 case "providers":
                     # Get providers (members with sign encounter privilege)
                     providers_response = await client.get("/members", params={"privilege": "sign_encounter"})
-                    result["providers"] = providers_response.get("members", [])
+                    result["providers"] = _add_provider_name(providers_response.get("members", []))
                     result["guidance"] = "Use provider IDs (member_id) from this list when scheduling appointments or documenting encounters. Only providers with 'sign_encounter' privilege can sign clinical documentation."
                 case "vitals":
                     vitals_response = await client.get("/vitals/metrics")
@@ -395,7 +414,7 @@ async def getPracticeInfo(
                     result["facility_count"] = len(result["facilities"])
 
                     providers_response = await client.get("/members", params={"privilege": "sign_encounter"})
-                    result["providers"] = providers_response.get("members", [])
+                    result["providers"] = _add_provider_name(providers_response.get("members", []))
                     result["provider_count"] = len(result["providers"])
 
                     vitals_response = await client.get("/vitals/metrics")

@@ -490,6 +490,16 @@ async def managePatientDrugs(
                             supps = response.get("supplements", [])
                             total_count = len(supps)
 
+                            # Canonical display-name field (additive,
+                            # J13/CH-695): supplements use supplement_name
+                            # instead of drug_name — cortex's entity-cache
+                            # convention only looks for drug_name for this
+                            # entity type, so expose it here too rather than
+                            # teaching cortex a second field name.
+                            for s in supps:
+                                if isinstance(s, dict) and "supplement_name" in s:
+                                    s.setdefault("drug_name", s["supplement_name"])
+
                             wrappers = []
                             for s in supps:
                                 derived_status = str((s or {}).get("status", "")).casefold()
