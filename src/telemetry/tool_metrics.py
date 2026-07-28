@@ -1,7 +1,9 @@
 import functools
+import json
 import time
 import logging
 from typing import Dict, Any, Callable, Optional
+from fastmcp.exceptions import ToolError
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 from .telemetry_config import telemetry
@@ -74,8 +76,6 @@ def with_tool_metrics(tool_name: Optional[str] = None):
 
                     _record_tool_completion_metrics(actual_tool_name, client_id, start_time, status, is_success)
 
-                    return result
-
                 except Exception as e:
                     client_id = current_client_id.get('unknown')
 
@@ -86,6 +86,11 @@ def with_tool_metrics(tool_name: Optional[str] = None):
                     _record_tool_completion_metrics(actual_tool_name, client_id, start_time, "error", False)
                     logger.error(f"Tool {actual_tool_name} failed with exception: {e}")
                     raise
+                else:
+                    # J13/CH-695: isError flag
+                    if isinstance(result, dict) and "error" in result:
+                        raise ToolError(json.dumps(result, indent=2))
+                    return result
                 finally:
                     # Clear the initial gauge entry if client_id changed mid-call
                     if client_id != initial_client_id:

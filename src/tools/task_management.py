@@ -201,6 +201,22 @@ async def manageTasks(
                     tasks = response.get("tasks") or []
                     total_count = len(tasks)
 
+                    # Canonical flat owner_id/owner_name fields (additive,
+                    # J13/CH-695): /tasks returns owner as a nested object
+                    # ({member_id, full_name, prefix}), not flat fields —
+                    # but manageTasks' own "add"/"update" actions accept a
+                    # flat owner_id argument, and cortex's entity-cache
+                    # convention expects flat owner_id/owner_name too. Add
+                    # both alongside the existing nested "owner" object
+                    # (left untouched) rather than replacing it.
+                    for task in tasks:
+                        owner = task.get("owner") if isinstance(task, dict) else None
+                        if isinstance(owner, dict):
+                            if "member_id" in owner:
+                                task.setdefault("owner_id", str(owner["member_id"]))
+                            if "full_name" in owner:
+                                task.setdefault("owner_name", owner["full_name"])
+
                     def _normalize_priority(p: Optional[str]) -> Optional[str]:
                         if p is None:
                             return None

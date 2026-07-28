@@ -35,6 +35,8 @@ async def manageEncounter(
     per_page: Optional[int] = None,
     page: Optional[int] = None,
 
+    response_format: Optional[Literal["concise", "detailed"]] = None,  # reserved for cortex; no behavior change yet (J13/CH-695)
+
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """
@@ -188,6 +190,10 @@ async def manageEncounter(
                         "encounter_id": found_encounter.get("encounter_id"),
                         "encounter_date": found_encounter.get("date"),  # Changed from encounter_date
                         "provider": found_encounter.get("physician_name"),  # Changed from provider_name
+                        # Canonical display-name field (additive, J13/CH-695):
+                        # same source as "provider" above, just under the key
+                        # cortex's entity-cache convention expects.
+                        "provider_name": found_encounter.get("physician_name"),
                         "facility": found_encounter.get("facility_id"),  # Note: This is ID not name
                         "encounter_mode": found_encounter.get("appointment_mode"),  # Changed from encounter_mode
                         "visit_type": found_encounter.get("visit_name"),  # Changed from visit_type
