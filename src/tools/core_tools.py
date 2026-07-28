@@ -396,34 +396,34 @@ async def getPracticeInfo(
             match info_type:
                 case "facilities":
                     facilities_response = await client.get("/facilities")
-                    result["facilities"] = facilities_response.get("facilities", [])
+                    result["facilities"] = facilities_response.get("facilities") or []
                     result["guidance"] = "Use facility IDs from this list when scheduling appointments or creating encounters. Each patient must be assigned to at least one facility."
                 case "providers":
                     # Get providers (members with sign encounter privilege)
                     providers_response = await client.get("/members", params={"privilege": "sign_encounter"})
-                    result["providers"] = _add_provider_name(providers_response.get("members", []))
+                    result["providers"] = _add_provider_name(providers_response.get("members") or [])
                     result["guidance"] = "Use provider IDs (member_id) from this list when scheduling appointments or documenting encounters. Only providers with 'sign_encounter' privilege can sign clinical documentation."
                 case "vitals":
                     vitals_response = await client.get("/vitals/metrics")
-                    result["available_vitals"] = vitals_response.get("vitals", [])
+                    result["available_vitals"] = vitals_response.get("vitals") or []
                     result["guidance"] = "Use these vital sign names when documenting patient vitals in encounters. Common vitals include Weight, Height, Blood Pressure, Pulse Rate, Temperature."
                 case "overview":
                     # Get all data for overview
                     facilities_response = await client.get("/facilities")
-                    result["facilities"] = facilities_response.get("facilities", [])
+                    result["facilities"] = facilities_response.get("facilities") or []
                     result["facility_count"] = len(result["facilities"])
 
                     providers_response = await client.get("/members", params={"privilege": "sign_encounter"})
-                    result["providers"] = _add_provider_name(providers_response.get("members", []))
+                    result["providers"] = _add_provider_name(providers_response.get("members") or [])
                     result["provider_count"] = len(result["providers"])
 
                     vitals_response = await client.get("/vitals/metrics")
-                    result["available_vitals"] = vitals_response.get("vitals", [])
+                    result["available_vitals"] = vitals_response.get("vitals") or []
                     result["vital_types_count"] = len(result["available_vitals"])
 
                     try:
                         templates_response = await client.get("/templates", params={"template_filter": "all_templates", "per_page": 100})
-                        result["templates"] = templates_response.get("templates", [])
+                        result["templates"] = templates_response.get("templates") or []
                         result["template_count"] = len(result["templates"])
                     except Exception as e:
                         logger.warning(f"Could not fetch templates in overview: {e}")
@@ -434,7 +434,7 @@ async def getPracticeInfo(
 
                 case "templates":
                     templates_response = await client.get("/templates", params={"template_filter": "all_templates", "per_page": 100})
-                    result["templates"] = templates_response.get("templates", [])
+                    result["templates"] = templates_response.get("templates") or []
                     result["template_count"] = len(result["templates"])
                     result["guidance"] = "Use template_id values from this list with info_type='template_details' to fetch full entry schemas. Filter by template_type (e.g. 'SOAP', 'Chief Complaints', 'Symptoms', 'Physical Examination', 'Assessment Notes', 'Diagnosis') to find relevant templates."
 
@@ -445,7 +445,7 @@ async def getPracticeInfo(
                             "guidance": "Provide comma-separated template IDs. Use info_type='templates' first to get available template IDs."
                         }
                     soap_response = await client.get("/soap/templates", params={"template_ids": template_ids})
-                    result["soap_templates"] = soap_response.get("soap_templates", [])
+                    result["soap_templates"] = soap_response.get("soap_templates") or []
                     result["guidance"] = "Each soap_template contains soap_templates_inner (widget placements) → soap_widgets → soap_widget_entries. Use entry_id values when populating entries in manageEncounter(action='update'). Entry types: 'Simple Question'/'Text Box'/'Radio' → free text; 'Yes/No Question' → 'Yes' or 'No'; 'Header' → skip (display only)."
             
             logger.info(f"getPracticeInfo completed for {info_type}")

@@ -615,8 +615,11 @@ async def managePatientDrugs(
                                 supplement_data[0]["comments"] = directions
                         
                         response = await client.post(f"/patients/{patient_id}/supplements", data=supplement_data)
-                        
+
                         if response.get("supplements"):
+                            for s in response["supplements"]:
+                                if isinstance(s, dict) and "supplement_name" in s:
+                                    s.setdefault("drug_name", s["supplement_name"])
                             response["guidance"] = f"Supplement '{drug_name}' documented successfully. This will appear in the patient's medication list for reference during prescribing."
                     
                     return strip_empty_values(response)
@@ -707,8 +710,11 @@ async def managePatientDrugs(
                             update_data["comments"] = directions
 
                         response = await client.put(f"/patients/{patient_id}/supplements/{record_id}", data=update_data)
-                        
+
                         if response.get("supplements"):
+                            for s in response["supplements"]:
+                                if isinstance(s, dict) and "supplement_name" in s:
+                                    s.setdefault("drug_name", s["supplement_name"])
                             response["guidance"] = f"Supplement {record_id} updated successfully. Changes are reflected in the patient's supplement list."
                     
                     return strip_empty_values(response)
@@ -775,6 +781,9 @@ async def managePatientDrugs(
                         )
 
                         if response.get("supplements"):
+                            for s in response["supplements"]:
+                                if isinstance(s, dict) and "supplement_name" in s:
+                                    s.setdefault("drug_name", s["supplement_name"])
                             response["guidance"] = f"Supplement {record_id} discontinued. This supplement is no longer part of the patient's active regimen."
                     
                     return strip_empty_values(response)

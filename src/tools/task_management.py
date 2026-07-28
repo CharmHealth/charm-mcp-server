@@ -213,7 +213,7 @@ async def manageTasks(
                         owner = task.get("owner") if isinstance(task, dict) else None
                         if isinstance(owner, dict):
                             if "member_id" in owner:
-                                task.setdefault("owner_id", owner["member_id"])
+                                task.setdefault("owner_id", str(owner["member_id"]))
                             if "full_name" in owner:
                                 task.setdefault("owner_name", owner["full_name"])
 
