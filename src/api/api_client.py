@@ -199,6 +199,13 @@ class CharmHealthAPIClient:
                     response = await self._client.get(endpoint, params=params, headers=headers, timeout=self.timeout)
                 case "POST":
                     response = await self._client.post(endpoint, json=data, params=params, headers=headers, timeout=self.timeout)
+                case "POST_FORM":
+                    # Some endpoints (e.g. billing statement send) bind their body as a named
+                    # request parameter (<param type="JSONObject">), not a raw JSON body
+                    # (<inputstream>) — those need application/x-www-form-urlencoded, not
+                    # application/json, or the framework never resolves the parameter.
+                    form_headers = {**headers, "Content-Type": "application/x-www-form-urlencoded"}
+                    response = await self._client.post(endpoint, data=data, params=params, headers=form_headers, timeout=self.timeout)
                 case "PUT":
                     response = await self._client.put(endpoint, json=data, params=params, headers=headers, timeout=self.timeout)
                 case "DELETE":
@@ -266,6 +273,10 @@ class CharmHealthAPIClient:
     async def post(self, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Make a POST request."""
         return await self._make_request('POST', endpoint, data=data, params=params)
+
+    async def post_form(self, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict[str, Any]:
+        """Make a POST request with an application/x-www-form-urlencoded body."""
+        return await self._make_request('POST_FORM', endpoint, data=data, params=params)
         
     async def put(self, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Make a PUT request."""

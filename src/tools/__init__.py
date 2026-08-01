@@ -48,6 +48,16 @@ from .communication import (
     manageFax
 )
 
+from .intake_forms import (
+    intake_forms_mcp,
+    manageIntakeForms
+)
+
+from .billing import (
+    billing_mcp,
+    managePatientBilling
+)
+
 __all__ = [
     "core_tools_mcp",
     "patient_management_mcp",
@@ -73,5 +83,9 @@ __all__ = [
     "manageTasks",
     "communication_mcp",
     "manageMessages",
-    "manageFax"
+    "manageFax",
+    "intake_forms_mcp",
+    "manageIntakeForms",
+    "billing_mcp",
+    "managePatientBilling"
 ]

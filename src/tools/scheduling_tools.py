@@ -244,7 +244,11 @@ async def manageAppointments(
                         reschedule_data["message_to_patient"] = message_to_patient
                     if resource_id:
                         reschedule_data["resource_id"] = resource_id
-                    
+                    if questionnaire:
+                        reschedule_data["questionnaire"] = questionnaire
+                    if consent_forms:
+                        reschedule_data["consent_forms"] = consent_forms
+
                     response = await client.post(f"/appointment/{appointment_id}/reschedule", data=reschedule_data)
                     
                     if response.get("output_string"):
