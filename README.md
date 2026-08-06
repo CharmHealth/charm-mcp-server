@@ -17,7 +17,7 @@ An [MCP](https://modelcontextprotocol.io/) server for CharmHealth EHR that allow
 
 ## Features
 
-The server provides **17 comprehensive tools** for complete EHR functionality:
+The server provides **16 comprehensive tools** for complete EHR functionality:
 
 - **Encounter Management**: Complete SOAP note workflow and clinical findings
 - **Patient Search & Records**: Advanced patient search with demographics, location, and medical criteria
@@ -327,7 +327,7 @@ For other MCP clients, configure them to run the server using:
 
 ## Available Tools
 
-The server provides **17 comprehensive tools** for complete EHR functionality:
+The server provides **16 comprehensive tools** for complete EHR functionality:
 
 ### Patient and Encounter Management (12 tools)
 
@@ -349,10 +349,9 @@ The server provides **17 comprehensive tools** for complete EHR functionality:
 - **`getPracticeInfo`** - Get essential practice information including available facilities, providers, and vital signs templates.
 - **`manageAppointments`** - Complete appointment lifecycle management including scheduling, rescheduling, cancellation, and flexible filtering.
 
-### Communication (2 tools)
+### Communication (1 tool)
 
 - **`manageMessages`** - Patient messaging across secure portal, SMS, and WhatsApp channels. Send messages, list portal inbox/sent, and retrieve full conversation threads per patient. Secure portal messages reach the patient's PHR.
-- **`manageFax`** - Send faxes for clinical documents, referrals, and records, and check delivery status.
 
 ### Task Management (1 tool)
 
@@ -411,7 +410,7 @@ charm-mcp-server/
 │   │   └── api_client.py            # CharmHealth API client
 │   ├── tools/
 │   │   ├── __init__.py
-│   │   └── *.py                     # All 17 MCP tools, grouped by sub-server
+│   │   └── *.py                     # All 16 MCP tools, grouped by sub-server
 │   ├── common/
 │   │   ├── __init__.py
 │   │   └── utils.py                 # Utility helpers
