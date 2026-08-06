@@ -44,8 +44,7 @@ from .task_management import (
 
 from .communication import (
     communication_mcp,
-    manageMessages,
-    manageFax
+    manageMessages
 )
 
 from .intake_forms import (
@@ -83,7 +82,6 @@ __all__ = [
     "manageTasks",
     "communication_mcp",
     "manageMessages",
-    "manageFax",
     "intake_forms_mcp",
     "manageIntakeForms",
     "billing_mcp",
