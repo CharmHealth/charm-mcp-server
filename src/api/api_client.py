@@ -178,22 +178,26 @@ class CharmHealthAPIClient:
                 logger.error(f"Failed to refresh token: {e} with response: {response.text}")
                 raise
     
-    async def _make_request(self, method: str, endpoint: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None, retry_count: int = 0) -> Dict[str, Any]:
+    async def _make_request(self, method: str, endpoint: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None, retry_count: int = 0, auth_retried: bool = False) -> Dict[str, Any]:
         logger.info(f"Making {method} request to {endpoint}")
         await self.ensure_client()
-        headers = await self._get_auth_headers()
         start_time = time.time()
-        
+
         # Remove any IDs from endpoint for metrics (an ID is an 18 digit number either between / and / or at the end)
         clean_endpoint = re.sub(r'/[0-9]{18}$', '', endpoint)
         clean_endpoint = re.sub(r'/[0-9]{18}/', '/', clean_endpoint)
-        
+
         # Mark API call as starting
         start_api_call(self.client_id, clean_endpoint, method)
-        
+
         api_success = False
-        
+
         try:
+            # Inside the try (not before it) so a failed refresh — e.g. a dead
+            # refresh_token — is caught below and returned as a clean error,
+            # instead of propagating as an unhandled exception that skips the
+            # metrics recording and shows up to the caller as a raw ValueError.
+            headers = await self._get_auth_headers()
             match method:
                 case "GET":
                     response = await self._client.get(endpoint, params=params, headers=headers, timeout=self.timeout)
@@ -227,8 +231,17 @@ class CharmHealthAPIClient:
             duration = time.time() - start_time
             record_api_call(self.client_id, False, clean_endpoint, method, duration)
             
-            if e.response.status_code == 401 and retry_count < self.max_retries:
-                logger.warning("Received 401, forcing token refresh")
+            if e.response.status_code == 401 and not auth_retried:
+                # Refresh and retry exactly once per request, regardless of max_retries.
+                # A 401 that survives a *freshly refreshed* token means the token was
+                # never the problem (e.g. the account's OAuth grant lacks the scope this
+                # endpoint needs) — retrying up to max_retries times would just repeat
+                # that same failure while repeatedly wiping the shared token cache
+                # (_shared_token_cache is keyed by client_id+refresh_token, so it's shared
+                # by every other in-flight call using the same credentials) for no benefit,
+                # and risks compounding a real refresh-token problem if the one refresh
+                # this does perform also fails.
+                logger.warning("Received 401, forcing a single token refresh and retry")
                 self._auth_token = None
                 self._token_expires_at = 0
                 try:
@@ -236,26 +249,27 @@ class CharmHealthAPIClient:
                     self.__class__._shared_token_cache.pop(key, None)
                 except Exception:
                     pass
-                return await self._make_request(method, endpoint, params, data, retry_count + 1)
+                return await self._make_request(method, endpoint, params, data, retry_count, auth_retried=True)
             logger.error(f"HTTP error {e.response.status_code}: {e}")
             logger.error(f"Response body: {e.response.text}")
             return {"error": f"HTTP {e.response.status_code}: {e.response.text}"}
-            
+
         except httpx.RequestError as e:
             # Record failed API call
             duration = time.time() - start_time
             record_api_call(self.client_id, False, clean_endpoint, method, duration)
-            
+
             if retry_count < self.max_retries:
                 logger.warning(f"Request failed, retrying ({retry_count + 1}/{self.max_retries}): {e}")
                 await asyncio.sleep(2 ** retry_count)
-                return await self._make_request(method, endpoint, params, data, retry_count + 1)
-            
+                return await self._make_request(method, endpoint, params, data, retry_count + 1, auth_retried)
+
             logger.error(f"Request failed after {self.max_retries} retries: {e}")
             return {"error": f"Request failed: {e}"}
-            
+
         except Exception as e:
-            # Record failed API call
+            # Record failed API call (also catches a failed token refresh from
+            # _get_auth_headers() above, now that it runs inside this try)
             duration = time.time() - start_time
             record_api_call(self.client_id, False, clean_endpoint, method, duration)
             logger.error(f"Unexpected error: {e}")
