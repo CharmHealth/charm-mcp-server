@@ -336,14 +336,57 @@ async def managePatientVitals(
                 "guidance": f"Vitals {action} failed. Ensure patient_id and encounter_id are valid. Use getPracticeInfo(info_type='vitals') to verify vital naming conventions."
             }
 
+# Real CharmHealth backend enums for route/dose_form/dosage_unit (confirmed against
+# security-api-charts.xml's drugRoute/drugDoseForm/drugDosageUnit regexes) — the real API
+# rejects anything outside these sets, so validating here catches a bad value before the call.
+DRUG_ROUTES = (
+    "buccal", "compounding", "enteral", "extra-amniotic", "implant", "inhalation", "injectable",
+    "intra-amniotic", "intra-articular", "intrabiliary", "intradermal", "intralymphatic",
+    "intramuscular", "intraocular", "intraperitoneal", "intrapleural", "intrathecal",
+    "intratracheal", "intrauteral", "intravenous", "intravesical", "intravitreal", "irrigation",
+    "mucous membrane", "nasal", "ophthalmic", "oral", "oral and injectable", "oral and rectal",
+    "oral and topical", "oral transmucosal", "otic", "parenteral", "percutaneous", "rectal",
+    "spinal", "subcutaneous", "sublingual", "topical", "transdermal", "transurethral", "vaginal",
+)
+
+DRUG_DOSE_FORMS = (
+    "aerosol", "aerosol powder", "aerosol with adapter", "bar", "capsule",
+    "capsule, extended release", "concentrate", "cream", "cream with applicator", "crystal",
+    "delayed release capsule", "delayed release tablet", "device", "disintegrating strip",
+    "dispersion", "dressing", "drops", "elixir", "emulsion", "enema", "enteric coated tablet",
+    "film", "film, extended release", "foam", "foam with applicator", "gas", "gel",
+    "gel forming solution", "gel with applicator", "gelcap", "granule",
+    "granule for reconstitution", "granule, effervescent", "granule, enteric coated",
+    "granule, extended release", "gum", "implant", "injection", "insert", "kit", "liquid",
+    "liquid, extended release", "lotion", "lozenge", "oil", "ointment", "ointment w/applicator",
+    "pad", "paste", "powder", "powder for injection", "powder for injection, extended release",
+    "powder for reconstitution", "powder for reconstitution, delayed release",
+    "powder for reconstitution, extended release", "ring", "shampoo", "soap", "solution",
+    "sponge", "spray", "stick", "suppository", "suspension", "suspension, extended release",
+    "swab", "syrup", "tablet", "tablet, chewable", "tablet, chewable, extended release",
+    "tablet, coated particles", "tablet, disintegrating", "tablet, disintegrating, extended release",
+    "tablet, dispersible", "tablet, effervescent", "tablet, extended release", "tablet, soluble",
+    "tampon", "tape", "test", "tincture", "wafer",
+)
+
+DRUG_DOSAGE_UNITS = (
+    "tablet(s)", "capsule(s)", "ml", "application", "spray(s)", "mg", "mcg", "gram", "drop(s)",
+    "teaspoon", "tablespoon", "spray", "unit(s)", "IU", "puff(s)", "mg/g", "mg/ml", "mg/gk",
+    "mg/m2", "mcg/kg", "mcg/m2", "mEq", "mEq/kg", "Tbsp", "tsp", "inhalation(s)", "neb(s)",
+    "gtt(s)", "supp(s)", "applicatorful", "cartridge(s)", "cloth(s)", "device(s)", "kit(s)", "L",
+    "lozenge(s)", "mask(s)", "ng", "pack(s)", "packet(s)", "pad", "patch(es)", "piece(s)",
+    "ring(s)", "strip(s)", "system(s)", "troche(s)", "vial(s)", "units/kg", "units/m2", "wafer(s)",
+)
+
+
 @clinical_data_mcp.tool
 @with_tool_metrics()
 async def managePatientDrugs(
-    action: Literal["add", "update", "discontinue", "list"],
+    action: Literal["add", "prescribe", "update", "discontinue", "list"],
     patient_id: str,
     substance_type: Literal["medication", "supplement", "vitamin"] = "medication",
     record_id: Optional[str] = None,
-    
+
     # Common drug fields
     drug_name: Optional[str] = None,
     dosage: Optional[str] = None,
@@ -355,11 +398,11 @@ async def managePatientDrugs(
     end_date: Optional[date] = None,
     status: Optional[Literal["active", "inactive"]] = "active",
     encounter_id: Optional[str] = None,
-    
+
     # Additional supplement fields
-    route: Optional[str] = None,
-    dose_form: Optional[str] = None,
-    dosage_unit: Optional[str] = None,
+    route: Optional[Literal[DRUG_ROUTES]] = None,
+    dose_form: Optional[Literal[DRUG_DOSE_FORMS]] = None,
+    dosage_unit: Optional[Literal[DRUG_DOSAGE_UNITS]] = None,
     quantity: Optional[int] = None,
     intake_type: Optional[str] = None,
     comments: Optional[str] = None,
@@ -385,7 +428,8 @@ async def managePatientDrugs(
     
     <instructions>
     Actions:
-    - "add": Prescribe new drug (requires drug_name, directions for medications; drug_name, dosage for supplements)
+    - "add": Log a drug (medication/supplement/vitamin) the patient takes — no encounter tie required. Requires drug_name, directions for medications; drug_name, dosage for supplements.
+    - "prescribe": Same as "add" but for medication only, and REQUIRES encounter_id — this is what actually marks it as a prescription written during a visit rather than a medication-history log entry. Use this, not "add", when a clinician is writing a new prescription during an encounter. There is no lookup action here to discover real catalog values (drug_details_id, generic_drug_id, etc.) — the practice's drug-catalog lookup endpoint (GET /drug/search) requires an OAuth scope this app's credentials don't carry, confirmed via live testing, not fixable from this tool. drug_name is plain free text; a bad/unmatched name may be rejected by the real API as a catalog mismatch — that's expected, not a bug here.
     - "update": Modify existing prescription (requires record_id + fields to change). IMPORTANT: drug name and strength CANNOT be changed via update — use discontinue + add instead. Updatable fields: directions, dispense, refills, status.
     - "discontinue": Stop drug (requires record_id)
     - "list": Show all patient drugs by type (filter by substance_type, optionally filter by status)
@@ -401,6 +445,8 @@ async def managePatientDrugs(
     - limit: e.g., limit=25
     For medications: Use clear directions like "Take 1 tablet by mouth twice daily with food"
     For supplements: Provide dosage as integer (e.g., 5) and use strength for units (e.g., "500mg")
+    route/dose_form/dosage_unit must be one of CharmHealth's fixed catalog values (e.g. route="oral", dose_form="tablet", dosage_unit="mg") — invalid values are rejected before the API is called.
+    quantity sets the dispense amount for a medication (e.g. quantity=90 for "dispense 90 tablets"); defaults to a 30-day supply if omitted.
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -444,7 +490,7 @@ async def managePatientDrugs(
     ) as client:
         try:
             # Safety check: Review allergies before prescribing
-            if action == "add" and check_allergies:
+            if action in ("add", "prescribe") and check_allergies:
                 allergy_response = await client.get(f"/patients/{patient_id}/allergies")
                 if allergy_response.get("allergies"):
                     allergies = allergy_response["allergies"]
@@ -521,8 +567,8 @@ async def managePatientDrugs(
                             )
                     
                     return strip_empty_values(response)
-                    
-                case "add":
+
+                case "add" | "prescribe":
                     if substance_type == "medication":
                         # Prescription medication
                         required = [drug_name, directions]
@@ -531,19 +577,30 @@ async def managePatientDrugs(
                                 "error": "Missing required fields for medication",
                                 "guidance": "For medications, provide: drug_name and directions. Example: drug_name='Lisinopril 10mg', directions='Take 1 tablet by mouth once daily'. Check allergies first with managePatientAllergies()."
                             }
-                        
+                        if action == "prescribe" and not encounter_id:
+                            return {
+                                "error": "encounter_id required for action='prescribe'",
+                                "guidance": "A prescription must be tied to the visit it was written during — pass the current encounter_id. To log a medication the patient already takes outside of a visit, use action='add' instead."
+                            }
+
                         med_data = [{
                             "drug_name": drug_name,
                             "is_active": status == "active",
                             "directions": directions,
-                            "dispense": 30.0,  # Default 30-day supply
+                            "dispense": float(quantity) if quantity else 30.0,  # Default 30-day supply
                             "refills": refills or "0",
                             "substitute_generic": True,
                             "manufacturing_type": "Manufactured"
                         }]
-                        
+
                         if strength:
                             med_data[0]["strength_description"] = strength
+                        if route:
+                            med_data[0]["route"] = route
+                        if dose_form:
+                            med_data[0]["dose_form"] = dose_form
+                        if dosage_unit:
+                            med_data[0]["dosage_unit"] = dosage_unit
                         if start_date:
                             med_data[0]["start_date"] = start_date.isoformat()
                         if end_date:
@@ -552,12 +609,19 @@ async def managePatientDrugs(
                             med_data[0]["encounter_id"] = int(encounter_id)
                         if comments:
                             med_data[0]["comments"] = comments
-                        
+
                         response = await client.post(f"/patients/{patient_id}/medications", data=med_data)
-                        
+
                         if response.get("medications"):
-                            response["guidance"] = f"Medication '{drug_name}' prescribed successfully. Monitor for allergic reactions and drug interactions. Use reviewPatientHistory() to see all current medications."
-                    
+                            verb = "prescribed" if action == "prescribe" else "added"
+                            response["guidance"] = f"Medication '{drug_name}' {verb} successfully. Monitor for allergic reactions and drug interactions. Use reviewPatientHistory() to see all current medications."
+
+                    elif action == "prescribe":
+                        return {
+                            "error": "action='prescribe' only applies to substance_type='medication'",
+                            "guidance": "Supplements/vitamins aren't prescriptions — use action='add' with substance_type='supplement' or 'vitamin' instead."
+                        }
+
                     else:
                         # Supplement/vitamin
                         required = [drug_name, dosage]
