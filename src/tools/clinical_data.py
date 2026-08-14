@@ -369,6 +369,14 @@ DRUG_DOSE_FORMS = (
     "tampon", "tape", "test", "tincture", "wafer",
 )
 
+# "mg/gk" (not "mg/kg") below looks like a transposition typo — it isn't. Re-verified
+# character-for-character against the real backend's drugDosageUnit regex
+# (security-api-charts.xml): the real API genuinely only accepts "mg/gk", not "mg/kg",
+# despite every sibling weight-based unit here (mcg/kg, mEq/kg, units/kg) following the
+# /kg pattern. This looks like a bug in CharmHealth's own enum, not ours — "fixing" it to
+# "mg/kg" here would make this tool reject the value the real API accepts and accept the
+# value it doesn't. Left as "mg/gk" deliberately; don't change without re-confirming
+# against that XML directly, not just eyeballing the pattern mismatch.
 DRUG_DOSAGE_UNITS = (
     "tablet(s)", "capsule(s)", "ml", "application", "spray(s)", "mg", "mcg", "gram", "drop(s)",
     "teaspoon", "tablespoon", "spray", "unit(s)", "IU", "puff(s)", "mg/g", "mg/ml", "mg/gk",

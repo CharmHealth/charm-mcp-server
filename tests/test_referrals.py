@@ -404,6 +404,24 @@ async def test_list_in_filter_params_use_confirmed_names(monkeypatch) -> None:
     }
 
 
+@pytest.mark.asyncio
+async def test_list_rejects_response_status_invalid_for_this_direction(monkeypatch) -> None:
+    """"Completed" is valid for direction="in" but not direction="out" (out's list set is
+    Pending/Reviewed/To Be Reviewed). Previously this validation was never run for "list"
+    at all — the invalid filter went straight to the API's query params, which would
+    silently produce a misleading empty result instead of a clear error."""
+    fake = _FakeAPIClient(get_responses={"/referrals/out": {"referralout": []}})
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await referrals.manageReferrals.fn(
+            action="list", direction="out", response_status="Completed",
+        )
+
+    assert "response_status" in json.loads(str(exc_info.value))["error"]
+    assert fake.get_calls == []
+
+
 # ── get ────────────────────────────────────────────────────────────────
 # CONFIRMED LIVE (2026-08-11): the response is NOT flat — fields nest one
 # level under "referral_out"/"referral_in", alongside "code"/"message".
@@ -486,6 +504,60 @@ async def test_update_out_merges_omitted_fields_from_existing_record(monkeypatch
     assert sent_body["patient_id"] == "p1"
     assert sent_body["referral_reason"] == "Follow-up"
     assert sent_body["response_status"] == "Pending"
+
+
+@pytest.mark.asyncio
+async def test_update_out_drops_response_status_invalid_for_update_from_merge(monkeypatch) -> None:
+    """The existing referral's response_status ("To Be Reviewed") was set by a prior
+    respond() call — valid for direction="out" action="respond", but NOT in update's own
+    narrower set (Pending/Received/Reviewed). The caller only wants to change priority and
+    never touched response_status — merging the existing value in unvalidated would send a
+    value update's own schema rejects, failing over a field the caller didn't ask about.
+    Must be dropped from the outgoing body instead."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": _get_out({
+                "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "from_member_id": "1", "to_internal_member_id": "2",
+                "referral_date": "2026-08-06", "priority": "Normal",
+                "response_status": "To Be Reviewed",
+            }),
+        },
+        put_responses={"/referrals/out/999": _mutation({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    await referrals.manageReferrals.fn(
+        action="update", direction="out", referral_id="999", priority="Urgent",
+    )
+
+    _, sent_body = fake.put_calls[0]
+    assert sent_body["priority"] == "Urgent"
+    assert "response_status" not in sent_body
+
+
+@pytest.mark.asyncio
+async def test_update_in_drops_response_status_invalid_for_update_from_merge(monkeypatch) -> None:
+    """Same fix, direction="in": "Completed" is valid for create/respond but not for
+    update's own set (Pending/Received/Reviewed)."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/in/999": _get_in({
+                "ref_in_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "to_member_id": "1", "referral_date": "2026-08-06",
+                "response_status": "Completed",
+            }),
+        },
+        put_responses={"/referrals/in/999": _mutation({"ref_in_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    await referrals.manageReferrals.fn(
+        action="update", direction="in", referral_id="999", priority="Urgent",
+    )
+
+    _, sent_body = fake.put_calls[0]
+    assert "response_status" not in sent_body
 
 
 @pytest.mark.asyncio

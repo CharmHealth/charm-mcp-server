@@ -192,12 +192,25 @@ class CharmHealthAPIClient:
 
         api_success = False
 
+        # Fetching headers is deliberately in its own try/except, separate from the
+        # request try/except below. _get_auth_headers() -> _refresh_token() can raise
+        # httpx.HTTPStatusError if the OAuth TOKEN endpoint itself returns a non-2xx
+        # (e.g. a 401 for a bad/rotated client_secret) — if that were allowed to reach
+        # the request try/except's `except httpx.HTTPStatusError as e:` clause below,
+        # `e.response` would be the OAuth server's response, not the target API's, and
+        # the status_code==401-triggers-a-refresh-and-retry logic there would wrongly
+        # fire a second, unwanted refresh for a problem a second refresh cannot fix
+        # (bad client_secret), plus mislabel the OAuth server's error as the target
+        # endpoint's. Catching it here first, before that logic ever sees it, avoids both.
         try:
-            # Inside the try (not before it) so a failed refresh — e.g. a dead
-            # refresh_token — is caught below and returned as a clean error,
-            # instead of propagating as an unhandled exception that skips the
-            # metrics recording and shows up to the caller as a raw ValueError.
             headers = await self._get_auth_headers()
+        except Exception as e:
+            duration = time.time() - start_time
+            record_api_call(self.client_id, False, clean_endpoint, method, duration)
+            logger.error(f"Token refresh failed while preparing request to {endpoint}: {e}")
+            return {"error": f"Token refresh failed: {e}"}
+
+        try:
             match method:
                 case "GET":
                     response = await self._client.get(endpoint, params=params, headers=headers, timeout=self.timeout)

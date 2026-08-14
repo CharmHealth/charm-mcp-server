@@ -110,6 +110,38 @@ async def test_failed_refresh_returns_clean_error_not_a_raised_exception():
     client._client.get.assert_not_awaited()
 
 
+async def test_refresh_endpoint_401_is_not_mistaken_for_the_target_apis_401():
+    """_refresh_token() posts to the OAuth TOKEN endpoint and calls
+    response.raise_for_status() there — if that endpoint itself returns a 401 (e.g. a
+    bad/rotated client_secret), it raises httpx.HTTPStatusError same as the target API
+    would. Fetching headers must be isolated from the target-request try/except: letting
+    this reach that except httpx.HTTPStatusError clause would treat e.response (the OAUTH
+    server's response) as if it were the target API's, wrongly firing a second refresh
+    (which cannot fix a bad client_secret) and mislabeling the OAuth server's error as the
+    target endpoint's."""
+    client = _make_client()  # no access_token — must refresh before attempting the request
+    await client.ensure_client()
+    client._client.get = AsyncMock()  # must never be reached
+
+    oauth_401 = httpx.HTTPStatusError(
+        "401 from token endpoint",
+        request=httpx.Request("POST", "https://example.test/oauth/token"),
+        response=httpx.Response(401, request=httpx.Request("POST", "https://example.test/oauth/token"), text="invalid_client"),
+    )
+    with patch.object(client, "_refresh_token", new=AsyncMock(side_effect=oauth_401)) as mock_refresh:
+        result = await client.get("/referrals/out")
+
+    # Exactly one refresh attempt — not two, which would mean the OAuth 401 got routed
+    # through the target-request retry-on-401 logic and triggered a second, pointless one.
+    assert mock_refresh.await_count == 1
+    client._client.get.assert_not_awaited()
+    assert isinstance(result, dict)
+    # Labeled as a refresh failure, not mislabeled as "HTTP 401: invalid_client" the way
+    # the target API's own 401 handler formats its errors — that format would wrongly
+    # imply /referrals/out itself returned this response.
+    assert "Token refresh failed" in result["error"]
+
+
 async def test_401_does_not_clear_shared_cache_entry_belonging_to_a_different_refresh_token():
     other_client = _make_client(refresh_token="someone-elses-refresh-token", access_token="their-token")
     other_key = other_client._token_cache_key()

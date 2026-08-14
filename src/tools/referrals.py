@@ -446,6 +446,9 @@ async def manageReferrals(
                     return strip_empty_values(_mask_notes_pointer(created))
 
                 case "list":
+                    status_error = _validate_response_status(direction, "list", response_status)
+                    if status_error:
+                        return status_error
                     params: Dict[str, Any] = {}
                     if patient_id:
                         params["patient_id"] = patient_id
@@ -520,9 +523,14 @@ async def manageReferrals(
                             "error": "referral_id required for update",
                             "guidance": "Provide the referral_id to update."
                         }
-                    # Validate before the merge below — a value merged in from the
-                    # existing record is already valid by definition (it was accepted on
-                    # a prior write), only a caller-supplied value needs checking here.
+                    # Validate a caller-supplied value up front. A value merged in from
+                    # the existing record below is NOT necessarily valid for "update" —
+                    # it may have been set by a different action's schema (e.g. "respond"
+                    # accepts "To Be Reviewed" on direction="out", which "update" does not;
+                    # "create"/"respond" accept "Completed" on direction="in", which
+                    # "update" does not either) — see REFERRAL_STATUS_SETS. Re-checked
+                    # after the merge below, not assumed valid just because some prior
+                    # write accepted it.
                     status_error = _validate_response_status(direction, "update", response_status)
                     if status_error:
                         return status_error
@@ -567,6 +575,15 @@ async def manageReferrals(
                         referral_reason = existing.get("referral_reason")
                     if response_status is None:
                         response_status = existing.get("response_status")
+                        # The merged-in value may be valid for whatever action last set
+                        # it but not for "update"'s own narrower set (see the comment on
+                        # the pre-merge validation above). Drop it rather than send a
+                        # value guaranteed to be rejected — the caller never asked to
+                        # change this field, so silently omitting it (leaving it as
+                        # whatever the backend already has) is correct; sending it would
+                        # fail the whole update over a field the caller didn't touch.
+                        if response_status is not None and response_status not in REFERRAL_STATUS_SETS[direction]["update"]:
+                            response_status = None
                     if referral_date is None and existing.get("referral_date"):
                         try:
                             referral_date = date.fromisoformat(str(existing["referral_date"])[:10])
