@@ -183,3 +183,23 @@ async def test_order_rejects_malformed_order_tests_json_string(monkeypatch) -> N
 
     assert "order_tests" in json.loads(str(exc_info.value))["error"]
     assert fake.post_calls == []
+
+
+@pytest.mark.asyncio
+async def test_order_rejects_order_tests_with_non_dict_elements(monkeypatch) -> None:
+    """`'["12345"]'` parses as valid JSON and IS a list, so the earlier
+    list-only check passed it through — then `t.get(k)` on a bare string
+    element raised AttributeError, surfacing as an opaque
+    "'str' object has no attribute 'get'" instead of the guidance written
+    for a malformed order_tests item."""
+    fake = _FakeAPIClient()
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await clinical_support.managePatientLabs.fn(
+            action="order", patient_id="p1", encounter_id="e1",
+            order_tests='["12345"]',
+        )
+
+    assert "order_tests" in json.loads(str(exc_info.value))["error"]
+    assert fake.post_calls == []

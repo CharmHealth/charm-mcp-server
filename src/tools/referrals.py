@@ -429,6 +429,16 @@ async def manageReferrals(
                     # silently always None before this fix, hence "ref_id=None" in every
                     # prior create's guidance message. Unwrap to get the real ref_id.
                     created = _unwrap_mutation_response(response)
+                    # _unwrap_mutation_response falls back to returning `response`
+                    # unchanged when it isn't shaped as expected — which itself falls
+                    # back to whatever the API sent if that wasn't a dict either (e.g.
+                    # an array). Guard here so a create that actually succeeded doesn't
+                    # get reported as a failure just because we can't parse ref_id out
+                    # of it — that false failure is worse than a missing ref_id, since
+                    # the natural response to "Could not create" is a retry, which
+                    # would duplicate the referral that was, in fact, created.
+                    if not isinstance(created, dict):
+                        created = {"raw_response": created}
                     ref_id = created.get("ref_id") or created.get("ref_in_id")
                     # Don't trust this response's own party-member fields (from_member/
                     # to_internal_member/etc.) — CONFIRMED LIVE they can echo back a
@@ -494,6 +504,7 @@ async def manageReferrals(
                     # the backend's own entity-format config, not guessed.
                     wrapper_key = "referralout" if direction == "out" else "referralin"
                     referrals = response if isinstance(response, list) else response.get(wrapper_key, [])
+                    referrals = [_mask_notes_pointer(r) for r in referrals]
                     result: Dict[str, Any] = {"referrals": referrals, "total_count": len(referrals)}
                     result["guidance"] = (
                         f"Found {len(referrals)} referral(s)." if referrals
@@ -515,7 +526,7 @@ async def manageReferrals(
                         }
                     result = _unwrap_get_response(response, direction)
                     result["guidance"] = "Referral retrieved."
-                    return strip_empty_values(result)
+                    return strip_empty_values(_mask_notes_pointer(result))
 
                 case "update":
                     if not referral_id:
@@ -711,6 +722,7 @@ async def manageReferrals(
                         "image_ids": image_ids,
                         "growth_ids": growth_ids,
                     }
+                    diagnoses_dropped_for_out = direction == "out" and diagnoses_parsed
                     if direction == "in":
                         respond_body["diagnoses"] = diagnoses_parsed
                     respond_body = {k: v for k, v in respond_body.items() if v is not None}
@@ -761,6 +773,13 @@ async def manageReferrals(
                     else:
                         result = _unwrap_mutation_response(response)
                     guidance = "Response recorded."
+                    if diagnoses_dropped_for_out:
+                        guidance += (
+                            " WARNING: diagnoses was provided but NOT sent — direction='out' "
+                            "responses don't support a diagnoses field (the API schema has no "
+                            "such key for this direction; only direction='in' does). Nothing "
+                            "downstream received these diagnoses from this call."
+                        )
                     if direction == "in":
                         # Confirmed in ReferralBeanImpl.addReferralInResponse: if this "in"
                         # record is linked to an internal outbound referral (REF_OUT_ID set),

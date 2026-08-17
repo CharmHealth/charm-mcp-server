@@ -387,6 +387,24 @@ DRUG_DOSAGE_UNITS = (
 )
 
 
+def _normalize_drug_enum(value: Optional[str], valid_values: tuple, field_name: str) -> Optional[str]:
+    """Case-fold-match `value` against `valid_values` and return the canonical
+    (correctly-cased) entry. These params used to be typed `Literal[...]`,
+    which made FastMCP's protocol-level schema check reject a title-cased
+    value (e.g. route="Oral") before the function body — and its
+    {"error": ..., "guidance": ...} convention — ever ran. Every value in
+    these tuples is lowercase and models naturally emit title case, so that
+    was the likely path, not a corner case. Doing the validation here
+    instead, case-insensitively, catches the same genuinely-invalid values
+    without breaking the common title-case call."""
+    if value is None:
+        return None
+    for candidate in valid_values:
+        if candidate.casefold() == value.casefold():
+            return candidate
+    raise ValueError(f"{field_name}='{value}' is not a valid CharmHealth catalog value")
+
+
 @clinical_data_mcp.tool
 @with_tool_metrics()
 async def managePatientDrugs(
@@ -408,9 +426,9 @@ async def managePatientDrugs(
     encounter_id: Optional[str] = None,
 
     # Additional supplement fields
-    route: Optional[Literal[DRUG_ROUTES]] = None,
-    dose_form: Optional[Literal[DRUG_DOSE_FORMS]] = None,
-    dosage_unit: Optional[Literal[DRUG_DOSAGE_UNITS]] = None,
+    route: Optional[str] = None,
+    dose_form: Optional[str] = None,
+    dosage_unit: Optional[str] = None,
     quantity: Optional[int] = None,
     intake_type: Optional[str] = None,
     comments: Optional[str] = None,
@@ -591,11 +609,18 @@ async def managePatientDrugs(
                                 "guidance": "A prescription must be tied to the visit it was written during — pass the current encounter_id. To log a medication the patient already takes outside of a visit, use action='add' instead."
                             }
 
+                        try:
+                            route = _normalize_drug_enum(route, DRUG_ROUTES, "route")
+                            dose_form = _normalize_drug_enum(dose_form, DRUG_DOSE_FORMS, "dose_form")
+                            dosage_unit = _normalize_drug_enum(dosage_unit, DRUG_DOSAGE_UNITS, "dosage_unit")
+                        except ValueError as e:
+                            return {"error": str(e), "guidance": "Use one of CharmHealth's fixed catalog values for this field (matching is case-insensitive) — see the tool's <instructions> for examples."}
+
                         med_data = [{
                             "drug_name": drug_name,
                             "is_active": status == "active",
                             "directions": directions,
-                            "dispense": float(quantity) if quantity else 30.0,  # Default 30-day supply
+                            "dispense": float(quantity) if quantity is not None else 30.0,  # Default 30-day supply
                             "refills": refills or "0",
                             "substitute_generic": True,
                             "manufacturing_type": "Manufactured"

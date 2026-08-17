@@ -36,6 +36,7 @@ from api.api_client import CharmHealthAPIClient
 def _make_client(**overrides):
     kwargs = dict(
         base_url="https://example.test/api/ehr/v1",
+        api_key="k",
         refresh_token="rt",
         client_id="cid",
         client_secret="secret",

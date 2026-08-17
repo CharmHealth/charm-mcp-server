@@ -182,6 +182,30 @@ async def test_create_falls_back_to_mutation_response_if_verify_get_fails(monkey
 
 
 @pytest.mark.asyncio
+async def test_create_survives_non_dict_mutation_response(monkeypatch) -> None:
+    """If the create POST returns something that isn't a dict (e.g. a bare
+    array), _unwrap_mutation_response passes it through unchanged. Subscripting
+    it directly (`created["guidance"] = ...`) would raise, and the generic
+    exception handler would then report "Could not create" for a referral
+    that was, in fact, created — the natural response to that false failure
+    is a retry, which duplicates it. Must degrade to a dict instead of
+    raising."""
+    fake = _FakeAPIClient(
+        post_responses={"/referrals/out": [{"ref_id": "999"}]},
+    )
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(
+        action="create", direction="out",
+        facility_id="f1", referral_date=datetime.date(2026, 8, 6),
+        from_member="1", to_internal_member="2",
+    )
+
+    assert "error" not in result
+    assert result["raw_response"] == [{"ref_id": "999"}]
+
+
+@pytest.mark.asyncio
 async def test_create_out_missing_facility_or_date_returns_clean_error(monkeypatch) -> None:
     fake = _FakeAPIClient()
     _patch_client(monkeypatch, fake)
@@ -357,6 +381,26 @@ async def test_list_in_reads_the_real_wrapper_key(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_masks_raw_notes_pointer_per_item(monkeypatch) -> None:
+    """Same gap as "get" — "list" previously skipped _mask_notes_pointer,
+    so a raw DFS file pointer in any listed referral's referral_notes could
+    reach the LLM. Must be masked per-item, not just on the outer wrapper."""
+    fake = _FakeAPIClient(get_responses={
+        "/referrals/out": {"referralout": [
+            {"ref_id": "1", "referral_notes": "1786019884879_referral.html!@>NN1:-4152206861348658358"},
+            {"ref_id": "2"},
+        ]},
+    })
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(action="list", direction="out")
+
+    assert result["referrals"][0].get("referral_notes") is None
+    assert "_notes_fields_note" in result["referrals"][0]
+    assert "_notes_fields_note" not in result["referrals"][1]
+
+
+@pytest.mark.asyncio
 async def test_list_no_results_reports_correctly(monkeypatch) -> None:
     fake = _FakeAPIClient(get_responses={"/referrals/out": {"referralout": []}})
     _patch_client(monkeypatch, fake)
@@ -440,6 +484,25 @@ async def test_get_out_unwraps_nested_fields(monkeypatch) -> None:
     assert result["patient_id"] == "p1"
     assert result["guidance"] == "Referral retrieved."
     assert "code" not in result and "message" not in result
+
+
+@pytest.mark.asyncio
+async def test_get_masks_raw_notes_pointer(monkeypatch) -> None:
+    """Unlike create/update/respond, "get" previously skipped
+    _mask_notes_pointer entirely — a raw DFS file pointer (not real note
+    text) could reach the LLM as if it were referral_notes content."""
+    fake = _FakeAPIClient(get_responses={
+        "/referrals/out/999": _get_out({
+            "ref_id": "999",
+            "referral_notes": "1786019884879_referral.html!@>NN1:-4152206861348658358",
+        }),
+    })
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(action="get", direction="out", referral_id="999")
+
+    assert result.get("referral_notes") is None
+    assert "_notes_fields_note" in result
 
 
 @pytest.mark.asyncio
@@ -844,14 +907,18 @@ async def test_respond_missing_facility_id_returns_clean_error(monkeypatch) -> N
 async def test_respond_out_does_not_send_diagnoses(monkeypatch) -> None:
     """addReferralResponse (out) never reads diagnoses at all — only
     addReferralInResponse writes RESPONSE_DIAGNOSES. Sending it for "out"
-    would be silently ignored server-side, so don't send it."""
+    would be silently ignored server-side, so don't send it. Since the call
+    still succeeds on its other content (response_status here), the caller
+    must be warned diagnoses was dropped — a clinical write reporting bare
+    success for a partial write is worse than an error, because nothing
+    downstream would otherwise notice the diagnoses never landed."""
     fake = _FakeAPIClient(
         post_responses={"/referrals/out/999/response": _mutation({"ref_id": "999"})},
         get_responses={"/referrals/out/999": _get_out({"ref_id": "999"})},
     )
     _patch_client(monkeypatch, fake)
 
-    await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals.fn(
         action="respond", direction="out", referral_id="999", facility_id="f1",
         response_status="Reviewed",
         diagnoses=[{"name": "Hypertension", "code": "I10"}],
@@ -859,6 +926,26 @@ async def test_respond_out_does_not_send_diagnoses(monkeypatch) -> None:
 
     _, sent_body = fake.post_calls[0]
     assert "diagnoses" not in sent_body
+    assert "WARNING" in result["guidance"]
+    assert "diagnoses" in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_respond_out_without_diagnoses_has_no_warning(monkeypatch) -> None:
+    """The new diagnoses-dropped warning must only fire when the caller
+    actually passed diagnoses — not on every direction="out" respond."""
+    fake = _FakeAPIClient(
+        post_responses={"/referrals/out/999/response": _mutation({"ref_id": "999"})},
+        get_responses={"/referrals/out/999": _get_out({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(
+        action="respond", direction="out", referral_id="999", facility_id="f1",
+        response_status="Reviewed",
+    )
+
+    assert "WARNING" not in result["guidance"]
 
 
 @pytest.mark.asyncio

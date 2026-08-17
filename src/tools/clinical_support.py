@@ -25,6 +25,8 @@ def _parse_order_tests(value: Optional[Union[str, List[Dict[str, Any]]]]) -> Opt
             raise ValueError("order_tests must be a JSON array of objects, or a valid JSON-encoded string of one")
     if not isinstance(value, list):
         raise ValueError("order_tests must be a list of objects")
+    if not all(isinstance(item, dict) for item in value):
+        raise ValueError("order_tests must be a list of objects — each item must be a JSON object with lab_id/lab_name/medical_record_id/lab_record_id, not a bare string or number")
     return value
 
 
