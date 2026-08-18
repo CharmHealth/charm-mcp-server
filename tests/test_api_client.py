@@ -55,6 +55,21 @@ def _clear_shared_token_cache():
     CharmHealthAPIClient._shared_token_cache.clear()
 
 
+async def test_refresh_token_connection_error_does_not_mask_as_unbound_local():
+    """_refresh_token()'s `except Exception as e: logger.error(..., response.text)`
+    referenced `response` unconditionally — if client.post() itself raises
+    (connection refused, DNS failure, timeout: httpx.RequestError, not
+    HTTPStatusError) before `response` is ever assigned, that reference used
+    to raise its own UnboundLocalError, which propagates instead of the real
+    error, undermining "a failed refresh returns a clean error". The real
+    exception type must survive."""
+    client = _make_client()
+
+    with patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=httpx.ConnectError("connection refused"))):
+        with pytest.raises(httpx.ConnectError):
+            await client._refresh_token()
+
+
 async def test_401_forces_exactly_one_refresh_and_retry_not_max_retries():
     client = _make_client(access_token="initial-token")
     await client.ensure_client()

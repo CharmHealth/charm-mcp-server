@@ -145,6 +145,7 @@ class CharmHealthAPIClient:
         }
 
         async with httpx.AsyncClient() as client:
+            response = None
             try:
                 response = await client.post(
                     self.token_url,
@@ -175,7 +176,13 @@ class CharmHealthAPIClient:
                 return new_token
 
             except Exception as e:
-                logger.error(f"Failed to refresh token: {e} with response: {response.text}")
+                # `response` can still be None here — client.post() itself can raise
+                # (connection refused, DNS failure, timeout) before it's ever assigned,
+                # and referencing response.text unconditionally would replace that real
+                # error with an UnboundLocalError, undermining the "a failed refresh
+                # returns a clean error" goal this whole retry path exists for.
+                response_detail = response.text if response is not None else "no response received"
+                logger.error(f"Failed to refresh token: {e} with response: {response_detail}")
                 raise
     
     async def _make_request(self, method: str, endpoint: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None, retry_count: int = 0, auth_retried: bool = False) -> Dict[str, Any]:

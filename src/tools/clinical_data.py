@@ -515,18 +515,23 @@ async def managePatientDrugs(
         client_secret=client_secret
     ) as client:
         try:
-            # Safety check: Review allergies before prescribing
+            # Safety check: Review allergies before prescribing. Built here (once,
+            # before the match) and prepended to the success guidance below —
+            # NOT logged with allergen names, which are PHI. The log line stays
+            # a count only; the actual allergy detail belongs in the tool
+            # response the calling clinician/agent sees, not the server log.
+            allergy_warning = None
             if action in ("add", "prescribe") and check_allergies:
                 allergy_response = await client.get(f"/patients/{patient_id}/allergies")
                 if allergy_response.get("allergies"):
                     allergies = allergy_response["allergies"]
                     if allergies and substance_type == "medication":
-                        allergy_warning = f"WARNING: Patient has {len(allergies)} documented allergies. Review before prescribing: "
-                        allergy_list = [a.get("allergen", "Unknown") for a in allergies[:3]]
-                        allergy_warning += ", ".join(allergy_list)
+                        allergy_names = [a.get("allergen", "Unknown") for a in allergies[:3]]
+                        allergy_warning = f"WARNING: Patient has {len(allergies)} documented allergies: " + ", ".join(allergy_names)
                         if len(allergies) > 3:
                             allergy_warning += f" and {len(allergies) - 3} more"
-                        logger.warning(allergy_warning)
+                        allergy_warning += ". Review before prescribing."
+                        logger.warning(f"managePatientDrugs: {len(allergies)} documented allergies found for patient — see response guidance for detail")
             
             match action:
                 case "list":
@@ -647,7 +652,10 @@ async def managePatientDrugs(
 
                         if response.get("medications"):
                             verb = "prescribed" if action == "prescribe" else "added"
-                            response["guidance"] = f"Medication '{drug_name}' {verb} successfully. Monitor for allergic reactions and drug interactions. Use reviewPatientHistory() to see all current medications."
+                            guidance = f"Medication '{drug_name}' {verb} successfully. Monitor for allergic reactions and drug interactions. Use reviewPatientHistory() to see all current medications."
+                            if allergy_warning:
+                                guidance = f"{allergy_warning} {guidance}"
+                            response["guidance"] = guidance
 
                     elif action == "prescribe":
                         return {
@@ -754,7 +762,7 @@ async def managePatientDrugs(
                         update_data: Dict[str, Any] = {
                             "is_active": current_med.get("is_active", True),
                             "directions": current_med.get("directions", ""),
-                            "dispense": float(current_med.get("dispense") or 30),
+                            "dispense": float(current_med["dispense"]) if current_med.get("dispense") is not None else 30.0,
                             "refills": str(current_med.get("refills", "0")),
                             "substitute_generic": current_med.get("substitute_generic", False),
                             "manufacturing_type": current_med.get("manufacturing_type", "Manufactured"),
@@ -840,7 +848,7 @@ async def managePatientDrugs(
                         discontinue_data: Dict[str, Any] = {
                             "is_active": False,
                             "directions": current_med.get("directions", ""),
-                            "dispense": float(current_med.get("dispense") or 30),
+                            "dispense": float(current_med["dispense"]) if current_med.get("dispense") is not None else 30.0,
                             "refills": str(current_med.get("refills", "0")),
                             "substitute_generic": current_med.get("substitute_generic", False),
                             "manufacturing_type": current_med.get("manufacturing_type", "Manufactured"),

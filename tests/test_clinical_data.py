@@ -17,6 +17,8 @@ Covers two fixes:
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from fastmcp.exceptions import ToolError
 
@@ -27,10 +29,12 @@ class _FakeAPIClient:
     """Stands in for CharmHealthAPIClient — returns canned responses keyed
     by exact endpoint string, per HTTP method, and records what was sent."""
 
-    def __init__(self, get_responses=None, post_responses=None):
+    def __init__(self, get_responses=None, post_responses=None, put_responses=None):
         self._get = get_responses or {}
         self._post = post_responses or {}
+        self._put = put_responses or {}
         self.post_calls = []
+        self.put_calls = []
 
     async def __aenter__(self):
         return self
@@ -44,6 +48,10 @@ class _FakeAPIClient:
     async def post(self, endpoint, data=None, params=None):
         self.post_calls.append((endpoint, data))
         return self._post[endpoint]
+
+    async def put(self, endpoint, data=None, params=None):
+        self.put_calls.append((endpoint, data))
+        return self._put[endpoint]
 
 
 def _patch_client(monkeypatch, fake_client) -> None:
@@ -181,3 +189,93 @@ async def test_add_supplement_omitted_quantity_is_not_sent(monkeypatch) -> None:
 
     _, sent_data = fake.post_calls[0]
     assert "quantity" not in sent_data[0]
+
+
+@pytest.mark.asyncio
+async def test_prescribe_surfaces_allergy_warning_without_logging_allergen_names(monkeypatch, caplog) -> None:
+    """The allergy safety check must reach the caller in the response guidance
+    — previously it was only logger.warning()'d and never attached to the
+    response, so the calling clinician/agent never actually saw which
+    allergies were found despite the tool's docstring claiming an automatic
+    check. Allergen names are PHI and must not appear in the application log
+    either — previously logged verbatim."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/patients/p1/allergies": {"allergies": [{"allergen": "Penicillin"}, {"allergen": "Peanuts"}]},
+        },
+        post_responses={"/patients/p1/medications": {"medications": [{"id": "m1"}]}},
+    )
+    _patch_client(monkeypatch, fake)
+
+    with caplog.at_level(logging.WARNING):
+        result = await clinical_data.managePatientDrugs.fn(
+            action="prescribe", patient_id="p1", encounter_id="100010000000128111",
+            drug_name="Amoxicillin 500mg", directions="Take 1 capsule twice daily",
+        )
+
+    assert "Penicillin" in result["guidance"]
+    assert "Peanuts" in result["guidance"]
+    assert "Penicillin" not in caplog.text
+    assert "Peanuts" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_add_medication_without_allergies_has_no_warning(monkeypatch) -> None:
+    fake = _FakeAPIClient(
+        get_responses={"/patients/p1/allergies": {"allergies": []}},
+        post_responses={"/patients/p1/medications": {"medications": [{"id": "m1"}]}},
+    )
+    _patch_client(monkeypatch, fake)
+
+    result = await clinical_data.managePatientDrugs.fn(
+        action="add", patient_id="p1",
+        drug_name="Lisinopril 10mg", directions="Take 1 tablet daily",
+    )
+
+    assert "WARNING" not in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_update_medication_preserves_explicit_dispense_zero(monkeypatch) -> None:
+    """Same truthiness bug as the `add`/`prescribe` quantity=0 fix, on the
+    read side: `update` fetches the current record to preserve fields the API
+    requires on every PUT, and `current_med.get("dispense") or 30` treated a
+    stored 0 (now a legitimately reachable value) as unset, silently
+    resetting it back to a 30-day supply on any unrelated update."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/patients/p1/medications": {"medications": [{
+                "patient_medication_id": "m1", "dispense": 0, "directions": "old directions",
+            }]},
+        },
+        put_responses={"/patients/p1/medications/m1": {"medications": [{"id": "m1"}]}},
+    )
+    _patch_client(monkeypatch, fake)
+
+    await clinical_data.managePatientDrugs.fn(
+        action="update", patient_id="p1", record_id="m1",
+        directions="new directions",
+    )
+
+    _, sent_data = fake.put_calls[0]
+    assert sent_data["dispense"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_discontinue_medication_preserves_explicit_dispense_zero(monkeypatch) -> None:
+    fake = _FakeAPIClient(
+        get_responses={
+            "/patients/p1/medications": {"medications": [{
+                "patient_medication_id": "m1", "dispense": 0, "directions": "old directions",
+            }]},
+        },
+        put_responses={"/patients/p1/medications/m1": {"medications": [{"id": "m1"}]}},
+    )
+    _patch_client(monkeypatch, fake)
+
+    await clinical_data.managePatientDrugs.fn(
+        action="discontinue", patient_id="p1", record_id="m1",
+    )
+
+    _, sent_data = fake.put_calls[0]
+    assert sent_data["dispense"] == 0.0

@@ -29,9 +29,15 @@ def _unwrap_get_response(response: Any, direction: str) -> Dict[str, Any]:
     backfill had to be supplied explicitly — exactly the "undocumented required
     fields" behavior reported live, repeatedly, and previously misdiagnosed as a
     stale MCP server rather than a real bug in this unwrapping.
+
+    Always returns a dict, matching the declared return type — a non-dict
+    response (e.g. a bare list, on a shape the real API hasn't been observed
+    to send but hasn't been ruled out either) is wrapped rather than passed
+    through, so every caller that does `result["guidance"] = ...` on this
+    function's return value can rely on that never raising.
     """
     if not isinstance(response, dict):
-        return response
+        return {"raw_response": response}
     key = "referral_out" if direction == "out" else "referral_in"
     inner = response.get(key)
     return inner if isinstance(inner, dict) else response
@@ -55,9 +61,13 @@ def _unwrap_mutation_response(response: Any) -> Dict[str, Any]:
     per _unwrap_get_response) and finding ...117 correctly stored. Callers of
     this unwrap function should still do a follow-up GET for anything beyond
     the bare ref_id — don't trust the unwrapped party-member fields either.
+
+    Always returns a dict, matching the declared return type — see
+    _unwrap_get_response's docstring for why that guarantee matters to
+    every caller that assigns `result["guidance"] = ...` on the return value.
     """
     if not isinstance(response, dict):
-        return response
+        return {"raw_response": response}
     outer = response.get("referrals")
     if isinstance(outer, dict):
         inner = outer.get("referrals")
@@ -106,6 +116,8 @@ def _parse_list_of_dicts(value: Optional[Union[str, List[Dict[str, Any]]]], fiel
             raise ValueError(f"{field_name} must be a JSON array of objects, or a valid JSON-encoded string of one")
     if not isinstance(value, list):
         raise ValueError(f"{field_name} must be a list of objects")
+    if not all(isinstance(item, dict) for item in value):
+        raise ValueError(f"{field_name} must be a list of objects — each item must be a JSON object, not a bare string or number")
     return value
 
 
@@ -429,16 +441,13 @@ async def manageReferrals(
                     # silently always None before this fix, hence "ref_id=None" in every
                     # prior create's guidance message. Unwrap to get the real ref_id.
                     created = _unwrap_mutation_response(response)
-                    # _unwrap_mutation_response falls back to returning `response`
-                    # unchanged when it isn't shaped as expected — which itself falls
-                    # back to whatever the API sent if that wasn't a dict either (e.g.
-                    # an array). Guard here so a create that actually succeeded doesn't
-                    # get reported as a failure just because we can't parse ref_id out
-                    # of it — that false failure is worse than a missing ref_id, since
-                    # the natural response to "Could not create" is a retry, which
-                    # would duplicate the referral that was, in fact, created.
-                    if not isinstance(created, dict):
-                        created = {"raw_response": created}
+                    # _unwrap_mutation_response guarantees a dict (wrapping a non-dict
+                    # response under "raw_response" itself) — a create that actually
+                    # succeeded but returned an unparseable shape (e.g. a bare array)
+                    # still reaches `created["guidance"] = ...` below safely instead of
+                    # raising and reporting a false "could not create", whose natural
+                    # follow-up (a retry) would duplicate the referral that was, in
+                    # fact, created.
                     ref_id = created.get("ref_id") or created.get("ref_in_id")
                     # Don't trust this response's own party-member fields (from_member/
                     # to_internal_member/etc.) — CONFIRMED LIVE they can echo back a
@@ -466,9 +475,9 @@ async def manageReferrals(
                         params["facility_id"] = facility_id
                     if response_status:
                         params["response_status"] = response_status
-                    if page:
+                    if page is not None:
                         params["page"] = page
-                    if per_page:
+                    if per_page is not None:
                         params["per_page"] = per_page
                     # Confirmed directly against the backend's criteria-resolver code
                     # (CharmTemplateHandler: REFERRAL_FROM_MEMBER_CR / REFERRAL_TO_MEMBER_CR
@@ -503,7 +512,12 @@ async def manageReferrals(
                     # "referralin" for direction="in" — NOT "referrals". Confirmed by reading
                     # the backend's own entity-format config, not guessed.
                     wrapper_key = "referralout" if direction == "out" else "referralin"
-                    referrals = response if isinstance(response, list) else response.get(wrapper_key, [])
+                    # `or []`, not `.get(key, [])` alone — the default only applies
+                    # when the key is absent, not when the API sends it explicitly
+                    # null for a zero-result response (seen elsewhere in this API's
+                    # responses), which would otherwise make the list comprehension
+                    # below raise on a plain empty-results call.
+                    referrals = response if isinstance(response, list) else (response.get(wrapper_key) or [])
                     referrals = [_mask_notes_pointer(r) for r in referrals]
                     result: Dict[str, Any] = {"referrals": referrals, "total_count": len(referrals)}
                     result["guidance"] = (

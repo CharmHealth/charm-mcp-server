@@ -133,6 +133,18 @@ def test_unwrap_mutation_response_falls_back_on_unexpected_shape() -> None:
     assert referrals._unwrap_mutation_response(flat) == flat
 
 
+def test_unwrap_get_response_wraps_non_dict_response() -> None:
+    """Both unwrap helpers are declared -> Dict[str, Any] but previously
+    returned a non-dict response unchanged when it didn't match the expected
+    shape — every caller does `result["guidance"] = ...` on the return
+    value, which would raise. Must always return a dict."""
+    assert referrals._unwrap_get_response([1, 2, 3], "out") == {"raw_response": [1, 2, 3]}
+
+
+def test_unwrap_mutation_response_wraps_non_dict_response() -> None:
+    assert referrals._unwrap_mutation_response([1, 2, 3]) == {"raw_response": [1, 2, 3]}
+
+
 # ── create ─────────────────────────────────────────────────────────────
 
 
@@ -331,6 +343,27 @@ async def test_create_diagnoses_rejects_malformed_json_string(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
+async def test_create_diagnoses_rejects_non_dict_list_elements(monkeypatch) -> None:
+    """Same gap _parse_order_tests had (charm-mcp-server's managePatientLabs)
+    before its own fix in this PR — `diagnoses=["Hypertension"]` parses as
+    valid JSON and IS a list, so a list-only check passes it through to the
+    real API instead of failing clean client-side."""
+    fake = _FakeAPIClient()
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await referrals.manageReferrals.fn(
+            action="create", direction="out",
+            facility_id="f1", referral_date=datetime.date(2026, 8, 6),
+            from_member="1", to_internal_member="2",
+            diagnoses=["Hypertension"],
+        )
+
+    assert "diagnoses" in json.loads(str(exc_info.value))["error"]
+    assert fake.post_calls == []
+
+
+@pytest.mark.asyncio
 async def test_create_out_rejects_to_be_reviewed(monkeypatch) -> None:
     """"To Be Reviewed" is respond/out's set, not create's — create/update/out
     use Pending|Received|Reviewed."""
@@ -412,6 +445,22 @@ async def test_list_no_results_reports_correctly(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_survives_wrapper_key_present_but_null(monkeypatch) -> None:
+    """`.get(wrapper_key, [])` only supplies the default when the key is
+    absent, not when the API sends it explicitly null for a zero-result
+    response — a real possibility given how many other response-shape
+    surprises this same API has produced (see this file's other
+    "CONFIRMED LIVE" comments). Must not raise on `for r in referrals`."""
+    fake = _FakeAPIClient(get_responses={"/referrals/out": {"referralout": None}})
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(action="list", direction="out")
+
+    assert result["total_count"] == 0
+    assert result["referrals"] == []
+
+
+@pytest.mark.asyncio
 async def test_list_out_filter_params_use_confirmed_names(monkeypatch) -> None:
     """Confirmed directly against CharmTemplateHandler's criteria-resolver
     code — from_member_id/to_internal_member_id/to_external_member_id, not
@@ -430,6 +479,20 @@ async def test_list_out_filter_params_use_confirmed_names(monkeypatch) -> None:
         "patient_id": "p1", "facility_id": "f1", "response_status": "Pending",
         "from_member_id": "1", "to_internal_member_id": "2", "to_external_member_id": "3",
     }
+
+
+@pytest.mark.asyncio
+async def test_list_sends_explicit_page_and_per_page_zero(monkeypatch) -> None:
+    """`if page:`/`if per_page:` (truthiness) would silently drop an explicit
+    0 — same bug class as the quantity=0 fix elsewhere in this PR."""
+    fake = _FakeAPIClient(get_responses={"/referrals/out": {"referralout": []}})
+    _patch_client(monkeypatch, fake)
+
+    await referrals.manageReferrals.fn(action="list", direction="out", page=0, per_page=0)
+
+    _, sent_params = fake.get_calls[0]
+    assert sent_params["page"] == 0
+    assert sent_params["per_page"] == 0
 
 
 @pytest.mark.asyncio
@@ -506,6 +569,21 @@ async def test_get_masks_raw_notes_pointer(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_survives_non_dict_response(monkeypatch) -> None:
+    """Same non-dict-response risk as create (see
+    test_create_survives_non_dict_mutation_response) — a non-dict response
+    must not crash `result["guidance"] = ...`. A bare string, not a list, to
+    avoid _FakeAPIClient.get's own list-of-sequential-responses convention."""
+    fake = _FakeAPIClient(get_responses={"/referrals/out/999": "unexpected-response-shape"})
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(action="get", direction="out", referral_id="999")
+
+    assert "error" not in result
+    assert result["raw_response"] == "unexpected-response-shape"
+
+
+@pytest.mark.asyncio
 async def test_get_in_unwraps_nested_fields(monkeypatch) -> None:
     fake = _FakeAPIClient(get_responses={
         "/referrals/in/500": _get_in({"ref_in_id": "500", "patient_id": "p1"}),
@@ -567,6 +645,35 @@ async def test_update_out_merges_omitted_fields_from_existing_record(monkeypatch
     assert sent_body["patient_id"] == "p1"
     assert sent_body["referral_reason"] == "Follow-up"
     assert sent_body["response_status"] == "Pending"
+
+
+@pytest.mark.asyncio
+async def test_update_survives_non_dict_verify_and_mutation_response(monkeypatch) -> None:
+    """Same non-dict-response risk as create — if both the verify-GET and the
+    PUT's own response come back non-dict-shaped, `result["guidance"] = ...`
+    must not crash into a false "could not update", whose natural retry
+    would mean overwriting the referral again unnecessarily."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": [
+                _get_out({
+                    "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                    "from_member_id": "1", "referral_date": "2026-08-06",
+                }),
+                [1, 2, 3],
+            ],
+        },
+        put_responses={"/referrals/out/999": [1, 2, 3]},
+    )
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(
+        action="update", direction="out", referral_id="999", priority="Urgent",
+    )
+
+    assert "error" not in result
+    assert result["raw_response"] == [1, 2, 3]
+    assert result["guidance"] == "Referral updated."
 
 
 @pytest.mark.asyncio
@@ -894,6 +1001,27 @@ async def test_respond_out_trusts_verify_get_and_sends_correct_body(monkeypatch)
         "response_status": "Reviewed",
     }
     assert result["response_status"] == "Reviewed"
+    assert result["guidance"] == "Response recorded."
+
+
+@pytest.mark.asyncio
+async def test_respond_survives_non_dict_verify_and_mutation_response(monkeypatch) -> None:
+    """Same non-dict-response risk as create/update, on respond. A bare
+    string, not a list, to avoid _FakeAPIClient.get's own
+    list-of-sequential-responses convention."""
+    fake = _FakeAPIClient(
+        post_responses={"/referrals/out/999/response": "unexpected-response-shape"},
+        get_responses={"/referrals/out/999": "unexpected-response-shape"},
+    )
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(
+        action="respond", direction="out", referral_id="999", facility_id="f1",
+        response_status="Reviewed",
+    )
+
+    assert "error" not in result
+    assert result["raw_response"] == "unexpected-response-shape"
     assert result["guidance"] == "Response recorded."
 
 
