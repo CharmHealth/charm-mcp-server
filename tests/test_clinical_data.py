@@ -144,3 +144,40 @@ async def test_add_supplement_route_accepts_any_string_unvalidated(monkeypatch) 
 
     _, sent_data = fake.post_calls[0]
     assert sent_data[0]["route"] == "whatever the caller wants"
+
+
+@pytest.mark.asyncio
+async def test_add_supplement_explicit_quantity_zero_is_sent_not_dropped(monkeypatch) -> None:
+    """Same truthiness bug as the medication `dispense` fix, pre-existing on the
+    supplement path's `quantity` field (`if quantity:` treated an explicit 0 as
+    unset and silently dropped it from the request entirely — unlike
+    medication's `dispense`, there's no default to fall back to here, so the
+    field just vanished)."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/supplements": {"supplements": [{"id": "s1"}]},
+    })
+    _patch_client(monkeypatch, fake)
+
+    await clinical_data.managePatientDrugs.fn(
+        action="add", patient_id="p1", substance_type="supplement",
+        drug_name="Vitamin D3", dosage=5, quantity=0,
+    )
+
+    _, sent_data = fake.post_calls[0]
+    assert sent_data[0]["quantity"] == 0
+
+
+@pytest.mark.asyncio
+async def test_add_supplement_omitted_quantity_is_not_sent(monkeypatch) -> None:
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/supplements": {"supplements": [{"id": "s1"}]},
+    })
+    _patch_client(monkeypatch, fake)
+
+    await clinical_data.managePatientDrugs.fn(
+        action="add", patient_id="p1", substance_type="supplement",
+        drug_name="Vitamin D3", dosage=5,
+    )
+
+    _, sent_data = fake.post_calls[0]
+    assert "quantity" not in sent_data[0]

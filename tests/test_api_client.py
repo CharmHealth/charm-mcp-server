@@ -143,6 +143,29 @@ async def test_refresh_endpoint_401_is_not_mistaken_for_the_target_apis_401():
     assert "Token refresh failed" in result["error"]
 
 
+async def test_failed_token_fetch_still_ends_the_in_flight_gauge():
+    """start_api_call() marks the gauge active before the header fetch. The
+    early return on a failed refresh skips the `finally` below (which belongs
+    to the second try, entered only once headers succeed) — without an
+    explicit end_api_call() in this branch, that (endpoint, method, client_id)
+    combo would stick at "in flight" forever. A dead refresh token sends every
+    call down this path, so the dashboard would read as permanently stuck
+    mid-request during the exact incident this code exists to handle."""
+    client = _make_client()
+    await client.ensure_client()
+    client._client.get = AsyncMock()  # must never be reached
+
+    with patch.object(
+        client, "_refresh_token", new=AsyncMock(side_effect=ValueError("dead refresh_token"))
+    ), patch("api.api_client.end_api_call") as mock_end_api_call:
+        await client.get("/referrals/out")
+
+    mock_end_api_call.assert_called_once()
+    args, kwargs = mock_end_api_call.call_args
+    success = kwargs.get("success", args[4] if len(args) > 4 else None)
+    assert success is False
+
+
 async def test_401_does_not_clear_shared_cache_entry_belonging_to_a_different_refresh_token():
     other_client = _make_client(refresh_token="someone-elses-refresh-token", access_token="their-token")
     other_key = other_client._token_cache_key()

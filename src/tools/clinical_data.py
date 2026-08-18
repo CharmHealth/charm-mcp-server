@@ -699,7 +699,7 @@ async def managePatientDrugs(
                             supplement_data[0]["dose_form"] = dose_form
                         if dosage_unit:
                             supplement_data[0]["dosage_unit"] = dosage_unit
-                        if quantity:
+                        if quantity is not None:
                             supplement_data[0]["quantity"] = int(quantity) if isinstance(quantity, str) else quantity
                         if comments:
                             supplement_data[0]["comments"] = comments

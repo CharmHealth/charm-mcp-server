@@ -570,13 +570,18 @@ async def test_update_out_merges_omitted_fields_from_existing_record(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_update_out_drops_response_status_invalid_for_update_from_merge(monkeypatch) -> None:
+async def test_update_out_fails_when_merged_response_status_invalid_for_update(monkeypatch) -> None:
     """The existing referral's response_status ("To Be Reviewed") was set by a prior
     respond() call — valid for direction="out" action="respond", but NOT in update's own
     narrower set (Pending/Received/Reviewed). The caller only wants to change priority and
-    never touched response_status — merging the existing value in unvalidated would send a
-    value update's own schema rejects, failing over a field the caller didn't ask about.
-    Must be dropped from the outgoing body instead."""
+    never touched response_status.
+
+    Dropping it from the outgoing body (the earlier fix) is NOT safe for direction="out":
+    confirmed against ReferralBeanImpl.updateReferralOut, row.set("RESPONSE_STATUS",
+    resStatus) runs unconditionally even when the key is absent from the request (resStatus
+    stays null in that branch) — omitting it would silently null the column instead of
+    leaving it untouched. Must fail instead, naming the stored value, and let the caller
+    decide."""
     fake = _FakeAPIClient(
         get_responses={
             "/referrals/out/999": _get_out({
@@ -590,19 +595,22 @@ async def test_update_out_drops_response_status_invalid_for_update_from_merge(mo
     )
     _patch_client(monkeypatch, fake)
 
-    await referrals.manageReferrals.fn(
-        action="update", direction="out", referral_id="999", priority="Urgent",
-    )
+    with pytest.raises(ToolError) as exc_info:
+        await referrals.manageReferrals.fn(
+            action="update", direction="out", referral_id="999", priority="Urgent",
+        )
 
-    _, sent_body = fake.put_calls[0]
-    assert sent_body["priority"] == "Urgent"
-    assert "response_status" not in sent_body
+    assert "To Be Reviewed" in json.loads(str(exc_info.value))["error"]
+    assert fake.put_calls == []
 
 
 @pytest.mark.asyncio
 async def test_update_in_drops_response_status_invalid_for_update_from_merge(monkeypatch) -> None:
-    """Same fix, direction="in": "Completed" is valid for create/respond but not for
-    update's own set (Pending/Received/Reviewed)."""
+    """"Completed" is valid for create/respond but not for update's own set
+    (Pending/Received/Reviewed) — same mismatch as the "out" case, but here dropping is
+    safe rather than failing: updateReferralIn's row.set("RESPONSE_STATUS", resStatus) is
+    commented out server-side, so the field is dead and omitting it doesn't touch the
+    stored value."""
     fake = _FakeAPIClient(
         get_responses={
             "/referrals/in/999": _get_in({

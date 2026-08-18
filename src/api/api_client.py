@@ -207,6 +207,13 @@ class CharmHealthAPIClient:
         except Exception as e:
             duration = time.time() - start_time
             record_api_call(self.client_id, False, clean_endpoint, method, duration)
+            # start_api_call() above set the gauge active — this early return skips
+            # the `finally` below (it belongs to the second try), so without this the
+            # gauge for this (endpoint, method, client_id) sticks at "in flight"
+            # forever. A dead refresh token sends every call down this path, so the
+            # dashboard would read as permanently stuck mid-request during the exact
+            # incident this code exists to handle.
+            end_api_call(self.client_id, clean_endpoint, method, duration, False)
             logger.error(f"Token refresh failed while preparing request to {endpoint}: {e}")
             return {"error": f"Token refresh failed: {e}"}
 
@@ -281,8 +288,10 @@ class CharmHealthAPIClient:
             return {"error": f"Request failed: {e}"}
 
         except Exception as e:
-            # Record failed API call (also catches a failed token refresh from
-            # _get_auth_headers() above, now that it runs inside this try)
+            # Record failed API call. Token-refresh failures are caught by their
+            # own isolated try/except above (since 96731d7) and never reach here —
+            # this branch is for genuinely unexpected errors in the request/response
+            # handling above (e.g. an httpx internal error, a bad response.json()).
             duration = time.time() - start_time
             record_api_call(self.client_id, False, clean_endpoint, method, duration)
             logger.error(f"Unexpected error: {e}")
