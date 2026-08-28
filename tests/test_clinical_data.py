@@ -114,6 +114,35 @@ async def test_add_medication_title_case_route_is_normalized_not_rejected(monkey
 
 
 @pytest.mark.asyncio
+async def test_add_medication_comments_is_dropped_with_warning(monkeypatch) -> None:
+    """CONFIRMED LIVE (2026-08-27) against the real sandbox: "comments"
+    fails the ENTIRE add/prescribe call with HTTP 400 "Extra key found in
+    JSON" (throwallerrors="true"), not a silent drop. "internal_comments" —
+    the field this repo's checked-out security-api-charts.xml shows for
+    this endpoint — was tried next and got the SAME rejection against this
+    live tenant, so that checkout doesn't match what's deployed here.
+    Dropped entirely rather than guessing further field names against a
+    real clinical write; the caller is warned instead."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/medications": {"medications": [{"id": "m1"}]},
+    })
+    _patch_client(monkeypatch, fake)
+
+    result = await clinical_data.managePatientDrugs.fn(
+        action="add", patient_id="p1", substance_type="medication",
+        drug_name="Lisinopril 10mg", directions="Take 1 tablet by mouth once daily",
+        comments="Patient prefers generic.",
+    )
+
+    _, sent_data = fake.post_calls[0]
+    assert "comments" not in sent_data[0]
+    assert "internal_comments" not in sent_data[0]
+    assert "WARNING" in result["guidance"]
+    assert "comments" in result["guidance"]
+    assert "comments" not in sent_data[0]
+
+
+@pytest.mark.asyncio
 async def test_add_medication_invalid_route_returns_clean_error(monkeypatch) -> None:
     """A genuinely invalid value (not just a casing mismatch) must still be
     caught client-side with this tool's error/guidance convention, not sent
@@ -233,6 +262,7 @@ async def test_add_medication_without_allergies_has_no_warning(monkeypatch) -> N
     )
 
     assert "WARNING" not in result["guidance"]
+    assert result["guidance"].startswith("Medication")
 
 
 @pytest.mark.asyncio

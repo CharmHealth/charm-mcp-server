@@ -14,6 +14,7 @@ from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
 import logging
+import re
 from telemetry import telemetry, with_tool_metrics
 
 logger = logging.getLogger(__name__)
@@ -433,7 +434,9 @@ async def managePatientDrugs(
     intake_type: Optional[str] = None,
     comments: Optional[str] = None,
     weaning_schedule: Optional[str] = None,
-    
+    substitute_generic: Optional[bool] = None,
+    manufacturing_type: Optional[str] = None,
+
     # Workflow fields
     check_allergies: Optional[bool] = True,
 
@@ -469,10 +472,11 @@ async def managePatientDrugs(
     List filters:
     - status_filter: e.g., status_filter="active"
     - limit: e.g., limit=25
-    For medications: Use clear directions like "Take 1 tablet by mouth twice daily with food"
+    For medications: Use clear directions like "Take 1 tablet by mouth twice daily with food". comments is NOT supported for medications (confirmed live — the API rejects it); it's silently dropped with a WARNING in guidance if provided. Use directions or managePatientNotes() instead.
     For supplements: Provide dosage as integer (e.g., 5) and use strength for units (e.g., "500mg")
     route/dose_form/dosage_unit must be one of CharmHealth's fixed catalog values (e.g. route="oral", dose_form="tablet", dosage_unit="mg") — invalid values are rejected before the API is called.
     quantity sets the dispense amount for a medication (e.g. quantity=90 for "dispense 90 tablets"); defaults to a 30-day supply if omitted.
+    substitute_generic (medication add/prescribe only) defaults to True (pharmacist may substitute a generic equivalent) — pass False for a dispense-as-written / non-substitutable prescription. manufacturing_type defaults to "Manufactured" — pass "Compounded" for a compounded drug (value forwarded as-is, not validated against a catalog).
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -614,6 +618,12 @@ async def managePatientDrugs(
                                 "guidance": "A prescription must be tied to the visit it was written during — pass the current encounter_id. To log a medication the patient already takes outside of a visit, use action='add' instead."
                             }
 
+                        if refills is not None and not re.fullmatch(r"[0-9]{1,2}|PRN|-1", str(refills)):
+                            return {
+                                "error": f"refills='{refills}' is not valid",
+                                "guidance": "refills must be a 1-2 digit number (e.g. '3'), 'PRN', or '-1' (unlimited), per CharmHealth's documented pattern."
+                            }
+
                         try:
                             route = _normalize_drug_enum(route, DRUG_ROUTES, "route")
                             dose_form = _normalize_drug_enum(dose_form, DRUG_DOSE_FORMS, "dose_form")
@@ -627,8 +637,8 @@ async def managePatientDrugs(
                             "directions": directions,
                             "dispense": float(quantity) if quantity is not None else 30.0,  # Default 30-day supply
                             "refills": refills or "0",
-                            "substitute_generic": True,
-                            "manufacturing_type": "Manufactured"
+                            "substitute_generic": True if substitute_generic is None else substitute_generic,
+                            "manufacturing_type": manufacturing_type or "Manufactured"
                         }]
 
                         if strength:
@@ -645,8 +655,18 @@ async def managePatientDrugs(
                             med_data[0]["stop_date"] = end_date.isoformat()
                         if encounter_id:
                             med_data[0]["encounter_id"] = int(encounter_id)
-                        if comments:
-                            med_data[0]["comments"] = comments
+                        # CONFIRMED LIVE (2026-08-27) against the real sandbox: "comments"
+                        # is not a field on this endpoint — fails the ENTIRE add/prescribe
+                        # call with HTTP 400 "Extra key found in JSON" (throwallerrors="true"),
+                        # not a silent drop. "internal_comments" — the field this repo's
+                        # checked-out security-api-charts.xml shows for addEHRMedicationJSON —
+                        # was tried next and ALSO rejected with the identical error against
+                        # this live tenant, so that checkout doesn't match what's actually
+                        # deployed here. Rather than keep guessing field names against a real
+                        # clinical write, comments is dropped entirely for medications (still
+                        # honored for supplements/vitamins, a different endpoint, unaffected)
+                        # — the caller is told rather than hitting a confusing 400.
+                        comments_dropped = bool(comments)
 
                         response = await client.post(f"/patients/{patient_id}/medications", data=med_data)
 
@@ -655,6 +675,13 @@ async def managePatientDrugs(
                             guidance = f"Medication '{drug_name}' {verb} successfully. Monitor for allergic reactions and drug interactions. Use reviewPatientHistory() to see all current medications."
                             if allergy_warning:
                                 guidance = f"{allergy_warning} {guidance}"
+                            if comments_dropped:
+                                guidance += (
+                                    " WARNING: comments was provided but NOT sent — this field "
+                                    "isn't supported on medication add/prescribe (confirmed live; "
+                                    "the API rejects it). Document this detail elsewhere, e.g. "
+                                    "directions or a clinical note via managePatientNotes()."
+                                )
                             response["guidance"] = guidance
 
                     elif action == "prescribe":
@@ -759,10 +786,11 @@ async def managePatientDrugs(
                         # Build payload with all API-required fields, then overlay changes
                         # NOTE: PUT /medications/{id} only accepts: is_active, directions, dispense, refills,
                         # substitute_generic, manufacturing_type, and optional start_date/stop_date/dispense_unit/route/note_to_pharmacy
+                        _dispense = current_med.get("dispense")
                         update_data: Dict[str, Any] = {
                             "is_active": current_med.get("is_active", True),
                             "directions": current_med.get("directions", ""),
-                            "dispense": float(current_med["dispense"]) if current_med.get("dispense") is not None else 30.0,
+                            "dispense": float(_dispense) if _dispense not in (None, "") else 30.0,
                             "refills": str(current_med.get("refills", "0")),
                             "substitute_generic": current_med.get("substitute_generic", False),
                             "manufacturing_type": current_med.get("manufacturing_type", "Manufactured"),
@@ -845,10 +873,11 @@ async def managePatientDrugs(
                                 "guidance": "Use action='list' to verify the record_id exists for this patient."
                             }
 
+                        _dispense = current_med.get("dispense")
                         discontinue_data: Dict[str, Any] = {
                             "is_active": False,
                             "directions": current_med.get("directions", ""),
-                            "dispense": float(current_med["dispense"]) if current_med.get("dispense") is not None else 30.0,
+                            "dispense": float(_dispense) if _dispense not in (None, "") else 30.0,
                             "refills": str(current_med.get("refills", "0")),
                             "substitute_generic": current_med.get("substitute_generic", False),
                             "manufacturing_type": current_med.get("manufacturing_type", "Manufactured"),

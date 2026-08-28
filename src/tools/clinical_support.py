@@ -626,7 +626,7 @@ async def managePatientLabs(
 
     # order fields
     facility_id: Optional[str] = None,
-    enc_facility_id: Optional[str] = None,
+    enc_facility_id: Optional[str] = None,  # confirmed against the real API's request XML; not in the published docs
     encounter_id: Optional[str] = None,
     member_id: Optional[str] = None,
     ordered_date: Optional[date] = None,
@@ -634,7 +634,7 @@ async def managePatientLabs(
     lab_notes: Optional[str] = None,
     intra_office_notes: Optional[str] = None,
     specimen_collection_date: Optional[str] = None,
-    specimen_additional_comments: Optional[str] = None,
+    specimen_additional_comments: Optional[str] = None,  # same as enc_facility_id: confirmed via XML, absent from published docs
 
     response_format: Optional[Literal["concise", "detailed"]] = None,  # reserved for cortex; no behavior change yet (J13/CH-695)
 

@@ -72,7 +72,11 @@ class _FakeAPIClient:
 
     async def get(self, endpoint, params=None):
         self.get_calls.append((endpoint, params or {}))
-        responses = self._get[endpoint]
+        # Defaults to {} for an unconfigured endpoint (e.g. update's notes
+        # sub-resource fetch, made on every update unless referral_notes was
+        # already supplied) rather than KeyError — tests that don't care
+        # about that call don't need to configure a response for it.
+        responses = self._get.get(endpoint, {})
         if isinstance(responses, list):
             idx = min(self._get_counts.get(endpoint, 0), len(responses) - 1)
             self._get_counts[endpoint] = idx + 1
@@ -648,6 +652,155 @@ async def test_update_out_merges_omitted_fields_from_existing_record(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_update_merges_diagnoses_and_insurance_from_existing_record(monkeypatch) -> None:
+    """CONFIRMED LIVE (2026-08-25): diagnoses/insurance round-trip through
+    "get" as JSON-encoded strings, unlike referral_notes/response_notes/
+    related_encounter_id. Recoverable, so merged like the other fields."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": _get_out({
+                "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "from_member_id": "1", "referral_date": "2026-08-06",
+                "diagnoses": '[{"name": "Hypertension", "code": "I10"}]',
+                "insurance": '[{"name": "Aetna", "id": "ins1"}]',
+            }),
+        },
+        put_responses={"/referrals/out/999": _mutation({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    await referrals.manageReferrals.fn(
+        action="update", direction="out", referral_id="999", priority="Urgent",
+    )
+
+    _, sent_body = fake.put_calls[0]
+    assert sent_body["diagnoses"] == [{"name": "Hypertension", "code": "I10"}]
+    assert sent_body["insurance"] == [{"name": "Aetna", "id": "ins1"}]
+
+
+@pytest.mark.asyncio
+async def test_update_explicit_diagnoses_wins_over_merged(monkeypatch) -> None:
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": _get_out({
+                "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "from_member_id": "1", "referral_date": "2026-08-06",
+                "diagnoses": '[{"name": "Hypertension", "code": "I10"}]',
+            }),
+        },
+        put_responses={"/referrals/out/999": _mutation({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    await referrals.manageReferrals.fn(
+        action="update", direction="out", referral_id="999", priority="Urgent",
+        diagnoses=[{"name": "Diabetes", "code": "E11"}],
+    )
+
+    _, sent_body = fake.put_calls[0]
+    assert sent_body["diagnoses"] == [{"name": "Diabetes", "code": "E11"}]
+
+
+@pytest.mark.asyncio
+async def test_update_fetches_referral_notes_from_notes_endpoint(monkeypatch) -> None:
+    """CONFIRMED LIVE (2026-08-25): GET /referrals/out/{id}/notes returns
+    {"referrals_out_notes": {"content": "..."}} — the real note text,
+    unlike get's own raw file-pointer. Fetched and merged only when the
+    caller didn't already supply referral_notes on this call."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": _get_out({
+                "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "from_member_id": "1", "referral_date": "2026-08-06",
+            }),
+            "/referrals/out/999/notes": {
+                "code": "0", "message": "success",
+                "referrals_out_notes": {"content": "Existing note text.\n"},
+            },
+        },
+        put_responses={"/referrals/out/999": _mutation({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    await referrals.manageReferrals.fn(
+        action="update", direction="out", referral_id="999", priority="Urgent",
+    )
+
+    _, sent_body = fake.put_calls[0]
+    assert sent_body["referral_notes"] == "Existing note text.\n"
+
+
+@pytest.mark.asyncio
+async def test_update_explicit_referral_notes_skips_notes_fetch(monkeypatch) -> None:
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": _get_out({
+                "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "from_member_id": "1", "referral_date": "2026-08-06",
+            }),
+        },
+        put_responses={"/referrals/out/999": _mutation({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    await referrals.manageReferrals.fn(
+        action="update", direction="out", referral_id="999", priority="Urgent",
+        referral_notes="New note text.",
+    )
+
+    _, sent_body = fake.put_calls[0]
+    assert sent_body["referral_notes"] == "New note text."
+    assert ("/referrals/out/999/notes", {}) not in fake.get_calls
+
+
+@pytest.mark.asyncio
+async def test_update_warns_when_encounter_id_will_be_cleared(monkeypatch) -> None:
+    """related_encounter_id has no recovery path (not in "get", no
+    sub-resource) — genuinely wiped if omitted. Must warn instead of
+    silently losing it."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": _get_out({
+                "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "from_member_id": "1", "referral_date": "2026-08-06",
+                "related_encounter_id": "enc1",
+            }),
+        },
+        put_responses={"/referrals/out/999": _mutation({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(
+        action="update", direction="out", referral_id="999", priority="Urgent",
+    )
+
+    assert "WARNING" in result["guidance"]
+    assert "encounter_id" in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_update_no_encounter_warning_when_explicit_or_absent(monkeypatch) -> None:
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": _get_out({
+                "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "from_member_id": "1", "referral_date": "2026-08-06",
+                "related_encounter_id": "enc1",
+            }),
+        },
+        put_responses={"/referrals/out/999": _mutation({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(
+        action="update", direction="out", referral_id="999", priority="Urgent",
+        encounter_id="enc1",
+    )
+
+    assert "WARNING" not in result["guidance"]
+
+
+@pytest.mark.asyncio
 async def test_update_survives_non_dict_verify_and_mutation_response(monkeypatch) -> None:
     """Same non-dict-response risk as create — if both the verify-GET and the
     PUT's own response come back non-dict-shaped, `result["guidance"] = ...`
@@ -709,6 +862,66 @@ async def test_update_out_fails_when_merged_response_status_invalid_for_update(m
 
     assert "To Be Reviewed" in json.loads(str(exc_info.value))["error"]
     assert fake.put_calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_out_to_be_reviewed_guidance_names_cascade_and_restore_path(monkeypatch) -> None:
+    """The old guidance asked the caller to 'provide an explicit
+    response_status from (Pending, Received, Reviewed) to keep it' — but
+    none of those three IS 'To Be Reviewed', so the instruction couldn't be
+    followed. Must say so directly: no update value preserves it, name the
+    respond cascade as the cause, and give the restore path (respond again
+    on the linked inbound referral)."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": _get_out({
+                "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "from_member_id": "1", "to_internal_member_id": "2",
+                "referral_date": "2026-08-06", "priority": "Normal",
+                "response_status": "To Be Reviewed",
+            }),
+        },
+        put_responses={"/referrals/out/999": _mutation({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await referrals.manageReferrals.fn(
+            action="update", direction="out", referral_id="999", priority="Urgent",
+        )
+
+    guidance = json.loads(str(exc_info.value))["guidance"]
+    assert "cascade" in guidance
+    assert "respond" in guidance
+    assert "direction='in'" in guidance
+
+
+@pytest.mark.asyncio
+async def test_update_out_empty_string_status_does_not_trigger_fail_closed(monkeypatch) -> None:
+    """CONFIRMED LIVE (2026-08-27): a referral that's never had a response
+    recorded returns response_status="" (empty string), not an absent key.
+    Without this fix, EVERY plain out-direction update on such a referral
+    would hit the fail-closed error meant for a genuinely out-of-set merged
+    value — demanding an explicit response_status for a field nothing had
+    ever actually set."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": _get_out({
+                "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "from_member_id": "1", "referral_date": "2026-08-06",
+                "response_status": "",
+            }),
+        },
+        put_responses={"/referrals/out/999": _mutation({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    await referrals.manageReferrals.fn(
+        action="update", direction="out", referral_id="999", priority="Urgent",
+    )
+
+    _, sent_body = fake.put_calls[0]
+    assert "response_status" not in sent_body
 
 
 @pytest.mark.asyncio
@@ -987,6 +1200,7 @@ async def test_respond_out_trusts_verify_get_and_sends_correct_body(monkeypatch)
 
     result = await referrals.manageReferrals.fn(
         action="respond", direction="out", referral_id="999", facility_id="f1",
+        patient_id="p1",
         response_date=datetime.date(2026, 8, 7),
         response_notes="Patient seen, no further action needed.",
         response_status="Reviewed",
@@ -996,12 +1210,33 @@ async def test_respond_out_trusts_verify_get_and_sends_correct_body(monkeypatch)
     assert endpoint == "/referrals/out/999/response"
     assert sent_body == {
         "facility_id": "f1",
+        "patient_id": "p1",
         "response_date": "2026-08-07",
         "response_notes": "Patient seen, no further action needed.",
         "response_status": "Reviewed",
     }
     assert result["response_status"] == "Reviewed"
     assert result["guidance"] == "Response recorded."
+
+
+@pytest.mark.asyncio
+async def test_respond_missing_patient_id_returns_clean_error(monkeypatch) -> None:
+    """CONFIRMED LIVE (2026-08-25): both directions' addAttachmentsToRO
+    dereferences patient_id unconditionally and NPEs without it — this is
+    the real cause behind every generic "HTTP 500: Internal Error" respond
+    had returned before this fix. Required client-side now, not just
+    included when present."""
+    fake = _FakeAPIClient()
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await referrals.manageReferrals.fn(
+            action="respond", direction="out", referral_id="999", facility_id="f1",
+            response_status="Reviewed",
+        )
+
+    assert json.loads(str(exc_info.value))["error"] == "patient_id required for respond"
+    assert fake.post_calls == []
 
 
 @pytest.mark.asyncio
@@ -1017,6 +1252,7 @@ async def test_respond_survives_non_dict_verify_and_mutation_response(monkeypatc
 
     result = await referrals.manageReferrals.fn(
         action="respond", direction="out", referral_id="999", facility_id="f1",
+        patient_id="p1",
         response_status="Reviewed",
     )
 
@@ -1056,6 +1292,7 @@ async def test_respond_out_does_not_send_diagnoses(monkeypatch) -> None:
 
     result = await referrals.manageReferrals.fn(
         action="respond", direction="out", referral_id="999", facility_id="f1",
+        patient_id="p1",
         response_status="Reviewed",
         diagnoses=[{"name": "Hypertension", "code": "I10"}],
     )
@@ -1078,10 +1315,60 @@ async def test_respond_out_without_diagnoses_has_no_warning(monkeypatch) -> None
 
     result = await referrals.manageReferrals.fn(
         action="respond", direction="out", referral_id="999", facility_id="f1",
+        patient_id="p1",
         response_status="Reviewed",
     )
 
     assert "WARNING" not in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_respond_out_drops_growth_ids_and_image_ids(monkeypatch) -> None:
+    """CONFIRMED LIVE (2026-08-25): growth_ids isn't a real field on respond
+    for either direction, and image_ids isn't real on direction="out" —
+    sending either fails the whole call with "HTTP 400: Extra key found in
+    JSON". Both dropped from the outgoing body on direction="out", with a
+    WARNING each in guidance rather than a hard failure or silent no-op."""
+    fake = _FakeAPIClient(
+        post_responses={"/referrals/out/999/response": _mutation({"ref_id": "999"})},
+        get_responses={"/referrals/out/999": _get_out({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(
+        action="respond", direction="out", referral_id="999", facility_id="f1",
+        patient_id="p1", response_status="Reviewed",
+        growth_ids="1,2", image_ids="3,4",
+    )
+
+    _, sent_body = fake.post_calls[0]
+    assert "growth_ids" not in sent_body
+    assert "image_ids" not in sent_body
+    assert "growth_ids" in result["guidance"]
+    assert "image_ids" in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_respond_in_sends_image_ids_but_not_growth_ids(monkeypatch) -> None:
+    """image_ids IS a real field on direction="in" respond (confirmed live —
+    only direction="out" rejects it); growth_ids is dropped on both."""
+    fake = _FakeAPIClient(
+        post_responses={"/referrals/in/500/response": _mutation({"ref_in_id": "500"})},
+        get_responses={"/referrals/in/500": _get_in({"ref_in_id": "500"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(
+        action="respond", direction="in", referral_id="500", facility_id="f1",
+        patient_id="p1", response_status="Completed",
+        growth_ids="1,2", image_ids="3,4",
+    )
+
+    _, sent_body = fake.post_calls[0]
+    assert sent_body["image_ids"] == "3,4"
+    assert "growth_ids" not in sent_body
+    assert "growth_ids" in result["guidance"]
+    assert "image_ids" not in result["guidance"]
 
 
 @pytest.mark.asyncio
@@ -1094,6 +1381,7 @@ async def test_respond_in_sends_diagnoses_and_notes_cascade_quirk(monkeypatch) -
 
     result = await referrals.manageReferrals.fn(
         action="respond", direction="in", referral_id="500", facility_id="f1",
+        patient_id="p1",
         response_status="Completed",
         diagnoses=[{"name": "Hypertension", "code": "I10"}],
     )
@@ -1128,6 +1416,7 @@ async def test_respond_no_content_returns_clean_error(monkeypatch) -> None:
     with pytest.raises(ToolError) as exc_info:
         await referrals.manageReferrals.fn(
             action="respond", direction="out", referral_id="999", facility_id="f1",
+            patient_id="p1",
         )
 
     assert json.loads(str(exc_info.value))["error"] == "No response content provided"
@@ -1152,6 +1441,7 @@ async def test_respond_response_masks_raw_notes_pointer_on_verify_fallback(monke
 
     result = await referrals.manageReferrals.fn(
         action="respond", direction="out", referral_id="999", facility_id="f1",
+        patient_id="p1",
         response_notes="Patient seen, cleared for surgery.",
     )
 
@@ -1195,6 +1485,7 @@ async def test_respond_out_accepts_to_be_reviewed(monkeypatch) -> None:
 
     result = await referrals.manageReferrals.fn(
         action="respond", direction="out", referral_id="999", facility_id="f1",
+        patient_id="p1",
         response_status="To Be Reviewed",
     )
 

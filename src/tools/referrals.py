@@ -240,29 +240,48 @@ async def manageReferrals(
     - "get": Fetch a single referral (referral_id required).
     - "update": Update an existing referral (referral_id required). The real backend
       does a FULL ROW OVERWRITE, not a partial patch — any field you omit gets wiped
-      to null/empty server-side. This tool fetches the existing referral first and
-      merges your fields on top of it, so omitting facility_id/patient_id/priority/
-      referral_reason/response_status/referral_date/the party fields will correctly
-      preserve their current values. facility_id, from_member (or to_member for
-      "in"), and patient_id are still hard-required by the backend either way —
-      the merge fills them from the existing record if you don't pass them.
-      NOT covered by this merge (still wiped if omitted, because "get" doesn't
-      return them or their round-trip shape isn't confirmed): referral_notes,
-      response_notes, related_encounter_id (encounter_id), diagnoses, insurance,
-      and the attachment-linking *_ids fields. Pass these explicitly every time
-      you want them to survive an update.
+      to null/empty server-side. This tool fetches the existing referral first (plus
+      a second read of the notes sub-resource for referral_notes) and merges your
+      fields on top of it, so omitting facility_id/patient_id/priority/
+      referral_reason/response_status/referral_date/the party fields/referral_notes/
+      diagnoses/insurance will correctly preserve their current values. facility_id,
+      from_member (or to_member for "in"), and patient_id are still hard-required by
+      the backend either way — the merge fills them from the existing record if you
+      don't pass them. response_notes survives untouched regardless of what you pass —
+      the backend has no write path for it on update at all.
+      NOT covered by this merge: related_encounter_id (encounter_id) — it isn't
+      readable back from "get" or any sub-resource, so it's genuinely wiped on any
+      update that doesn't pass encounter_id explicitly; the response guidance warns
+      when this happens rather than losing it silently. Separately, do NOT resend the
+      attachment-linking *_ids fields (chartnote_ids/lab_ids/document_ids/image_ids/
+      growth_ids) on update unless you actually mean to link something new —
+      addAttachmentsToRO inserts a fresh row per id and regenerates the chart-note PDF
+      on every call, so resending the same ids on each edit duplicates attachments and
+      files rather than being a harmless no-op.
       direction="in" additionally cannot change facility_id or its party fields
       via update at all — the backend ignores them for "in" regardless.
-    - "respond": Record a response to a referral (referral_id AND facility_id both
-      required — facility_id is enforced by the API's request schema even though
-      the response-recording logic itself never uses it, so don't assume it's
-      optional just because "get"/"update" treat it as re-derivable). Beyond that,
-      provide at least one of response_date, response_notes, response_status, or
-      (direction="in" only) diagnoses. chartnote_ids/lab_ids/document_ids/
-      image_ids/growth_ids link supporting records to the response, same
-      comma-separated-id convention as create/update. direction="out" does NOT
-      accept diagnoses — the API's schema has no such field for it; only
-      direction="in" writes a response diagnosis list.
+      SIDE EFFECT (direction="out" only): if this referral has an internal
+      to_internal_member, updateReferralOut unconditionally blanks the linked
+      "in" record's response_diagnoses (RESPONSE_DIAGNOSES set to "" server-side
+      regardless of what this call sends). Nothing in this tool's request body
+      can prevent it — flagging as a known backend-side quirk, not something
+      fixable client-side (candidate for a backend-side ticket).
+    - "respond": Record a response to a referral (referral_id, facility_id, AND
+      patient_id all required — facility_id is enforced by the API's request
+      schema even though the response-recording logic itself never uses it, so
+      don't assume it's optional just because "get"/"update" treat it as
+      re-derivable; patient_id is read unconditionally by the backend's
+      attachment-linking step and NPEs without it, on both directions, even on
+      a call with no attachments at all). Beyond that, provide at least one of
+      response_date, response_notes, response_status, or (direction="in" only)
+      diagnoses. Attachment-field support is NARROWER here than on
+      create/update: chartnote_ids/lab_ids/document_ids work on both
+      directions; image_ids works on direction="in" only; growth_ids doesn't
+      work on either direction — any of those two on direction="out"
+      (or growth_ids on direction="in") is dropped from the request with a
+      WARNING in the response guidance, not sent and silently ignored.
+      direction="out" does NOT accept diagnoses — the API's schema has no such
+      field for it; only direction="in" writes a response diagnosis list.
       QUIRK (direction="in" only): if this incoming referral is linked to an
       internal outbound referral record (i.e. it was auto-created when someone at
       this practice referred a patient to an internal provider), responding here
@@ -571,13 +590,18 @@ async def manageReferrals(
                     # so a call that only means to change e.g. priority doesn't silently
                     # blank everything else.
                     #
-                    # IMPORTANT — this merge is only as complete as what "get" returns.
-                    # ReferralOutResponseNew/ReferralInResponseNew (the "get" shape) does NOT
-                    # include referral_notes, response_notes, or related_encounter_id at all,
-                    # and diagnoses/insurance's stored round-trip shape (JSON string vs. parsed
-                    # array) isn't confirmed — so those fields are NOT safely preserved here.
-                    # If you're not explicitly setting one of those on this call, treat it as
-                    # being wiped, same as before this fix.
+                    # IMPORTANT — this merge is only as complete as what "get" (plus the
+                    # notes sub-resource, below) can recover. CONFIRMED LIVE (2026-08-25):
+                    # diagnoses/insurance ARE in the "get" shape, as JSON-encoded strings
+                    # (_parse_list_of_dicts already accepts that form) — merged below.
+                    # referral_notes is NOT in "get" at all, but IS recoverable from its own
+                    # GET .../notes sub-resource ({"referrals_out_notes": {"content": "..."}} /
+                    # referrals_in_notes for direction="in") — fetched and merged below.
+                    # response_notes has no equivalent sub-resource and updateReferralOut has
+                    # no row.set for it at all, so it survives untouched regardless — nothing
+                    # to merge. related_encounter_id is in neither "get" nor the notes
+                    # endpoint — genuinely unrecoverable; the caller is warned in guidance
+                    # when it's about to be cleared rather than losing it silently.
                     existing_raw = await client.get(f"{base_path}/{referral_id}")
                     if isinstance(existing_raw, dict) and existing_raw.get("error"):
                         return {
@@ -593,6 +617,40 @@ async def manageReferrals(
                     if not isinstance(existing, dict):
                         existing = {}
 
+                    # CONFIRMED LIVE (2026-08-25): diagnoses/insurance round-trip through
+                    # "get" as JSON-encoded strings — reuse the same parser create/respond
+                    # already use for caller input. A merged value that fails to parse is
+                    # dropped rather than crashing the whole update over it (unexpected but
+                    # not worth failing an otherwise-valid priority/status change).
+                    if diagnoses_parsed is None and existing.get("diagnoses") is not None:
+                        try:
+                            diagnoses_parsed = _parse_list_of_dicts(existing.get("diagnoses"), "diagnoses")
+                        except ValueError:
+                            pass
+                    if insurance_parsed is None and existing.get("insurance") is not None:
+                        try:
+                            insurance_parsed = _parse_list_of_dicts(existing.get("insurance"), "insurance")
+                        except ValueError:
+                            pass
+
+                    # CONFIRMED LIVE (2026-08-25): referral_notes isn't in "get" at all, but
+                    # has its own read endpoint — fetched only when the caller didn't already
+                    # supply a value, so an explicit referral_notes on this call always wins.
+                    # Best-effort: a failure here shouldn't block the rest of the update.
+                    if referral_notes is None:
+                        notes_response = await client.get(f"{base_path}/{referral_id}/notes")
+                        if isinstance(notes_response, dict) and not notes_response.get("error"):
+                            notes_key = "referrals_out_notes" if direction == "out" else "referrals_in_notes"
+                            notes_wrapper = notes_response.get(notes_key)
+                            if isinstance(notes_wrapper, dict) and notes_wrapper.get("content"):
+                                referral_notes = notes_wrapper["content"]
+
+                    # related_encounter_id is in neither "get" nor the notes endpoint —
+                    # genuinely unrecoverable. Warn rather than silently clear it.
+                    encounter_id_will_be_cleared = (
+                        encounter_id is None and bool(existing.get("related_encounter_id") or existing.get("encounter_id"))
+                    )
+
                     if facility_id is None:
                         facility_id = existing.get("facility_id")
                     if patient_id is None:
@@ -602,7 +660,14 @@ async def manageReferrals(
                     if referral_reason is None:
                         referral_reason = existing.get("referral_reason")
                     if response_status is None:
-                        merged_status = existing.get("response_status")
+                        # CONFIRMED LIVE (2026-08-27): a referral that has never had a
+                        # response recorded returns response_status="" (empty string),
+                        # not an absent key or null — a referral untouched by "respond"
+                        # would otherwise fail-closed below on every single update,
+                        # demanding an explicit response_status for a field that was
+                        # never actually set by anything. Treated the same as "no merged
+                        # value", not as an out-of-set value needing confirmation.
+                        merged_status = existing.get("response_status") or None
                         if merged_status is not None and merged_status not in REFERRAL_STATUS_SETS[direction]["update"]:
                             # The merged-in value is valid for whatever action last set
                             # it (e.g. "respond") but not for "update"'s own narrower
@@ -619,14 +684,36 @@ async def manageReferrals(
                             # the caller never touched, worse than the 400 this
                             # replaced. Fail instead and let the caller decide.
                             if direction == "out":
+                                # The ONLY value respond/create/update on direction="out" can
+                                # produce that isn't already in update's own set is
+                                # "To Be Reviewed" — respond/out's set is (Pending, "To Be
+                                # Reviewed", Reviewed), and create/update/out's set is
+                                # (Pending, Received, Reviewed); "To Be Reviewed" is the one
+                                # value exclusive to respond. It's also stamped by the
+                                # respond-cascade QUIRK documented on "respond": responding to
+                                # a linked internal "in" referral force-sets ITS linked "out"
+                                # record's status to this exact literal, regardless of what
+                                # was passed. No value in update's own set can reproduce it —
+                                # say so explicitly instead of asking for something impossible.
                                 return {
                                     "error": f"Stored response_status={merged_status!r} is not valid for direction='out' update",
                                     "guidance": (
-                                        f"This referral's response_status was set by a different action (e.g. 'respond') and "
-                                        f"can't be carried through 'update' as-is — the backend clears the column when "
-                                        f"response_status is left out of an update request, it does not leave it untouched. "
-                                        f"Provide an explicit response_status from {REFERRAL_STATUS_SETS[direction]['update']} "
-                                        f"to keep or change it as part of this call."
+                                        f"This referral's response_status ({merged_status!r}) can't be carried through "
+                                        f"'update' as-is — the backend clears the column when response_status is left out "
+                                        f"of an update request, it does not leave it untouched. "
+                                        + (
+                                            "'To Be Reviewed' specifically is not a value 'update' can ever set — it's "
+                                            "stamped by the backend itself when the linked inbound referral is responded "
+                                            "to (see the 'respond' cascade quirk), not by any direct write. No value in "
+                                            f"{REFERRAL_STATUS_SETS[direction]['update']} reproduces it, so this update "
+                                            "necessarily changes the status to one of those three — there's no way to "
+                                            "edit this referral while keeping 'To Be Reviewed'. If it needs to come back, "
+                                            "that only happens by responding again to the linked inbound referral "
+                                            "(action='respond', direction='in'), not by updating this record."
+                                            if merged_status == "To Be Reviewed" else
+                                            f"Provide an explicit response_status from {REFERRAL_STATUS_SETS[direction]['update']} "
+                                            f"to keep or change it as part of this call."
+                                        )
                                     )
                                 }
                             # direction="in": updateReferralIn has this same row.set
@@ -719,7 +806,16 @@ async def manageReferrals(
                         result = _unwrap_get_response(verify_response, direction)
                     else:
                         result = _unwrap_mutation_response(response)
-                    result["guidance"] = "Referral updated."
+                    guidance = "Referral updated."
+                    if encounter_id_will_be_cleared:
+                        guidance += (
+                            " WARNING: this referral had a linked encounter_id, and it's now "
+                            "been cleared — related_encounter_id can't be read back from "
+                            "'get' to merge automatically, so it's wiped on any update that "
+                            "doesn't pass encounter_id explicitly. Re-link it with an explicit "
+                            "encounter_id on a follow-up update if this wasn't intended."
+                        )
+                    result["guidance"] = guidance
                     return strip_empty_values(_mask_notes_pointer(result))
 
                 case "respond":
@@ -746,6 +842,17 @@ async def manageReferrals(
                             "error": "facility_id required for respond",
                             "guidance": "Provide facility_id — required by the API's request schema even though the response-recording logic itself doesn't use it."
                         }
+                    # LIVE TEST (2026-08-25): both directions' addAttachmentsToRO call
+                    # dereferences inputJson.get("patient_id").asLong() unconditionally
+                    # (no null guard) — an absent patient_id NPEs, caught generically and
+                    # surfaced as the opaque "HTTP 500: Internal Error" this endpoint has
+                    # returned on every prior attempt. patient_id was never sent here
+                    # before this fix. Required, not just included when present.
+                    if not patient_id:
+                        return {
+                            "error": "patient_id required for respond",
+                            "guidance": "Provide patient_id — the API's addAttachmentsToRO step dereferences it unconditionally and NPEs without it."
+                        }
 
                     # Everything else here IS genuinely optional per the same schema. "out"
                     # doesn't accept diagnoses at all (no <key name="diagnoses"> in
@@ -753,23 +860,34 @@ async def manageReferrals(
                     # for direction="in".
                     respond_body: Dict[str, Any] = {
                         "facility_id": facility_id,
+                        "patient_id": patient_id,
                         "response_date": response_date.isoformat() if response_date else None,
                         "response_notes": response_notes,
                         "response_status": response_status,
                         "chartnote_ids": chartnote_ids,
                         "lab_ids": lab_ids,
                         "document_ids": document_ids,
-                        "image_ids": image_ids,
-                        "growth_ids": growth_ids,
                     }
+                    # CONFIRMED LIVE (2026-08-25): unlike create/update, respond's real
+                    # attachment support is narrower than the shared *_ids field list
+                    # suggests. growth_ids is not a field on EITHER respond schema —
+                    # sending it fails the whole call with "HTTP 400: Extra key found in
+                    # JSON" (reproduced both directions). image_ids gets the same 400 on
+                    # direction="out", but IS accepted on direction="in" (a bad id there
+                    # 500s downstream instead — a schema hit, not a rejection). Dropped
+                    # rather than forwarded, same pattern as diagnoses below.
+                    growth_ids_dropped = bool(growth_ids)
+                    image_ids_dropped_for_out = direction == "out" and bool(image_ids)
+                    if direction == "in" and image_ids:
+                        respond_body["image_ids"] = image_ids
                     diagnoses_dropped_for_out = direction == "out" and diagnoses_parsed
                     if direction == "in":
                         respond_body["diagnoses"] = diagnoses_parsed
                     respond_body = {k: v for k, v in respond_body.items() if v is not None}
 
-                    # facility_id alone (required above) isn't "a response" — require at
-                    # least one actual content field too.
-                    if not any(k != "facility_id" for k in respond_body):
+                    # facility_id/patient_id alone (both required above) aren't "a
+                    # response" — require at least one actual content field too.
+                    if not any(k not in ("facility_id", "patient_id") for k in respond_body):
                         return {
                             "error": "No response content provided",
                             "guidance": "Provide at least one of response_date, response_notes, response_status"
@@ -778,28 +896,31 @@ async def manageReferrals(
 
                     response = await client.post(f"{base_path}/{referral_id}/response", data=respond_body)
                     if isinstance(response, dict) and response.get("error"):
-                        # CONFIRMED LIVE (2026-08-11): this endpoint currently returns a
-                        # generic "HTTP 500: Internal Error" for BOTH directions, on
-                        # multiple different, valid, pre-existing referral_ids with valid
-                        # facility_id/response_status — reproduced twice on direction="out"
-                        # alone. This is NOT an ID-mismatch or client-input problem (the
-                        # earlier theory below about "in" using the wrong linked id is a
-                        # real, separate risk from reading addReferralInResponse's
-                        # null-unguarded row dereference, but doesn't explain the "out"
-                        # failures) — it currently looks like a broader, backend-side issue
-                        # in this environment that no client-side fix here can work around.
+                        # HISTORY: this endpoint used to fail near-universally with a
+                        # generic "HTTP 500: Internal Error", previously assumed to be an
+                        # unfixable backend-side issue. Two real, confirmed-live causes are
+                        # now fixed above instead of worked around: (1) both directions'
+                        # addAttachmentsToRO dereferences patient_id unconditionally and
+                        # NPEs without it — patient_id is now required and sent; (2)
+                        # growth_ids (either direction) and image_ids (direction="out")
+                        # aren't real fields on this endpoint's schema and fail the whole
+                        # call with "HTTP 400: Extra key found in JSON" if sent — now
+                        # dropped instead of forwarded (see above). An error that still
+                        # reaches here is either a genuinely bad attachment id (confirmed
+                        # live: a nonexistent image_id 500s on direction="in" rather than
+                        # being cleanly rejected) or a real remaining backend issue — not
+                        # the previous default assumption.
                         mismatch_hint = (
-                            " If this is a 500 on direction='in' specifically, double-check "
-                            "referral_id is really that referral's REF_IN_ID (from a "
-                            "direction='in' list/get call) and not its linked referral-out's "
-                            "id — they're different numbers even for a referral that started "
-                            "as an internal 'out' referral. If it fails on direction='out' too "
-                            "with the same generic error, this is likely a backend-side issue, "
-                            "not something fixable from this tool." if direction == "in" else
-                            " A generic 500 here (not a validation-style 400) on otherwise-valid "
-                            "input has been observed to be a backend-side issue, not fixable "
-                            "from this tool — confirm with whoever owns the API before assuming "
-                            "a client-side mistake."
+                            " If this is direction='in', double-check referral_id is really "
+                            "that referral's REF_IN_ID (from a direction='in' list/get call) "
+                            "and not its linked referral-out's id — they're different numbers "
+                            "even for a referral that started as an internal 'out' referral. "
+                            "Also check any attachment ids (chartnote_ids/lab_ids/"
+                            "document_ids/image_ids) are real, existing records — a "
+                            "nonexistent one has been observed to 500 rather than fail "
+                            "cleanly." if direction == "in" else
+                            " Check any attachment ids (chartnote_ids/lab_ids/document_ids) "
+                            "are real, existing records for this patient/facility."
                         )
                         return {
                             "error": response["error"],
@@ -819,6 +940,18 @@ async def manageReferrals(
                             "responses don't support a diagnoses field (the API schema has no "
                             "such key for this direction; only direction='in' does). Nothing "
                             "downstream received these diagnoses from this call."
+                        )
+                    if growth_ids_dropped:
+                        guidance += (
+                            " WARNING: growth_ids was provided but NOT sent — respond has no "
+                            "growth_ids field on either direction; use 'update' if you need to "
+                            "link growth records."
+                        )
+                    if image_ids_dropped_for_out:
+                        guidance += (
+                            " WARNING: image_ids was provided but NOT sent — direction='out' "
+                            "respond has no image_ids field (direction='in' does); use 'update' "
+                            "if you need to link images to an outbound referral."
                         )
                     if direction == "in":
                         # Confirmed in ReferralBeanImpl.addReferralInResponse: if this "in"
