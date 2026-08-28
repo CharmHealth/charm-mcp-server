@@ -224,9 +224,6 @@ class CharmHealthAPIClient:
             logger.error(f"Token refresh failed while preparing request to {endpoint}: {e}")
             return {"error": f"Token refresh failed: {e}"}
 
-        auth_header = headers.get("Authorization", "")
-        auth_preview = f"{auth_header[:20]}...({len(auth_header)} chars)" if auth_header else "MISSING"
-
         try:
             match method:
                 case "GET":
