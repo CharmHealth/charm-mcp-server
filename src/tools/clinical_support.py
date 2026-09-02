@@ -1,16 +1,34 @@
 from fastmcp import FastMCP, Context
 from fastmcp.server.dependencies import get_http_headers
-from typing import Optional, List, Dict, Any, Literal, TypedDict
+from typing import Optional, List, Dict, Any, Literal, TypedDict, Union
 from datetime import date
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
+import json
 import logging
 from telemetry import telemetry, with_tool_metrics
 
 logger = logging.getLogger(__name__)
 
 clinical_support_mcp = FastMCP(name="CharmHealth Clinical Support MCP Server")
+
+
+def _parse_order_tests(value: Optional[Union[str, List[Dict[str, Any]]]]) -> Optional[List[Dict[str, Any]]]:
+    """LLMs sometimes stringify array-typed params — accept either a native list or a JSON-encoded string."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            raise ValueError("order_tests must be a JSON array of objects, or a valid JSON-encoded string of one")
+    if not isinstance(value, list):
+        raise ValueError("order_tests must be a list of objects")
+    if not all(isinstance(item, dict) for item in value):
+        raise ValueError("order_tests must be a list of objects — each item must be a JSON object with lab_id/lab_name/medical_record_id/lab_record_id, not a bare string or number")
+    return value
+
 
 @clinical_support_mcp.tool
 @with_tool_metrics()
@@ -588,12 +606,12 @@ async def managePatientFiles(
 @clinical_support_mcp.tool
 @with_tool_metrics()
 async def managePatientLabs(
-    action: Literal["list", "get_details"],
+    action: Literal["list", "get_details", "order"],
     # Common fields
     patient_id: Optional[str] = None,
     group_id: Optional[str] = None,
     lab_order_id: Optional[str] = None,
-    
+
     # Listing fields
     reviewer_id: Optional[str] = None,
     status: Optional[int] = None,  # 0 or 2
@@ -606,22 +624,53 @@ async def managePatientLabs(
     sort_by: Optional[Literal["DATE", "FULL_NAME"]] = None,
     is_ascending: Optional[bool] = None,
 
+    # order fields
+    facility_id: Optional[str] = None,
+    enc_facility_id: Optional[str] = None,  # confirmed against the real API's request XML; not in the published docs
+    encounter_id: Optional[str] = None,
+    member_id: Optional[str] = None,
+    ordered_date: Optional[date] = None,
+    order_tests: Optional[Union[str, List[Dict[str, Any]]]] = None,
+    lab_notes: Optional[str] = None,
+    intra_office_notes: Optional[str] = None,
+    specimen_collection_date: Optional[str] = None,
+    specimen_additional_comments: Optional[str] = None,  # same as enc_facility_id: confirmed via XML, absent from published docs
+
     response_format: Optional[Literal["concise", "detailed"]] = None,  # reserved for cortex; no behavior change yet (J13/CH-695)
 
     ctx: Context = None,
 ) -> Dict[str, Any]:
     """
-    Manage patient laboratory results.
-    
+    Manage patient laboratory results and orders.
+
     <usecase>
-    Laboratory results management - list lab results and get detailed reports.
-    Lab results arrive automatically from integrated labs (LabCorp, Quest). For manual entry, use the CharmHealth web portal.
+    Laboratory results management (list results, get detailed reports) and placing
+    new lab orders. Lab results arrive automatically from integrated labs (LabCorp,
+    Quest). For manual entry, use the CharmHealth web portal.
     </usecase>
-    
+
     <instructions>
     Actions:
     - "list": Show lab results with filtering (optionally filter by patient_id, reviewer_id, status, date range)
     - "get_details": Get detailed lab report (requires group_id OR lab_order_id)
+    - "order": Place a new lab order (patient_id required). Requires either
+      encounter_id (derives the ordering provider/facility/date from that
+      encounter) or both member_id and facility_id. order_tests is required and
+      must be non-empty — a list of objects (or a JSON-encoded string of one),
+      each with at least lab_id, lab_name, medical_record_id, and lab_record_id.
+      There is currently no lookup action in this tool to discover those catalog
+      values — the practice's lab/test catalog lookup endpoints
+      (GET /labs/list, GET /lab/{id}/tests/search) require an OAuth scope
+      ("defaults" on the sandbox tenant tested) that this app's credentials don't
+      carry, confirmed via live testing, not fixable from this tool. Whoever calls
+      "order" needs to already know the real catalog values (e.g. looked up
+      manually in the CharmHealth web UI's Settings > Labs) — don't guess or
+      fabricate them; a bad id fails clean, not silently. Optionally: test_name,
+      test_code, test_type, specimen_condition_temperature, specimen_type,
+      z_segment_aoe_map per test. Optional order-level fields: ordered_date
+      (defaults to today, ignored if encounter_id is set), lab_order_id (add these
+      tests to an existing open order instead of creating a new one), lab_notes,
+      intra_office_notes, specimen_collection_date, specimen_additional_comments.
     For detailed results: Use group_id for result groups or lab_order_id for specific orders
     Status codes: 0 for pending, 2 for final results
 
@@ -748,9 +797,67 @@ async def managePatientLabs(
                         response["guidance"] = "Detailed lab results retrieved successfully. Review the test parameters and values for clinical interpretation."
                     else:
                         response["guidance"] = "Lab details not found. Verify the group_id or lab_order_id is correct using action='list' first."
-                    
+
                     return strip_empty_values(response)
-                    
+
+                case "order":
+                    if not patient_id:
+                        return {
+                            "error": "patient_id required for order",
+                            "guidance": "Provide the patient_id to order labs for."
+                        }
+                    if not encounter_id and not (member_id and facility_id):
+                        return {
+                            "error": "Either encounter_id, or both member_id and facility_id, are required for order",
+                            "guidance": "Provide encounter_id to order from within a visit, or member_id + facility_id otherwise."
+                        }
+                    try:
+                        order_tests_parsed = _parse_order_tests(order_tests)
+                    except ValueError as e:
+                        return {"error": str(e), "guidance": "Fix order_tests and try again."}
+                    if not order_tests_parsed:
+                        return {
+                            "error": "order_tests is required and must be non-empty for order",
+                            "guidance": "Provide at least one test with real lab_id/lab_name/medical_record_id/lab_record_id values — e.g. looked up in the CharmHealth web UI's Settings > Labs."
+                        }
+                    missing_fields = [
+                        i for i, t in enumerate(order_tests_parsed)
+                        if not all(t.get(k) for k in ("lab_id", "lab_name", "medical_record_id", "lab_record_id"))
+                    ]
+                    if missing_fields:
+                        return {
+                            "error": f"order_tests[{missing_fields[0]}] is missing one of lab_id/lab_name/medical_record_id/lab_record_id",
+                            "guidance": "Every order_tests item needs all four — use real catalog values, not guessed or fabricated ones."
+                        }
+
+                    order_body: Dict[str, Any] = {
+                        "encounter_id": encounter_id,
+                        "member_id": member_id,
+                        "facility_id": facility_id,
+                        "enc_facility_id": enc_facility_id,
+                        "ordered_date": ordered_date.isoformat() if ordered_date else None,
+                        "lab_order_id": lab_order_id,
+                        "lab_notes": lab_notes,
+                        "intra_office_notes": intra_office_notes,
+                        "specimen_collection_date": specimen_collection_date,
+                        "specimen_additional_comments": specimen_additional_comments,
+                        "order_tests": order_tests_parsed,
+                    }
+                    order_body = {k: v for k, v in order_body.items() if v is not None}
+
+                    response = await client.post(f"/patients/{patient_id}/labs/order", data=order_body)
+                    if isinstance(response, dict) and response.get("error"):
+                        return {
+                            "error": response["error"],
+                            "guidance": "Could not place the lab order. Verify patient_id, the encounter/member/facility fields, and that every order_tests item has real catalog values."
+                        }
+                    # Real response is a bare JSON array of created/updated LAB_ORDER_ID
+                    # values, wrapped under "lab_orders_list" — confirmed against
+                    # LabsAPIBeanImpl.addLabOrder's OutputXMLFormat.
+                    order_ids = response if isinstance(response, list) else (response or {}).get("lab_orders_list") or []
+                    result = {"lab_order_ids": order_ids, "guidance": "Lab order placed." if order_ids else "Lab order call succeeded but returned no order IDs — verify against action='list'."}
+                    return strip_empty_values(result)
+
         except Exception as e:
             logger.error(f"Error in managePatientLabs: {e}")
             return {

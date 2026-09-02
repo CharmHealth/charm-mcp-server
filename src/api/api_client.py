@@ -145,6 +145,7 @@ class CharmHealthAPIClient:
         }
 
         async with httpx.AsyncClient() as client:
+            response = None
             try:
                 response = await client.post(
                     self.token_url,
@@ -175,24 +176,54 @@ class CharmHealthAPIClient:
                 return new_token
 
             except Exception as e:
-                logger.error(f"Failed to refresh token: {e} with response: {response.text}")
+                # `response` can still be None here — client.post() itself can raise
+                # (connection refused, DNS failure, timeout) before it's ever assigned,
+                # and referencing response.text unconditionally would replace that real
+                # error with an UnboundLocalError, undermining the "a failed refresh
+                # returns a clean error" goal this whole retry path exists for.
+                response_detail = response.text if response is not None else "no response received"
+                logger.error(f"Failed to refresh token: {e} with response: {response_detail}")
                 raise
     
-    async def _make_request(self, method: str, endpoint: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None, retry_count: int = 0) -> Dict[str, Any]:
+    async def _make_request(self, method: str, endpoint: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None, retry_count: int = 0, auth_retried: bool = False) -> Dict[str, Any]:
         logger.info(f"Making {method} request to {endpoint}")
         await self.ensure_client()
-        headers = await self._get_auth_headers()
         start_time = time.time()
-        
+
         # Remove any IDs from endpoint for metrics (an ID is an 18 digit number either between / and / or at the end)
         clean_endpoint = re.sub(r'/[0-9]{18}$', '', endpoint)
         clean_endpoint = re.sub(r'/[0-9]{18}/', '/', clean_endpoint)
-        
+
         # Mark API call as starting
         start_api_call(self.client_id, clean_endpoint, method)
-        
+
         api_success = False
-        
+
+        # Fetching headers is deliberately in its own try/except, separate from the
+        # request try/except below. _get_auth_headers() -> _refresh_token() can raise
+        # httpx.HTTPStatusError if the OAuth TOKEN endpoint itself returns a non-2xx
+        # (e.g. a 401 for a bad/rotated client_secret) — if that were allowed to reach
+        # the request try/except's `except httpx.HTTPStatusError as e:` clause below,
+        # `e.response` would be the OAuth server's response, not the target API's, and
+        # the status_code==401-triggers-a-refresh-and-retry logic there would wrongly
+        # fire a second, unwanted refresh for a problem a second refresh cannot fix
+        # (bad client_secret), plus mislabel the OAuth server's error as the target
+        # endpoint's. Catching it here first, before that logic ever sees it, avoids both.
+        try:
+            headers = await self._get_auth_headers()
+        except Exception as e:
+            duration = time.time() - start_time
+            record_api_call(self.client_id, False, clean_endpoint, method, duration)
+            # start_api_call() above set the gauge active — this early return skips
+            # the `finally` below (it belongs to the second try), so without this the
+            # gauge for this (endpoint, method, client_id) sticks at "in flight"
+            # forever. A dead refresh token sends every call down this path, so the
+            # dashboard would read as permanently stuck mid-request during the exact
+            # incident this code exists to handle.
+            end_api_call(self.client_id, clean_endpoint, method, duration, False)
+            logger.error(f"Token refresh failed while preparing request to {endpoint}: {e}")
+            return {"error": f"Token refresh failed: {e}"}
+
         try:
             match method:
                 case "GET":
@@ -227,8 +258,17 @@ class CharmHealthAPIClient:
             duration = time.time() - start_time
             record_api_call(self.client_id, False, clean_endpoint, method, duration)
             
-            if e.response.status_code == 401 and retry_count < self.max_retries:
-                logger.warning("Received 401, forcing token refresh")
+            if e.response.status_code == 401 and not auth_retried:
+                # Refresh and retry exactly once per request, regardless of max_retries.
+                # A 401 that survives a *freshly refreshed* token means the token was
+                # never the problem (e.g. the account's OAuth grant lacks the scope this
+                # endpoint needs) — retrying up to max_retries times would just repeat
+                # that same failure while repeatedly wiping the shared token cache
+                # (_shared_token_cache is keyed by client_id+refresh_token, so it's shared
+                # by every other in-flight call using the same credentials) for no benefit,
+                # and risks compounding a real refresh-token problem if the one refresh
+                # this does perform also fails.
+                logger.warning("Received 401, forcing a single token refresh and retry")
                 self._auth_token = None
                 self._token_expires_at = 0
                 try:
@@ -236,26 +276,29 @@ class CharmHealthAPIClient:
                     self.__class__._shared_token_cache.pop(key, None)
                 except Exception:
                     pass
-                return await self._make_request(method, endpoint, params, data, retry_count + 1)
+                return await self._make_request(method, endpoint, params, data, retry_count, auth_retried=True)
             logger.error(f"HTTP error {e.response.status_code}: {e}")
             logger.error(f"Response body: {e.response.text}")
             return {"error": f"HTTP {e.response.status_code}: {e.response.text}"}
-            
+
         except httpx.RequestError as e:
             # Record failed API call
             duration = time.time() - start_time
             record_api_call(self.client_id, False, clean_endpoint, method, duration)
-            
+
             if retry_count < self.max_retries:
                 logger.warning(f"Request failed, retrying ({retry_count + 1}/{self.max_retries}): {e}")
                 await asyncio.sleep(2 ** retry_count)
-                return await self._make_request(method, endpoint, params, data, retry_count + 1)
-            
+                return await self._make_request(method, endpoint, params, data, retry_count + 1, auth_retried)
+
             logger.error(f"Request failed after {self.max_retries} retries: {e}")
             return {"error": f"Request failed: {e}"}
-            
+
         except Exception as e:
-            # Record failed API call
+            # Record failed API call. Token-refresh failures are caught by their
+            # own isolated try/except above (since 96731d7) and never reach here —
+            # this branch is for genuinely unexpected errors in the request/response
+            # handling above (e.g. an httpx internal error, a bad response.json()).
             duration = time.time() - start_time
             record_api_call(self.client_id, False, clean_endpoint, method, duration)
             logger.error(f"Unexpected error: {e}")

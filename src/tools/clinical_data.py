@@ -14,6 +14,7 @@ from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
 import logging
+import re
 from telemetry import telemetry, with_tool_metrics
 
 logger = logging.getLogger(__name__)
@@ -336,14 +337,83 @@ async def managePatientVitals(
                 "guidance": f"Vitals {action} failed. Ensure patient_id and encounter_id are valid. Use getPracticeInfo(info_type='vitals') to verify vital naming conventions."
             }
 
+# Real CharmHealth backend enums for route/dose_form/dosage_unit (confirmed against
+# security-api-charts.xml's drugRoute/drugDoseForm/drugDosageUnit regexes) — the real API
+# rejects anything outside these sets, so validating here catches a bad value before the call.
+DRUG_ROUTES = (
+    "buccal", "compounding", "enteral", "extra-amniotic", "implant", "inhalation", "injectable",
+    "intra-amniotic", "intra-articular", "intrabiliary", "intradermal", "intralymphatic",
+    "intramuscular", "intraocular", "intraperitoneal", "intrapleural", "intrathecal",
+    "intratracheal", "intrauteral", "intravenous", "intravesical", "intravitreal", "irrigation",
+    "mucous membrane", "nasal", "ophthalmic", "oral", "oral and injectable", "oral and rectal",
+    "oral and topical", "oral transmucosal", "otic", "parenteral", "percutaneous", "rectal",
+    "spinal", "subcutaneous", "sublingual", "topical", "transdermal", "transurethral", "vaginal",
+)
+
+DRUG_DOSE_FORMS = (
+    "aerosol", "aerosol powder", "aerosol with adapter", "bar", "capsule",
+    "capsule, extended release", "concentrate", "cream", "cream with applicator", "crystal",
+    "delayed release capsule", "delayed release tablet", "device", "disintegrating strip",
+    "dispersion", "dressing", "drops", "elixir", "emulsion", "enema", "enteric coated tablet",
+    "film", "film, extended release", "foam", "foam with applicator", "gas", "gel",
+    "gel forming solution", "gel with applicator", "gelcap", "granule",
+    "granule for reconstitution", "granule, effervescent", "granule, enteric coated",
+    "granule, extended release", "gum", "implant", "injection", "insert", "kit", "liquid",
+    "liquid, extended release", "lotion", "lozenge", "oil", "ointment", "ointment w/applicator",
+    "pad", "paste", "powder", "powder for injection", "powder for injection, extended release",
+    "powder for reconstitution", "powder for reconstitution, delayed release",
+    "powder for reconstitution, extended release", "ring", "shampoo", "soap", "solution",
+    "sponge", "spray", "stick", "suppository", "suspension", "suspension, extended release",
+    "swab", "syrup", "tablet", "tablet, chewable", "tablet, chewable, extended release",
+    "tablet, coated particles", "tablet, disintegrating", "tablet, disintegrating, extended release",
+    "tablet, dispersible", "tablet, effervescent", "tablet, extended release", "tablet, soluble",
+    "tampon", "tape", "test", "tincture", "wafer",
+)
+
+# "mg/gk" (not "mg/kg") below looks like a transposition typo — it isn't. Re-verified
+# character-for-character against the real backend's drugDosageUnit regex
+# (security-api-charts.xml): the real API genuinely only accepts "mg/gk", not "mg/kg",
+# despite every sibling weight-based unit here (mcg/kg, mEq/kg, units/kg) following the
+# /kg pattern. This looks like a bug in CharmHealth's own enum, not ours — "fixing" it to
+# "mg/kg" here would make this tool reject the value the real API accepts and accept the
+# value it doesn't. Left as "mg/gk" deliberately; don't change without re-confirming
+# against that XML directly, not just eyeballing the pattern mismatch.
+DRUG_DOSAGE_UNITS = (
+    "tablet(s)", "capsule(s)", "ml", "application", "spray(s)", "mg", "mcg", "gram", "drop(s)",
+    "teaspoon", "tablespoon", "spray", "unit(s)", "IU", "puff(s)", "mg/g", "mg/ml", "mg/gk",
+    "mg/m2", "mcg/kg", "mcg/m2", "mEq", "mEq/kg", "Tbsp", "tsp", "inhalation(s)", "neb(s)",
+    "gtt(s)", "supp(s)", "applicatorful", "cartridge(s)", "cloth(s)", "device(s)", "kit(s)", "L",
+    "lozenge(s)", "mask(s)", "ng", "pack(s)", "packet(s)", "pad", "patch(es)", "piece(s)",
+    "ring(s)", "strip(s)", "system(s)", "troche(s)", "vial(s)", "units/kg", "units/m2", "wafer(s)",
+)
+
+
+def _normalize_drug_enum(value: Optional[str], valid_values: tuple, field_name: str) -> Optional[str]:
+    """Case-fold-match `value` against `valid_values` and return the canonical
+    (correctly-cased) entry. These params used to be typed `Literal[...]`,
+    which made FastMCP's protocol-level schema check reject a title-cased
+    value (e.g. route="Oral") before the function body — and its
+    {"error": ..., "guidance": ...} convention — ever ran. Every value in
+    these tuples is lowercase and models naturally emit title case, so that
+    was the likely path, not a corner case. Doing the validation here
+    instead, case-insensitively, catches the same genuinely-invalid values
+    without breaking the common title-case call."""
+    if value is None:
+        return None
+    for candidate in valid_values:
+        if candidate.casefold() == value.casefold():
+            return candidate
+    raise ValueError(f"{field_name}='{value}' is not a valid CharmHealth catalog value")
+
+
 @clinical_data_mcp.tool
 @with_tool_metrics()
 async def managePatientDrugs(
-    action: Literal["add", "update", "discontinue", "list"],
+    action: Literal["add", "prescribe", "update", "discontinue", "list"],
     patient_id: str,
     substance_type: Literal["medication", "supplement", "vitamin"] = "medication",
     record_id: Optional[str] = None,
-    
+
     # Common drug fields
     drug_name: Optional[str] = None,
     dosage: Optional[str] = None,
@@ -355,7 +425,7 @@ async def managePatientDrugs(
     end_date: Optional[date] = None,
     status: Optional[Literal["active", "inactive"]] = "active",
     encounter_id: Optional[str] = None,
-    
+
     # Additional supplement fields
     route: Optional[str] = None,
     dose_form: Optional[str] = None,
@@ -364,7 +434,9 @@ async def managePatientDrugs(
     intake_type: Optional[str] = None,
     comments: Optional[str] = None,
     weaning_schedule: Optional[str] = None,
-    
+    substitute_generic: Optional[bool] = None,
+    manufacturing_type: Optional[str] = None,
+
     # Workflow fields
     check_allergies: Optional[bool] = True,
 
@@ -385,7 +457,8 @@ async def managePatientDrugs(
     
     <instructions>
     Actions:
-    - "add": Prescribe new drug (requires drug_name, directions for medications; drug_name, dosage for supplements)
+    - "add": Log a drug (medication/supplement/vitamin) the patient takes — no encounter tie required. Requires drug_name, directions for medications; drug_name, dosage for supplements.
+    - "prescribe": Same as "add" but for medication only, and REQUIRES encounter_id — this is what actually marks it as a prescription written during a visit rather than a medication-history log entry. Use this, not "add", when a clinician is writing a new prescription during an encounter. There is no lookup action here to discover real catalog values (drug_details_id, generic_drug_id, etc.) — the practice's drug-catalog lookup endpoint (GET /drug/search) requires an OAuth scope this app's credentials don't carry, confirmed via live testing, not fixable from this tool. drug_name is plain free text; a bad/unmatched name may be rejected by the real API as a catalog mismatch — that's expected, not a bug here.
     - "update": Modify existing prescription (requires record_id + fields to change). IMPORTANT: drug name and strength CANNOT be changed via update — use discontinue + add instead. Updatable fields: directions, dispense, refills, status.
     - "discontinue": Stop drug (requires record_id)
     - "list": Show all patient drugs by type (filter by substance_type, optionally filter by status)
@@ -399,8 +472,11 @@ async def managePatientDrugs(
     List filters:
     - status_filter: e.g., status_filter="active"
     - limit: e.g., limit=25
-    For medications: Use clear directions like "Take 1 tablet by mouth twice daily with food"
+    For medications: Use clear directions like "Take 1 tablet by mouth twice daily with food". comments is NOT supported for medications (confirmed live — the API rejects it); it's silently dropped with a WARNING in guidance if provided. Use directions or managePatientNotes() instead.
     For supplements: Provide dosage as integer (e.g., 5) and use strength for units (e.g., "500mg")
+    route/dose_form/dosage_unit must be one of CharmHealth's fixed catalog values (e.g. route="oral", dose_form="tablet", dosage_unit="mg") — invalid values are rejected before the API is called.
+    quantity sets the dispense amount for a medication (e.g. quantity=90 for "dispense 90 tablets"); defaults to a 30-day supply if omitted.
+    substitute_generic (medication add/prescribe only) defaults to True (pharmacist may substitute a generic equivalent) — pass False for a dispense-as-written / non-substitutable prescription. manufacturing_type defaults to "Manufactured" — pass "Compounded" for a compounded drug (value forwarded as-is, not validated against a catalog).
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -443,18 +519,23 @@ async def managePatientDrugs(
         client_secret=client_secret
     ) as client:
         try:
-            # Safety check: Review allergies before prescribing
-            if action == "add" and check_allergies:
+            # Safety check: Review allergies before prescribing. Built here (once,
+            # before the match) and prepended to the success guidance below —
+            # NOT logged with allergen names, which are PHI. The log line stays
+            # a count only; the actual allergy detail belongs in the tool
+            # response the calling clinician/agent sees, not the server log.
+            allergy_warning = None
+            if action in ("add", "prescribe") and check_allergies:
                 allergy_response = await client.get(f"/patients/{patient_id}/allergies")
                 if allergy_response.get("allergies"):
                     allergies = allergy_response["allergies"]
                     if allergies and substance_type == "medication":
-                        allergy_warning = f"WARNING: Patient has {len(allergies)} documented allergies. Review before prescribing: "
-                        allergy_list = [a.get("allergen", "Unknown") for a in allergies[:3]]
-                        allergy_warning += ", ".join(allergy_list)
+                        allergy_names = [a.get("allergen", "Unknown") for a in allergies[:3]]
+                        allergy_warning = f"WARNING: Patient has {len(allergies)} documented allergies: " + ", ".join(allergy_names)
                         if len(allergies) > 3:
                             allergy_warning += f" and {len(allergies) - 3} more"
-                        logger.warning(allergy_warning)
+                        allergy_warning += ". Review before prescribing."
+                        logger.warning(f"managePatientDrugs: {len(allergies)} documented allergies found for patient — see response guidance for detail")
             
             match action:
                 case "list":
@@ -521,8 +602,8 @@ async def managePatientDrugs(
                             )
                     
                     return strip_empty_values(response)
-                    
-                case "add":
+
+                case "add" | "prescribe":
                     if substance_type == "medication":
                         # Prescription medication
                         required = [drug_name, directions]
@@ -531,33 +612,84 @@ async def managePatientDrugs(
                                 "error": "Missing required fields for medication",
                                 "guidance": "For medications, provide: drug_name and directions. Example: drug_name='Lisinopril 10mg', directions='Take 1 tablet by mouth once daily'. Check allergies first with managePatientAllergies()."
                             }
-                        
+                        if action == "prescribe" and not encounter_id:
+                            return {
+                                "error": "encounter_id required for action='prescribe'",
+                                "guidance": "A prescription must be tied to the visit it was written during — pass the current encounter_id. To log a medication the patient already takes outside of a visit, use action='add' instead."
+                            }
+
+                        if refills is not None and not re.fullmatch(r"[0-9]{1,2}|PRN|-1", str(refills)):
+                            return {
+                                "error": f"refills='{refills}' is not valid",
+                                "guidance": "refills must be a 1-2 digit number (e.g. '3'), 'PRN', or '-1' (unlimited), per CharmHealth's documented pattern."
+                            }
+
+                        try:
+                            route = _normalize_drug_enum(route, DRUG_ROUTES, "route")
+                            dose_form = _normalize_drug_enum(dose_form, DRUG_DOSE_FORMS, "dose_form")
+                            dosage_unit = _normalize_drug_enum(dosage_unit, DRUG_DOSAGE_UNITS, "dosage_unit")
+                        except ValueError as e:
+                            return {"error": str(e), "guidance": "Use one of CharmHealth's fixed catalog values for this field (matching is case-insensitive) — see the tool's <instructions> for examples."}
+
                         med_data = [{
                             "drug_name": drug_name,
                             "is_active": status == "active",
                             "directions": directions,
-                            "dispense": 30.0,  # Default 30-day supply
+                            "dispense": float(quantity) if quantity is not None else 30.0,  # Default 30-day supply
                             "refills": refills or "0",
-                            "substitute_generic": True,
-                            "manufacturing_type": "Manufactured"
+                            "substitute_generic": True if substitute_generic is None else substitute_generic,
+                            "manufacturing_type": manufacturing_type or "Manufactured"
                         }]
-                        
+
                         if strength:
                             med_data[0]["strength_description"] = strength
+                        if route:
+                            med_data[0]["route"] = route
+                        if dose_form:
+                            med_data[0]["dose_form"] = dose_form
+                        if dosage_unit:
+                            med_data[0]["dosage_unit"] = dosage_unit
                         if start_date:
                             med_data[0]["start_date"] = start_date.isoformat()
                         if end_date:
                             med_data[0]["stop_date"] = end_date.isoformat()
                         if encounter_id:
                             med_data[0]["encounter_id"] = int(encounter_id)
-                        if comments:
-                            med_data[0]["comments"] = comments
-                        
+                        # CONFIRMED LIVE (2026-08-27) against the real sandbox: "comments"
+                        # is not a field on this endpoint — fails the ENTIRE add/prescribe
+                        # call with HTTP 400 "Extra key found in JSON" (throwallerrors="true"),
+                        # not a silent drop. "internal_comments" — the field this repo's
+                        # checked-out security-api-charts.xml shows for addEHRMedicationJSON —
+                        # was tried next and ALSO rejected with the identical error against
+                        # this live tenant, so that checkout doesn't match what's actually
+                        # deployed here. Rather than keep guessing field names against a real
+                        # clinical write, comments is dropped entirely for medications (still
+                        # honored for supplements/vitamins, a different endpoint, unaffected)
+                        # — the caller is told rather than hitting a confusing 400.
+                        comments_dropped = bool(comments)
+
                         response = await client.post(f"/patients/{patient_id}/medications", data=med_data)
-                        
+
                         if response.get("medications"):
-                            response["guidance"] = f"Medication '{drug_name}' prescribed successfully. Monitor for allergic reactions and drug interactions. Use reviewPatientHistory() to see all current medications."
-                    
+                            verb = "prescribed" if action == "prescribe" else "added"
+                            guidance = f"Medication '{drug_name}' {verb} successfully. Monitor for allergic reactions and drug interactions. Use reviewPatientHistory() to see all current medications."
+                            if allergy_warning:
+                                guidance = f"{allergy_warning} {guidance}"
+                            if comments_dropped:
+                                guidance += (
+                                    " WARNING: comments was provided but NOT sent — this field "
+                                    "isn't supported on medication add/prescribe (confirmed live; "
+                                    "the API rejects it). Document this detail elsewhere, e.g. "
+                                    "directions or a clinical note via managePatientNotes()."
+                                )
+                            response["guidance"] = guidance
+
+                    elif action == "prescribe":
+                        return {
+                            "error": "action='prescribe' only applies to substance_type='medication'",
+                            "guidance": "Supplements/vitamins aren't prescriptions — use action='add' with substance_type='supplement' or 'vitamin' instead."
+                        }
+
                     else:
                         # Supplement/vitamin
                         required = [drug_name, dosage]
@@ -602,7 +734,7 @@ async def managePatientDrugs(
                             supplement_data[0]["dose_form"] = dose_form
                         if dosage_unit:
                             supplement_data[0]["dosage_unit"] = dosage_unit
-                        if quantity:
+                        if quantity is not None:
                             supplement_data[0]["quantity"] = int(quantity) if isinstance(quantity, str) else quantity
                         if comments:
                             supplement_data[0]["comments"] = comments
@@ -654,10 +786,11 @@ async def managePatientDrugs(
                         # Build payload with all API-required fields, then overlay changes
                         # NOTE: PUT /medications/{id} only accepts: is_active, directions, dispense, refills,
                         # substitute_generic, manufacturing_type, and optional start_date/stop_date/dispense_unit/route/note_to_pharmacy
+                        _dispense = current_med.get("dispense")
                         update_data: Dict[str, Any] = {
                             "is_active": current_med.get("is_active", True),
                             "directions": current_med.get("directions", ""),
-                            "dispense": float(current_med.get("dispense") or 30),
+                            "dispense": float(_dispense) if _dispense not in (None, "") else 30.0,
                             "refills": str(current_med.get("refills", "0")),
                             "substitute_generic": current_med.get("substitute_generic", False),
                             "manufacturing_type": current_med.get("manufacturing_type", "Manufactured"),
@@ -740,10 +873,11 @@ async def managePatientDrugs(
                                 "guidance": "Use action='list' to verify the record_id exists for this patient."
                             }
 
+                        _dispense = current_med.get("dispense")
                         discontinue_data: Dict[str, Any] = {
                             "is_active": False,
                             "directions": current_med.get("directions", ""),
-                            "dispense": float(current_med.get("dispense") or 30),
+                            "dispense": float(_dispense) if _dispense not in (None, "") else 30.0,
                             "refills": str(current_med.get("refills", "0")),
                             "substitute_generic": current_med.get("substitute_generic", False),
                             "manufacturing_type": current_med.get("manufacturing_type", "Manufactured"),
