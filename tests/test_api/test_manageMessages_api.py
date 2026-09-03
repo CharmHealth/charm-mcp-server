@@ -12,10 +12,10 @@ for this sandbox practice), not bugs. send(whatsapp) is different: it's a
 confirmed likely code bug (wrong endpoint path), asserted as CORRECT
 (should-succeed) behavior so it goes green once fixed.
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
-FACILITY_ID = "100010000000008157"  # Charm Clinic
+PATIENT_ID = TEST_DATA["patient_id"]
+FACILITY_ID = TEST_DATA["facility_id"]
 
 
 async def test_manageMessages_get_thread():

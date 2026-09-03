@@ -8,9 +8,9 @@ your IDE's per-test run button.
 Test data: Peter Parker — owner_id 100010000000000117; tasklist "Patient Care"
 (pre-existing in this sandbox, confirmed via list).
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-OWNER_ID = "100010000000000117"  # Peter Parker
+OWNER_ID = TEST_DATA["provider_id"]
 TASKLIST = "Patient Care"
 
 

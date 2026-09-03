@@ -7,9 +7,9 @@ alone via your IDE's per-test run button.
 
 Test data: Ahmed Choi — patient_id 100010000000018023.
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
+PATIENT_ID = TEST_DATA["patient_id"]
 
 
 async def _add_allergy() -> str:

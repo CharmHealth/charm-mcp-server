@@ -18,11 +18,11 @@ below), leaving it permanently stuck signed. Each test here creates its own
 throwaway encounter instead of reusing a fixed ID, so that stuck encounter is
 simply left alone/ignored rather than fixed.
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
-PROVIDER_ID = "100010000000000117"  # Peter Parker
-FACILITY_ID = "100010000000008157"  # Charm Clinic
+PATIENT_ID = TEST_DATA["patient_id"]
+PROVIDER_ID = TEST_DATA["provider_id"]
+FACILITY_ID = TEST_DATA["facility_id"]
 ENCOUNTER_DATE = "2026-09-01"
 
 

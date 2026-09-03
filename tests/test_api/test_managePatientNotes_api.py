@@ -15,9 +15,9 @@ docstring already documents a similar confirmed scope gap for /drug/search).
 These assertions are written for CORRECT behavior (not xfail) so they go
 green the moment this is fixed.
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
+PATIENT_ID = TEST_DATA["patient_id"]
 
 
 async def test_managePatientNotes_list():

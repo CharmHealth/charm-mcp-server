@@ -15,11 +15,11 @@ broken routing for the "recalls" feature specifically, not something fixable
 by adjusting the request payload. These assertions target CORRECT behavior
 (not xfail) so they go green the moment this is fixed.
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
-PROVIDER_ID = "100010000000000117"  # Peter Parker
-FACILITY_ID = "100010000000008157"  # Charm Clinic
+PATIENT_ID = TEST_DATA["patient_id"]
+PROVIDER_ID = TEST_DATA["provider_id"]
+FACILITY_ID = TEST_DATA["facility_id"]
 
 
 async def test_managePatientRecalls_list():

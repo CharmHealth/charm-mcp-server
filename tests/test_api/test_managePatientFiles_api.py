@@ -7,9 +7,9 @@ Test data: Ahmed Choi — patient_id 100010000000018023.
 import base64
 import tempfile
 
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
+PATIENT_ID = TEST_DATA["patient_id"]
 
 # A real, minimal 1x1 transparent PNG — needs to be an actual valid image file
 # on disk (not a fake path), since upload_photo/upload_id read it from disk.

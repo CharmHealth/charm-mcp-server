@@ -6,11 +6,11 @@ Test data: Ahmed Choi — patient_id 100010000000018023; Charm Clinic —
 facility_id 100010000000008157; "Pre-Visit Symptom Check" — a real,
 pre-existing (non-test) template, questionnaire_id 100010000000127039.
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
-FACILITY_ID = "100010000000008157"  # Charm Clinic
-QUESTIONNAIRE_ID = "100010000000127039"  # "Pre-Visit Symptom Check"
+PATIENT_ID = TEST_DATA["patient_id"]
+FACILITY_ID = TEST_DATA["facility_id"]
+QUESTIONNAIRE_ID = TEST_DATA["questionnaire_id"]
 
 
 async def test_manageIntakeForms_list_templates():

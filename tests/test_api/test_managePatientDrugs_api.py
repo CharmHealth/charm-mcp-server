@@ -8,11 +8,11 @@ so it can be run alone via your IDE's per-test run button.
 Test data: Ahmed Choi — patient_id 100010000000018023; Peter Parker —
 provider_id 100010000000000117; Charm Clinic — facility_id 100010000000008157.
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
-PROVIDER_ID = "100010000000000117"  # Peter Parker
-FACILITY_ID = "100010000000008157"  # Charm Clinic
+PATIENT_ID = TEST_DATA["patient_id"]
+PROVIDER_ID = TEST_DATA["provider_id"]
+FACILITY_ID = TEST_DATA["facility_id"]
 
 
 async def _add_medication() -> str:

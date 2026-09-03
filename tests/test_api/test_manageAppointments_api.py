@@ -10,11 +10,11 @@ provider_id 100010000000000117; Charm Clinic — facility_id 100010000000008157.
 import random
 from datetime import date, timedelta
 
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
-PROVIDER_ID = "100010000000000117"  # Peter Parker
-FACILITY_ID = "100010000000008157"  # Charm Clinic
+PATIENT_ID = TEST_DATA["patient_id"]
+PROVIDER_ID = TEST_DATA["provider_id"]
+FACILITY_ID = TEST_DATA["facility_id"]
 
 
 def _random_date() -> str:

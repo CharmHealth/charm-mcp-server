@@ -10,9 +10,9 @@ it — failed with HTTP 400 "Patient Record Id is mandatory. Please specify
 it." Fixed by merging record_id (caller-supplied or from the existing
 record) alongside first_name/last_name/gender/dob in patient_management.py.
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
+PATIENT_ID = TEST_DATA["patient_id"]
 
 
 async def test_managePatient_update():

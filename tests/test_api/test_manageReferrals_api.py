@@ -12,11 +12,11 @@ every referral here necessarily uses him as BOTH the referring and receiving
 party (a "self-referral"). Some failures below may be specific to that
 degenerate case rather than real bugs — flagged individually where relevant.
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
-PROVIDER_ID = "100010000000000117"  # Peter Parker (only provider in this sandbox)
-FACILITY_ID = "100010000000008157"  # Charm Clinic
+PATIENT_ID = TEST_DATA["patient_id"]
+PROVIDER_ID = TEST_DATA["provider_id"]
+FACILITY_ID = TEST_DATA["facility_id"]
 REFERRAL_DATE = "2026-09-02"
 
 

@@ -7,9 +7,9 @@ invoices, receipts, or outstanding balance in this sandbox, and there's no
 tool exposed here to create billing data — so results below are correctly
 "empty", not errors.
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
+PATIENT_ID = TEST_DATA["patient_id"]
 
 
 async def test_managePatientBilling_get_balance():

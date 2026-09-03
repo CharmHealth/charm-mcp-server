@@ -13,9 +13,9 @@ needs a real group_id/lab_order_id, and Ahmed Choi has zero lab results to
 get one from. Both would need real values sourced outside this tool
 (CharmHealth web UI) to test meaningfully.
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
+PATIENT_ID = TEST_DATA["patient_id"]
 
 
 async def test_managePatientLabs_list():

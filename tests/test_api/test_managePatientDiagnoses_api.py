@@ -11,9 +11,9 @@ Note: a successful "add" response includes CharmHealth's own backend typo
 ("Doagnoses saved successfully.") — that's the real API's response text,
 not something in this repo, so not asserted on here.
 """
-from conftest import call_tool
+from conftest import call_tool, TEST_DATA
 
-PATIENT_ID = "100010000000018023"  # Ahmed Choi
+PATIENT_ID = TEST_DATA["patient_id"]
 
 
 async def _add_diagnosis() -> str:
