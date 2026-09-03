@@ -184,6 +184,26 @@ async def test_add_supplement_route_accepts_any_string_unvalidated(monkeypatch) 
 
 
 @pytest.mark.asyncio
+async def test_add_supplement_prn_refills_returns_clean_error(monkeypatch) -> None:
+    """CONFIRMED against security-api-charts.xml: addSupplementJSON's
+    refills is type="int" — no "PRN"/"-1" string form like medications
+    have. "PRN" (documented valid for medications) used to hit int("PRN")
+    and fall through to the generic outer exception handler instead of
+    this tool's own clean {"error", "guidance"} convention."""
+    fake = _FakeAPIClient()
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await clinical_data.managePatientDrugs.fn(
+            action="add", patient_id="p1", substance_type="supplement",
+            drug_name="Vitamin D3", dosage=5, refills="PRN",
+        )
+
+    assert "refills" in str(exc_info.value)
+    assert fake.post_calls == []
+
+
+@pytest.mark.asyncio
 async def test_add_supplement_explicit_quantity_zero_is_sent_not_dropped(monkeypatch) -> None:
     """Same truthiness bug as the medication `dispense` fix, pre-existing on the
     supplement path's `quantity` field (`if quantity:` treated an explicit 0 as
@@ -289,6 +309,52 @@ async def test_update_medication_preserves_explicit_dispense_zero(monkeypatch) -
 
     _, sent_data = fake.put_calls[0]
     assert sent_data["dispense"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_update_medication_rejects_invalid_refills(monkeypatch) -> None:
+    """CONFIRMED against security-api-charts.xml: editMedicationJSON's
+    refills uses the identical drugRefills regex as addEHRMedicationJSON —
+    `add` validated this, `update` didn't, so the same invalid value was
+    refused going in but accepted (then failed at the API) going out."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/patients/p1/medications": {"medications": [{
+                "patient_medication_id": "m1", "directions": "old directions",
+            }]},
+        },
+        put_responses={"/patients/p1/medications/m1": {"medications": [{"id": "m1"}]}},
+    )
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await clinical_data.managePatientDrugs.fn(
+            action="update", patient_id="p1", record_id="m1",
+            refills="not-a-valid-value",
+        )
+
+    assert "refills" in str(exc_info.value)
+    assert fake.put_calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_medication_accepts_prn_refills(monkeypatch) -> None:
+    fake = _FakeAPIClient(
+        get_responses={
+            "/patients/p1/medications": {"medications": [{
+                "patient_medication_id": "m1", "directions": "old directions",
+            }]},
+        },
+        put_responses={"/patients/p1/medications/m1": {"medications": [{"id": "m1"}]}},
+    )
+    _patch_client(monkeypatch, fake)
+
+    await clinical_data.managePatientDrugs.fn(
+        action="update", patient_id="p1", record_id="m1", refills="PRN",
+    )
+
+    _, sent_data = fake.put_calls[0]
+    assert sent_data["refills"] == "PRN"
 
 
 @pytest.mark.asyncio

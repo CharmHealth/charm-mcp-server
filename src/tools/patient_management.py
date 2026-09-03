@@ -431,6 +431,11 @@ async def managePatient(
                         patient_data["last_name"] = last_name or current_data.get("last_name")
                         patient_data["gender"] = gender or current_data.get("gender")
                         patient_data["dob"] = date_of_birth.isoformat() if date_of_birth else current_data.get("dob")
+                        # This practice requires record_id on every update — confirmed live
+                        # (CH probe, 2026-09-02): omitting it fails with HTTP 400 "Patient
+                        # Record Id is mandatory. Please specify it", even though every other
+                        # required field above was present.
+                        patient_data["record_id"] = record_id or current_data.get("record_id")
                         
                         # Handle facilities requirement
                         if facility_ids:
