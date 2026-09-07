@@ -250,14 +250,69 @@ async def test_share_portal_missing_facility_id_raises_tool_error(monkeypatch) -
 
 @pytest.mark.asyncio
 async def test_get_responses_happy_path(monkeypatch) -> None:
+    # Real wrapper shape confirmed 2026-09-07 against a live completed
+    # submission: top-level "questionnaire_with_answers", questions carry
+    # entry_id/notes/notes_type/is_mandatory, and "answer" is present only
+    # on answered questions (absent, not null, on e.g. Label rows).
     fake = _FakeAPIClient(get_responses={
-        "/questionnaire/answer/a1": {"answers": []},
+        "/questionnaire/answer/a1": {"questionnaire_with_answers": {
+            "questionnaire_type": "Pre-screening Form",
+            "template_name": "Screen",
+            "is_submitted": True,
+            "patient_id": "p1",
+            "template_id": "t1",
+            "ques_map_id": "a1",
+            "questions": [
+                {"entry_id": "e1", "notes_type": "Label", "notes": "Welcome", "is_mandatory": False, "position": 0},
+                {"entry_id": "e2", "notes_type": "Question", "notes": "How are you?", "answer": "sdf", "is_mandatory": False, "position": 1},
+            ],
+        }},
     })
     _patch_client(monkeypatch, fake)
 
     result = await intake_forms.manageIntakeForms.fn(action="get_responses", answer_id="a1")
 
     assert "Responses retrieved" in result["guidance"]
+    questions = result["questionnaire_with_answers"]["questions"]
+    assert "answer" not in questions[0]
+    assert questions[1]["answer"] == "sdf"
+
+
+@pytest.mark.asyncio
+async def test_get_patient_forms_then_get_responses_uses_ques_map_id_not_questionnaire_id(monkeypatch) -> None:
+    """The two-hop trap the tool's own docstring warns about: get_responses
+    needs answer_id=ques_map_id (a specific patient/form assignment), not
+    questionnaire_id (the template). Deliberately give them different
+    values and only wire up the /questionnaire/answer/ endpoint under the
+    ques_map_id — threading questionnaire_id instead would KeyError inside
+    the tool's try/except and surface as an "error" response, not a
+    successful one, so this fails loudly if the wrong id is threaded."""
+    fake = _FakeAPIClient(get_responses={
+        "/patients/p1/questionnaires": {"patient_questionnaires": [
+            {"ques_map_id": "555", "questionnaire_id": "999", "is_submitted": "true"},
+        ]},
+        "/questionnaire/answer/555": {"questionnaire_with_answers": {
+            "questionnaire_type": "Pre-screening Form",
+            "template_name": "Screen",
+            "is_submitted": True,
+            "patient_id": "p1",
+            "template_id": "999",
+            "ques_map_id": "555",
+            "questions": [
+                {"entry_id": "e2", "notes_type": "Question", "notes": "How are you?", "answer": "sdf", "is_mandatory": False, "position": 1},
+            ],
+        }},
+        # Deliberately no "/questionnaire/answer/999" entry.
+    })
+    _patch_client(monkeypatch, fake)
+
+    forms_result = await intake_forms.manageIntakeForms.fn(action="get_patient_forms", patient_id="p1")
+    answer_id = forms_result["patient_questionnaires"][0]["ques_map_id"]
+
+    result = await intake_forms.manageIntakeForms.fn(action="get_responses", answer_id=answer_id)
+
+    assert "error" not in result
+    assert result["questionnaire_with_answers"]["ques_map_id"] == "555"
 
 
 @pytest.mark.asyncio
