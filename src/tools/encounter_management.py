@@ -402,10 +402,15 @@ async def manageEncounter(
                             "guidance": "To unlock an encounter, provide a reason explaining why the signed encounter needs to be unlocked for modification."
                         }
                     
-                    # Unlock the encounter using the API
+                    # Unlock the encounter using the API. CONFIRMED LIVE (CH probe,
+                    # 2026-09-02): the path was previously "/api/ehr/v1/encounters/..." —
+                    # CharmHealthAPIClient's base_url already ends in /api/ehr/v1, like
+                    # every other endpoint in this file, so that duplicated the prefix
+                    # and 404'd ("Invalid URL Passed"). Bare "/encounters/{id}/unlock"
+                    # (no /patients/{patient_id} segment, unlike sign) is correct.
                     unlock_data = {"reason": reason}
                     unlock_response = await client.post(
-                        f"/api/ehr/v1/encounters/{encounter_id}/unlock",
+                        f"/encounters/{encounter_id}/unlock",
                         data=unlock_data
                     )
                     

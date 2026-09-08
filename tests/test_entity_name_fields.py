@@ -100,6 +100,7 @@ async def test_manage_patient_update_adds_patient_name(monkeypatch) -> None:
             "/patients/p1": {"patient": {
                 "patient_id": "p1", "first_name": "Jane", "last_name": "Smith",
                 "gender": "female", "dob": "1990-01-01", "facilities": [],
+                "record_id": "REC1",
             }},
         },
         put_responses={

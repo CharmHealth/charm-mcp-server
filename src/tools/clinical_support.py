@@ -7,6 +7,8 @@ from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
 import json
 import logging
+import mimetypes
+import os
 from telemetry import telemetry, with_tool_metrics
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,17 @@ def _parse_order_tests(value: Optional[Union[str, List[Dict[str, Any]]]]) -> Opt
         raise ValueError("order_tests must be a list of objects — each item must be a JSON object with lab_id/lab_name/medical_record_id/lab_record_id, not a bare string or number")
     return value
 
+
+
+def _read_file_for_upload(path: str) -> tuple:
+    """Read a local file into the (filename, bytes, content_type) shape
+    CharmHealthAPIClient.post_multipart expects. Raises FileNotFoundError /
+    OSError on a bad path — callers turn that into a clean {"error": ...}."""
+    with open(path, "rb") as f:
+        content = f.read()
+    filename = os.path.basename(path)
+    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return (filename, content, content_type)
 
 @clinical_support_mcp.tool
 @with_tool_metrics()
@@ -515,9 +528,22 @@ async def managePatientFiles(
                             "error": "photo_file path required",
                             "guidance": "Provide the file path to the patient photo to upload (JPG, PNG formats supported)."
                         }
-                    
-                    files = {"file": photo_file}
-                    response = await client.post(f"/patients/{patient_id}/photo", files=files)
+
+                    # CONFIRMED LIVE (CH probe, 2026-09-02): this used to pass files=
+                    # to CharmHealthAPIClient.post(), which has no such parameter at
+                    # all — crashed with "unexpected keyword argument 'files'" before
+                    # any network call. Also, photo_file is a caller-supplied PATH
+                    # string, not file content — has to be read from disk first.
+                    try:
+                        file_tuple = _read_file_for_upload(photo_file)
+                    except OSError as e:
+                        return {
+                            "error": f"Could not read photo_file: {e}",
+                            "guidance": "Verify photo_file is a valid, readable absolute path on the server's filesystem."
+                        }
+
+                    files = {"file": file_tuple}
+                    response = await client.post_multipart(f"/patients/{patient_id}/photo", files=files)
                     
                     if response.get("code") == "0":
                         response["guidance"] = "Patient photo uploaded successfully. The photo will now appear in the patient's profile for identification purposes."
@@ -559,13 +585,23 @@ async def managePatientFiles(
                     form_data = {
                         "id_qualifier": qualifier_map[id_qualifier]
                     }
-                    
+
                     if id_of_patient:
                         form_data["id_of_patient"] = id_of_patient
-                    
-                    files = {"file": id_file}
-                    
-                    response = await client.post(f"/patients/{patient_id}/identity", data=form_data, files=files)
+
+                    # Same fix as upload_photo above — files= isn't a real
+                    # CharmHealthAPIClient.post() parameter, and id_file is a path,
+                    # not file content.
+                    try:
+                        file_tuple = _read_file_for_upload(id_file)
+                    except OSError as e:
+                        return {
+                            "error": f"Could not read id_file: {e}",
+                            "guidance": "Verify id_file is a valid, readable absolute path on the server's filesystem."
+                        }
+
+                    files = {"file": file_tuple}
+                    response = await client.post_multipart(f"/patients/{patient_id}/identity", data=form_data, files=files)
                     
                     if response.get("data"):
                         response["guidance"] = f"Identity document ({id_qualifier}) uploaded successfully. This document is now stored in the patient's secure file repository."
