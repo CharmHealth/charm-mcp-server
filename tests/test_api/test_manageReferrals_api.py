@@ -12,6 +12,7 @@ every referral here necessarily uses him as BOTH the referring and receiving
 party (a "self-referral"). Some failures below may be specific to that
 degenerate case rather than real bugs — flagged individually where relevant.
 """
+import pytest
 from conftest import call_tool, TEST_DATA
 
 PATIENT_ID = TEST_DATA["patient_id"]
@@ -38,6 +39,7 @@ async def _create_referral_out() -> str:
     return resp["ref_id"]
 
 
+@pytest.mark.no_delete_available
 async def test_manageReferrals_create_out():
     # $ ... manageReferrals '{"action": "create", "direction": "out", "facility_id": "100010000000008157", \
     #       "referral_date": "2026-09-02", "from_member": "100010000000000117", \
@@ -66,6 +68,7 @@ async def test_manageReferrals_list_out():
     assert "error" not in resp
 
 
+@pytest.mark.no_delete_available
 async def test_manageReferrals_get_out():
     # $ ... manageReferrals '{"action": "get", "direction": "out", "referral_id": "<fresh ref_id>"}'
     ref_id = await _create_referral_out()
@@ -74,6 +77,7 @@ async def test_manageReferrals_get_out():
     assert resp.get("ref_id") == ref_id
 
 
+@pytest.mark.no_delete_available
 async def test_manageReferrals_update_out_inconclusive():
     # $ ... manageReferrals '{"action": "update", "direction": "out", "referral_id": "<fresh ref_id>", "priority": "Urgent"}'
     #
@@ -95,6 +99,7 @@ async def test_manageReferrals_update_out_inconclusive():
     assert isinstance(resp, dict)  # always true; documents the finding above, not asserted pass/fail
 
 
+@pytest.mark.no_delete_available
 async def test_manageReferrals_respond_out():
     # $ ... manageReferrals '{"action": "respond", "direction": "out", "referral_id": "<fresh ref_id>", \
     #       "facility_id": "100010000000008157", "patient_id": "100010000000018023", \
@@ -116,6 +121,7 @@ async def test_manageReferrals_respond_out():
     assert resp.get("response_status") == "Reviewed"
 
 
+@pytest.mark.no_delete_available
 async def test_manageReferrals_create_in_inconclusive():
     # $ ... manageReferrals '{"action": "create", "direction": "in", "facility_id": "100010000000008157", \
     #       "referral_date": "2026-09-02", "to_member": "100010000000000117", \

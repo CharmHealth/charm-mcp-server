@@ -6,6 +6,7 @@ Test data: Ahmed Choi — patient_id 100010000000018023; Charm Clinic —
 facility_id 100010000000008157; "Pre-Visit Symptom Check" — a real,
 pre-existing (non-test) template, questionnaire_id 100010000000127039.
 """
+import pytest
 from conftest import call_tool, TEST_DATA
 
 PATIENT_ID = TEST_DATA["patient_id"]
@@ -26,6 +27,7 @@ async def test_manageIntakeForms_get_patient_forms():
     assert "error" not in resp
 
 
+@pytest.mark.no_delete_available
 async def test_manageIntakeForms_create_template():
     # $ ... manageIntakeForms '{"action": "create_template", "questionnaire_name": "...", \
     #       "questionnaire_type": "General Questionnaire", \

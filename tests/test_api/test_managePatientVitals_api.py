@@ -5,6 +5,7 @@ is the pytest form of a command run manually via scripts/mcp_test_client.py.
 
 Test data: Ahmed Choi — patient_id 100010000000018023.
 """
+import pytest
 from conftest import call_tool, TEST_DATA
 
 PATIENT_ID = TEST_DATA["patient_id"]
@@ -34,6 +35,7 @@ async def test_managePatientVitals_list():
     assert "error" not in resp
 
 
+@pytest.mark.no_delete_available
 async def test_managePatientVitals_add():
     # $ MCP_SERVER_URL=http://127.0.0.1:8000/mcp/ uv run scripts/mcp_test_client.py managePatientVitals \
     #     '{"patient_id": "100010000000018023", "action": "add", "vital_name": "Weight", \
@@ -53,6 +55,7 @@ async def test_managePatientVitals_add():
     assert resp.get("vital_entries")
 
 
+@pytest.mark.no_delete_available
 async def test_managePatientVitals_update():
     # $ MCP_SERVER_URL=http://127.0.0.1:8000/mcp/ uv run scripts/mcp_test_client.py managePatientVitals \
     #     '{"patient_id": "100010000000018023", "action": "update", "record_id": "<fresh vital_entry_id>", \
@@ -73,6 +76,7 @@ async def test_managePatientVitals_update():
     assert resp.get("vital_entries")
 
 
+@pytest.mark.no_delete_available
 async def test_managePatientVitals_delete_action_does_not_exist():
     # $ MCP_SERVER_URL=http://127.0.0.1:8000/mcp/ uv run scripts/mcp_test_client.py managePatientVitals \
     #     '{"patient_id": "100010000000018023", "action": "delete", "record_id": "<any vital_entry_id>"}'

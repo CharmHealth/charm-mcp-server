@@ -435,8 +435,14 @@ async def managePatient(
                         # (CH probe, 2026-09-02): omitting it fails with HTTP 400 "Patient
                         # Record Id is mandatory. Please specify it", even though every other
                         # required field above was present.
-                        patient_data["record_id"] = record_id or current_data.get("record_id")
-                        
+                        resolved_record_id = record_id or current_data.get("record_id")
+                        if not resolved_record_id:
+                            return {
+                                "error": "record_id could not be determined",
+                                "guidance": "This patient has no record_id on file and none was provided — pass record_id explicitly, or verify the patient record via findPatients()."
+                            }
+                        patient_data["record_id"] = resolved_record_id
+
                         # Handle facilities requirement
                         if facility_ids:
                             patient_data["facilities"] = [{"facility_id": int(fid)} for fid in facility_ids.split(",")]
@@ -492,9 +498,19 @@ async def managePatient(
                         patient_data["maiden_name"] = maiden_name
                     if gender_identity:
                         patient_data["gender_identity"] = gender_identity
+                    # Intentional explicit-override path for both update_specific_details modes,
+                    # not a conflict with the fallback assignment in the `if update_specific_details:`
+                    # branch above. That fallback only guarantees a record_id is present when the
+                    # caller doesn't pass one; this line lets the caller explicitly change it. In
+                    # update_specific_details=False mode, this is also the only way record_id gets
+                    # set at all outside of the copy() from current_data. Verified empirically via a
+                    # mocked-client trace (CharmHealthAPIClient.get/put mocked, record_id omitted from
+                    # the call): the fallback value from current_data survives correctly and is NOT
+                    # overwritten to None by this guarded assignment, since `if record_id:` only fires
+                    # when the caller actually passed a truthy value.
                     if record_id:
                         patient_data["record_id"] = record_id
-                    
+
                     # Contact information
                     if phone:
                         patient_data["mobile"] = phone.replace("-", "")

@@ -8,6 +8,7 @@ your IDE's per-test run button.
 Test data: Peter Parker — owner_id 100010000000000117; tasklist "Patient Care"
 (pre-existing in this sandbox, confirmed via list).
 """
+import pytest
 from conftest import call_tool, TEST_DATA
 
 OWNER_ID = TEST_DATA["provider_id"]
@@ -36,6 +37,7 @@ async def test_manageTasks_list():
     assert "error" not in resp
 
 
+@pytest.mark.no_delete_available
 async def test_manageTasks_add():
     # $ ... manageTasks '{"action": "add", "task": "MCP API probe test task", "owner_id": "100010000000000117", \
     #       "priority": "1", "status": "Pending", "tasklist": "Patient Care"}'
@@ -54,6 +56,7 @@ async def test_manageTasks_add():
     assert resp.get("data", {}).get("task_id")
 
 
+@pytest.mark.no_delete_available
 async def test_manageTasks_update():
     # $ ... manageTasks '{"action": "update", "task_id": "<fresh task_id>", \
     #       "task": "MCP API probe test task - updated", "owner_id": "100010000000000117", \
@@ -88,6 +91,7 @@ async def test_manageTasks_update():
     assert "error" not in resp
 
 
+@pytest.mark.no_delete_available
 async def test_manageTasks_update_in_progress_status_rejected():
     # $ ... manageTasks '{"action": "update", "task_id": "<fresh task_id>", \
     #       "task": "...", "owner_id": "100010000000000117", "priority": "1", \
@@ -114,6 +118,7 @@ async def test_manageTasks_update_in_progress_status_rejected():
     assert resp["error"] == "HTTP 400: "
 
 
+@pytest.mark.no_delete_available
 async def test_manageTasks_change_status():
     # $ ... manageTasks '{"action": "change_status", "task_id": "<fresh task_id>", "status": "Completed"}'
     task_id = await _add_task()
@@ -124,6 +129,7 @@ async def test_manageTasks_change_status():
     assert "error" not in resp
 
 
+@pytest.mark.no_delete_available
 async def test_manageTasks_change_status_new_status_param_does_not_exist():
     # $ ... manageTasks '{"action": "change_status", "task_id": "<fresh task_id>", "new_status": "Pending"}'
     #
