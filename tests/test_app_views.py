@@ -495,3 +495,35 @@ def test_appointment_time_comes_from_the_date_string() -> None:
 )
 def test_time_of_day_parsing(appt: dict, expected: str) -> None:
     assert app_views._time_of_day(appt) == expected
+
+
+def test_directory_lists_carry_their_identifiers() -> None:
+    """getPracticeInfo's guidance says "use facility IDs from this list" and
+    "use provider IDs (member_id) from this list". A rendered list that omits
+    them makes that instruction unfollowable for a caller reading the view —
+    which is how a model came to pass the facility *name* as facility_ids after
+    fetching this list twice.
+    """
+    facilities = json.dumps(app_result(
+        {"facilities": [{"facility_id": "1995529000000021081",
+                         "facility_name": "Ink Inc.", "city": "Oakland"}]},
+        "facility_list").structured_content, ensure_ascii=False)
+    providers = json.dumps(app_result(
+        {"providers": [{"member_id": "1995529000000021021",
+                        "provider_name": "Jerry Liang"}]},
+        "provider_list").structured_content, ensure_ascii=False)
+
+    assert '"Facility ID": "1995529000000021081"' in facilities
+    assert '"Provider ID": "1995529000000021021"' in providers
+
+
+def test_clinical_lists_do_not_show_identifiers() -> None:
+    """Nobody chains off an allergy's record id, and a clinician does not read
+    it. Identifiers belong on the directory lists only."""
+    blob = json.dumps(app_result(
+        {"allergies": [{"patient_allergy_id": "a1", "allergen": "Penicillin",
+                        "severity": "Severe"}]},
+        "allergy_list").structured_content, ensure_ascii=False)
+
+    assert "Penicillin" in blob
+    assert "patient_allergy_id" not in blob and '"a1"' not in blob

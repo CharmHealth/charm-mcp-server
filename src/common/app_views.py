@@ -607,10 +607,18 @@ _LIST_SPECS: Dict[str, tuple] = {
             ("Email", ("email",), False),
         ],
     ),
+    # These two carry their identifier, unlike the clinical lists. Their whole
+    # purpose is supplying an ID for the *next* call — getPracticeInfo's own
+    # guidance says "use facility IDs from this list" and "use provider IDs
+    # (member_id) from this list". A rendered list that omits them makes that
+    # instruction unfollowable for any caller reading the view rather than the
+    # raw JSON, which is how a model came to pass the facility *name* as
+    # facility_ids after fetching this list twice.
     "facility_list": (
         ("facilities",),
         [
             ("Facility", ("facility_name", "name"), True),
+            ("Facility ID", ("facility_id", "id"), False),
             ("City", ("city",), True),
             ("State", ("state",), False),
             ("Phone", ("phone", "contact_number"), False),
@@ -620,6 +628,7 @@ _LIST_SPECS: Dict[str, tuple] = {
         ("providers", "members"),
         [
             ("Provider", ("provider_name", "full_name", "name"), True),
+            ("Provider ID", ("member_id", "provider_id", "id"), False),
             ("Speciality", ("speciality", "specialty"), True),
             ("Email", ("email",), False),
         ],
