@@ -459,3 +459,39 @@ def test_quick_notes_render_their_text_and_date() -> None:
 
     assert "Hi" in blob
     assert "1 Oct 2025" in blob
+
+
+def test_appointment_time_comes_from_the_date_string() -> None:
+    """Screenshot regression: the Time column was a dash on every row.
+
+    There is no `start_time` field. The API returns `appointment_date` as
+    "2026-09-10 09:00:00" and the time is the part after the space — NoEHR's
+    `AppointmentItem.displayTime` reads it the same way.
+    """
+    blob = json.dumps(app_result({"appointments": [
+        {"appointment_date": "2026-09-10 09:00:00", "patient_name": "Eve Ortega",
+         "reason_for_appointment": "Follow-up", "physician_name": "Jerry Liang",
+         "status": "Confirmed", "appointment_mode": "In Person"},
+    ]}, "appointment_list").structured_content, ensure_ascii=False)
+
+    assert '"Time": "9:00am"' in blob
+    assert '"Reason": "Follow-up"' in blob
+    assert '"Provider": "Jerry Liang"' in blob
+
+
+@pytest.mark.parametrize(
+    "appt,expected",
+    [
+        ({"appointment_date": "2026-09-10 09:00:00"}, "9:00am"),
+        ({"appointment_date": "2026-09-10 14:30:00"}, "2:30pm"),
+        ({"appointment_date": "2026-09-10 00:15:00"}, "12:15am"),
+        ({"appointment_date": "2026-09-10 12:05:00"}, "12:05pm"),
+        # Fallback: the UTC epoch-millisecond start time.
+        ({"appointment_start_time_utc": "1789023600000"}, "7:00am"),
+        # A date with no time part yields nothing rather than a wrong time.
+        ({"appointment_date": "2026-09-10"}, ""),
+        ({}, ""),
+    ],
+)
+def test_time_of_day_parsing(appt: dict, expected: str) -> None:
+    assert app_views._time_of_day(appt) == expected

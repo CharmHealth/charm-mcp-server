@@ -89,6 +89,36 @@ def _first(source: Dict[str, Any], *keys: str, default: str = "—") -> str:
     return default
 
 
+def _time_of_day(appt: Dict[str, Any]) -> str:
+    """Appointment time, which is not a field of its own.
+
+    The API returns `appointment_date` as "2026-09-10 09:00:00" and the time is
+    the part after the space — NoEHR's `AppointmentItem.displayTime` reads it the
+    same way, falling back to `appointment_start_time_utc` in epoch
+    milliseconds. Looking for a `start_time` key finds nothing, which is why this
+    column rendered as a dash for every row.
+    """
+    raw = str(_first(appt, "appointment_date", "date", default="")).strip()
+    if " " in raw:
+        clock = raw.split(" ", 1)[1]
+        m = re.match(r"^(\d{1,2}):(\d{2})", clock)
+        if m:
+            hour, minute = int(m.group(1)), m.group(2)
+            suffix = "am" if hour < 12 else "pm"
+            return f"{hour % 12 or 12}:{minute}{suffix}"
+
+    utc = str(_first(appt, "appointment_start_time_utc", default="")).strip()
+    if utc.isdigit() and 12 <= len(utc) <= 14:
+        try:
+            stamp = datetime.fromtimestamp(int(utc) / 1000, tz=timezone.utc)
+            return f"{stamp.hour % 12 or 12}:{stamp.minute:02d}{'am' if stamp.hour < 12 else 'pm'}"
+        except (ValueError, OSError, OverflowError):
+            pass
+
+    # Some responses carry a bare clock field instead.
+    return _first(appt, "start_time", "appointment_time", "from_time", default="")
+
+
 def appointment_list_view(data: Dict[str, Any]) -> DataTable:
     """The schedule. Stays a table — it is genuinely tabular and time-ordered —
     but carries the fields NoEHR's AppointmentListWidget shows: status, visit
@@ -99,7 +129,7 @@ def appointment_list_view(data: Dict[str, Any]) -> DataTable:
         if not isinstance(appt, dict):
             continue
         row = {
-            "Time": _first(appt, "start_time", "appointment_time", "from_time"),
+            "Time": _time_of_day(appt) or "—",
             "Patient": _first(appt, "patient_name", "full_name"),
             "Reason": _first(appt, "reason_for_appointment", "reason", "visit_type",
                              "appointment_type"),
