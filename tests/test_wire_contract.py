@@ -251,3 +251,87 @@ async def test_a_wildcard_facility_id_is_refused_with_a_usable_message() -> None
     message = str(excinfo.value)
     assert "no wildcard value" in message
     assert "getPracticeInfo" in message
+
+
+# ── An empty schedule vs a wrong facility ─────────────────────────────
+
+
+class _RecordingClient:
+    """Serves canned responses and records which endpoints were called."""
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.calls = []
+
+    async def __aenter__(self): return self
+    async def __aexit__(self, *exc_info): return False
+
+    async def get(self, endpoint, params=None):
+        self.calls.append(endpoint)
+        return dict(self.responses.get(endpoint, {}))
+
+
+FACILITIES = {"facilities": [{"facility_id": "1995529000000021081",
+                              "facility_name": "Ink Inc."}]}
+
+
+async def _list_appointments(monkeypatch, facility_ids: str, responses: dict):
+    client = _RecordingClient(responses)
+    monkeypatch.setattr(scheduling_tools, "CharmHealthAPIClient", lambda **kwargs: client)
+    async with Client(mcp_server.mcp_composite_server) as mcp:
+        result = await mcp.call_tool("manageAppointments", {
+            "action": "list", "start_date": "2026-09-10",
+            "end_date_range": "2026-09-10", "facility_ids": facility_ids,
+        })
+    return json.loads(_content_text(result)), client
+
+
+@pytest.mark.asyncio
+async def test_empty_result_flags_a_facility_id_the_practice_does_not_have(monkeypatch) -> None:
+    """The API accepts an unknown facility id and answers 200 with an empty
+    list, so a quiet day and a wrong facility look identical. Observed live: a
+    caller passed facility_ids="1" and reported the schedule as clear."""
+    payload, client = await _list_appointments(
+        monkeypatch, "1", {"/appointments": {"appointments": []}, "/facilities": FACILITIES})
+
+    guidance = payload["guidance"]
+    assert "does not match any facility" in guidance
+    # Both the rejected value and the valid ones come from the request and the
+    # live response — nothing about any practice is hard-coded.
+    assert "facility_ids=1 " in guidance
+    assert "1995529000000021081" in guidance and "Ink Inc." in guidance
+    assert "/facilities" in client.calls
+
+
+@pytest.mark.asyncio
+async def test_a_genuinely_empty_schedule_is_not_flagged(monkeypatch) -> None:
+    payload, _ = await _list_appointments(
+        monkeypatch, "1995529000000021081",
+        {"/appointments": {"appointments": []}, "/facilities": FACILITIES})
+
+    assert payload["guidance"] == "No appointments found in this date range."
+
+
+@pytest.mark.asyncio
+async def test_a_non_empty_result_never_pays_for_the_lookup(monkeypatch) -> None:
+    """The check runs only when the answer is empty, so the common path is
+    unchanged and costs no extra call."""
+    payload, client = await _list_appointments(
+        monkeypatch, "1995529000000021081",
+        {"/appointments": {"appointments": [{"appointment_id": "a1"}]},
+         "/facilities": FACILITIES})
+
+    assert "Found" in payload["guidance"]
+    assert "/facilities" not in client.calls
+
+
+@pytest.mark.asyncio
+async def test_a_failing_facilities_lookup_leaves_the_answer_alone(monkeypatch) -> None:
+    """Fails open: this only ever annotates guidance, so a lookup failure must
+    never change the result."""
+    payload, _ = await _list_appointments(
+        monkeypatch, "1",
+        {"/appointments": {"appointments": []},
+         "/facilities": {"error": "HTTP 500: upstream"}})
+
+    assert payload["guidance"] == "No appointments found in this date range."

@@ -13,6 +13,48 @@ logger = logging.getLogger(__name__)
 
 scheduling_tools_mcp = FastMCP(name="CharmHealth Scheduling Tools MCP Server")
 
+async def _known_facilities(client) -> List[Dict[str, Any]]:
+    """The practice's facilities, or an empty list if they can't be fetched.
+
+    Fails open on purpose: this only ever adds a note to a guidance string, so a
+    lookup failure must never change the answer.
+    """
+    try:
+        response = await client.get("/facilities")
+    except Exception:
+        return []
+    if not isinstance(response, dict) or "error" in response:
+        return []
+    return [f for f in (response.get("facilities") or []) if isinstance(f, dict)]
+
+
+def _empty_result_guidance(facilities: List[Dict[str, Any]], facility_ids: Optional[str]) -> str:
+    """Guidance for an empty appointment list, flagging an unknown facility id.
+
+    Every value is read from the request and the live response — nothing about
+    this practice is hard-coded.
+    """
+    base = "No appointments found in this date range."
+    supplied = [part.strip() for part in str(facility_ids or "").split(",") if part.strip()]
+    if not facilities or not supplied:
+        return base
+
+    known = {str(f.get("facility_id")) for f in facilities if f.get("facility_id")}
+    if not known or any(value in known for value in supplied):
+        return base
+
+    listed = ", ".join(
+        f"{f.get('facility_id')} ({f.get('facility_name')})" if f.get("facility_name")
+        else str(f.get("facility_id"))
+        for f in facilities if f.get("facility_id")
+    )
+    return (
+        f"{base} WARNING: facility_ids={','.join(supplied)} does not match any facility "
+        f"in this practice, so this empty result is probably wrong rather than an empty "
+        f"schedule. Valid facility_ids: {listed}. Retry with one of those."
+    )
+
+
 @scheduling_tools_mcp.tool(app=True)
 @with_tool_metrics()
 async def manageAppointments(
@@ -332,6 +374,20 @@ async def manageAppointments(
                         response["guidance"] = (
                             f"Found {total_count} appointments in the specified date range; {filtered['filtered_count']} match the provided filters."
                             " Use action='reschedule' or action='cancel' to modify appointments."
+                        )
+                    else:
+                        # A facility id this practice does not have is *accepted*
+                        # by the API — it answers 200 with an empty list rather
+                        # than an error — so a quiet day and a wrong facility are
+                        # indistinguishable to the caller. Observed live: a
+                        # caller passed facility_ids="1", got an empty result,
+                        # and reported the schedule as clear.
+                        #
+                        # Say so in the guidance rather than raising: an empty
+                        # schedule is a legitimate answer, and turning it into an
+                        # error would break the common case to catch the rare one.
+                        response["guidance"] = _empty_result_guidance(
+                            await _known_facilities(client), facility_ids
                         )
 
                     return app_result(strip_empty_values(response), "appointment_list")
