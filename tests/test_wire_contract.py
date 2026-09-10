@@ -201,3 +201,53 @@ async def test_mounted_tool_names_are_not_namespaced() -> None:
 
     for expected in ("manageAppointments", "findPatients", "reviewPatientHistory"):
         assert expected in names, f"{expected} missing or namespaced: {sorted(names)}"
+
+
+# ── Failures must not be dressed as successes ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_an_api_error_still_reaches_the_client_as_an_error(monkeypatch) -> None:
+    """Regression: wrapping a read in app_result hid API failures.
+
+    `@with_tool_metrics()` raises ToolError only for a *dict* carrying an
+    "error" key. A ToolResult slips past that check, so a 400 from the API came
+    back as a successful call with an empty appointment list and the failure
+    buried in the JSON — observed live as
+    `Status: success ... API calls: 1 (0 success, 1 failed)`.
+    """
+    class _FailingClient:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc_info): return False
+        async def get(self, endpoint, params=None):
+            return {"error": 'HTTP 400: {"code":2,"error_input":"facility_ids",'
+                             '"message":"Invalid value passed for facility_ids"}'}
+
+    monkeypatch.setattr(scheduling_tools, "CharmHealthAPIClient",
+                        lambda **kwargs: _FailingClient())
+
+    async with Client(mcp_server.mcp_composite_server) as client:
+        with pytest.raises(Exception) as excinfo:
+            await client.call_tool("manageAppointments", {
+                "action": "list", "start_date": "2026-09-07",
+                "end_date_range": "2026-09-13", "facility_ids": "1995529000000021081",
+            })
+
+    assert "facility_ids" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_a_wildcard_facility_id_is_refused_with_a_usable_message() -> None:
+    """A model with no practice context guesses facility_ids="all". The API
+    answers with an opaque 400, so the tool says what is wrong and how to fix it
+    before spending the call."""
+    async with Client(mcp_server.mcp_composite_server) as client:
+        with pytest.raises(Exception) as excinfo:
+            await client.call_tool("manageAppointments", {
+                "action": "list", "start_date": "2026-09-07",
+                "end_date_range": "2026-09-13", "facility_ids": "all",
+            })
+
+    message = str(excinfo.value)
+    assert "no wildcard value" in message
+    assert "getPracticeInfo" in message

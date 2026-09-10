@@ -82,6 +82,14 @@ async def manageAppointments(
     - "reschedule": Change existing appointment time (requires appointment_id + new scheduling details)
     - "cancel": Cancel appointment (requires appointment_id + cancel_reason)
     - "list": Show appointments with filtering (requires start_date, end_date_range, facility_ids; optionally filter by status/provider/mode)
+
+    facility_ids is a comma-separated list of REAL facility IDs, e.g.
+    facility_ids="1995529000000021081" or facility_ids="1995529000000021081,1995529000000021082".
+    There is no "all" or wildcard value — the API rejects anything that is not an
+    ID with: {"code":2,"error_input":"facility_ids","message":"Invalid value passed
+    for facility_ids"}. If you do not have the IDs, call
+    getPracticeInfo(info_type="facilities") first and use the facility_id values it
+    returns.
     
     Time format: Use 12-hour format like "09:30 AM" or "02:15 PM"
     For recurring: Set repetition to "Weekly" or "Daily" and provide frequency + end_date
@@ -250,11 +258,19 @@ async def manageAppointments(
                     return strip_empty_values(response)
                     
                 case "list":
+                    if facility_ids and facility_ids.strip().lower() in ("all", "*", "any"):
+                        # A model with no practice context guesses a wildcard here.
+                        # The API answers with an opaque 400, so say what is wrong
+                        # and how to get the real values.
+                        return {
+                            "error": f"facility_ids={facility_ids!r} is not valid — there is no wildcard value",
+                            "guidance": "facility_ids must be a comma-separated list of real facility IDs. Call getPracticeInfo(info_type='facilities') and pass the facility_id values it returns.",
+                        }
                     required = [start_date, end_date_range, facility_ids]
                     if not all(required):
                         return {
                             "error": "Missing required fields for listing appointments",
-                            "guidance": "For listing appointments, provide: start_date, end_date_range, and facility_ids (comma-separated)"
+                            "guidance": "For listing appointments, provide: start_date, end_date_range, and facility_ids. facility_ids must be a comma-separated list of real facility IDs — there is no 'all' value. Call getPracticeInfo(info_type='facilities') to get them."
                         }
                     
                     # Build query parameters

@@ -370,6 +370,15 @@ def app_result(payload: Dict[str, Any], widget_type: str) -> "ToolResult":
     from fastmcp.tools import ToolResult
     from mcp_types import TextContent
 
+    # An error payload gets no view and, more importantly, must stay a dict.
+    # `@with_tool_metrics()` raises ToolError only for a *dict* carrying an
+    # "error" key — a ToolResult slips past that check, so wrapping an error
+    # here reported the call as a success with the failure buried in the JSON.
+    # cortex's classify_widget returns None for the same input, for the same
+    # reason: there is nothing to draw for a failure.
+    if isinstance(payload, dict) and "error" in payload:
+        return payload
+
     view_builder = _VIEWS.get(widget_type)
     if view_builder is None:
         logger.warning("No MCP App view registered for %r; returning plain data", widget_type)
