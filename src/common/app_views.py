@@ -394,6 +394,15 @@ def app_result(payload: Dict[str, Any], widget_type: str) -> "ToolResult":
     FastMCP substitute the literal "[Rendered Prefab UI]" for the data, which
     breaks both other surfaces without raising anything.
 
+    **A view is part of the tool's contract with the model, not just
+    presentation.** Confirmed live: a model on an MCP Apps client could not
+    supply a facility id after fetching the facilities list twice, because the
+    rendered table had no id column — it passed the facility *name* instead. It
+    started working the moment the column was added, while the JSON in `content`
+    was unchanged throughout. So an MCP Apps client may read the view rather than
+    the content, and anything a view omits can be invisible to the caller even
+    though it is present in the payload. Design views for both readers.
+
     An unknown `widget_type` returns the plain dict rather than raising: a
     missing view should degrade to today's behaviour, not fail a clinical call.
     """
