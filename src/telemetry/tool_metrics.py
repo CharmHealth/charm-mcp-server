@@ -4,6 +4,7 @@ import time
 import logging
 from typing import Dict, Any, Callable, Optional
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import ToolResult
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 from .telemetry_config import telemetry
@@ -107,8 +108,15 @@ def with_tool_metrics(tool_name: Optional[str] = None):
         return wrapper
     return decorator
 
-def _is_successful_response(response: Dict[str, Any]) -> bool:
+def _is_successful_response(response: Any) -> bool:
     """Determine if a tool response indicates success"""
+    # Tools returning an MCP App view hand back a ToolResult rather than a dict,
+    # and signal failure through its is_error flag. Without this branch every
+    # successful app-tool call was recorded as a failure, because the
+    # non-dict check below rejected it.
+    if isinstance(response, ToolResult):
+        return not response.is_error
+
     if not isinstance(response, dict):
         return False
 

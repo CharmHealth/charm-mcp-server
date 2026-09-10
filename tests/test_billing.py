@@ -64,7 +64,7 @@ async def test_get_balance_happy_path(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await billing.managePatientBilling.fn(action="get_balance", patient_id="p1")
+    result = await billing.managePatientBilling(action="get_balance", patient_id="p1")
 
     assert result["total_balance_due"] == 150.0
     assert "150.0" in result["guidance"]
@@ -80,7 +80,7 @@ async def test_get_balance_zero_balance_is_not_treated_as_missing(monkeypatch) -
     })
     _patch_client(monkeypatch, fake)
 
-    result = await billing.managePatientBilling.fn(action="get_balance", patient_id="p1")
+    result = await billing.managePatientBilling(action="get_balance", patient_id="p1")
 
     assert "Patient balance retrieved" in result["guidance"]
     assert "No outstanding balance" not in result["guidance"]
@@ -94,7 +94,7 @@ async def test_get_balance_missing_patient_id_returns_clean_error(monkeypatch) -
     # with_tool_metrics() raises ToolError for any {"error": ...} return —
     # the error/guidance content survives verbatim as the exception message.
     with pytest.raises(ToolError) as exc_info:
-        await billing.managePatientBilling.fn(action="get_balance", patient_id="")
+        await billing.managePatientBilling(action="get_balance", patient_id="")
 
     body = json.loads(str(exc_info.value))
     assert body["error"] == "patient_id required for get_balance"
@@ -112,7 +112,7 @@ async def test_list_invoices_passes_filters_through(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await billing.managePatientBilling.fn(
+    result = await billing.managePatientBilling(
         action="list_invoices", patient_id="p1",
         start_date=datetime.date(2026, 1, 1), end_date=datetime.date(2026, 7, 1),
         per_page=10, page=2,
@@ -128,7 +128,7 @@ async def test_list_invoices_missing_patient_id_returns_clean_error(monkeypatch)
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.managePatientBilling.fn(action="list_invoices", patient_id="")
+        await billing.managePatientBilling(action="list_invoices", patient_id="")
 
     assert json.loads(str(exc_info.value))["error"] == "patient_id required for list_invoices"
 
@@ -141,7 +141,7 @@ async def test_get_receipts_happy_path(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await billing.managePatientBilling.fn(action="get_receipts", patient_id="p1")
+    result = await billing.managePatientBilling(action="get_receipts", patient_id="p1")
 
     assert result["total_count"] == 2
     assert "2 receipt(s)" in result["guidance"]
@@ -153,7 +153,7 @@ async def test_get_receipts_missing_patient_id_returns_clean_error(monkeypatch) 
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.managePatientBilling.fn(action="get_receipts", patient_id="")
+        await billing.managePatientBilling(action="get_receipts", patient_id="")
 
     assert json.loads(str(exc_info.value))["error"] == "patient_id required for get_receipts"
 
@@ -173,7 +173,7 @@ async def test_send_balance_reminder_defaults_to_email_channel(monkeypatch) -> N
     })
     _patch_client(monkeypatch, fake)
 
-    result = await billing.managePatientBilling.fn(
+    result = await billing.managePatientBilling(
         action="send_balance_reminder", patient_id="p1", reminder_message="You owe $50.",
     )
 
@@ -192,7 +192,7 @@ async def test_send_balance_reminder_phr_channel_builds_correct_body(monkeypatch
     })
     _patch_client(monkeypatch, fake)
 
-    result = await billing.managePatientBilling.fn(
+    result = await billing.managePatientBilling(
         action="send_balance_reminder", patient_id="p1", send_via="phr",
     )
 
@@ -211,7 +211,7 @@ async def test_send_balance_reminder_sms_channel_builds_correct_body(monkeypatch
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.managePatientBilling.fn(
+        await billing.managePatientBilling(
             action="send_balance_reminder", patient_id="p1", send_via="sms",
         )
 
@@ -235,7 +235,7 @@ async def test_send_balance_reminder_partial_success_reports_correctly(monkeypat
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.managePatientBilling.fn(
+        await billing.managePatientBilling(
             action="send_balance_reminder", patient_id="p1", send_via="email",
         )
 
@@ -248,7 +248,7 @@ async def test_send_balance_reminder_missing_patient_id_returns_clean_error(monk
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.managePatientBilling.fn(action="send_balance_reminder", patient_id="")
+        await billing.managePatientBilling(action="send_balance_reminder", patient_id="")
 
     assert json.loads(str(exc_info.value))["error"] == "patient_id required for send_balance_reminder"
     assert fake.post_calls == []

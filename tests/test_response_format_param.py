@@ -27,7 +27,10 @@ DETAIL_VIEW_TOOLS_WITH_MIN_ARGS = {
 
 @pytest.fixture(scope="module")
 def tools() -> dict:
-    return asyncio.run(mcp_server.mcp_composite_server.get_tools())
+    # FastMCP 4.x removed `get_tools()` (name -> Tool dict). `list_tools()`
+    # returns provider tools carrying the same `.parameters` schema.
+    listed = asyncio.run(mcp_server.mcp_composite_server.list_tools())
+    return {tool.name: tool for tool in listed}
 
 
 @pytest.mark.parametrize("tool_name", DETAIL_VIEW_TOOLS_WITH_MIN_ARGS)

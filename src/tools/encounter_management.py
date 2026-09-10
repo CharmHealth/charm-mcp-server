@@ -1,5 +1,6 @@
 from fastmcp import FastMCP, Context
-from fastmcp.server.dependencies import get_http_headers
+from common.auth import resolve_auth
+from common.app_views import app_result
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 encounter_management_mcp = FastMCP(name="CharmHealth Encounter Management MCP Server")
 
-@encounter_management_mcp.tool
+@encounter_management_mcp.tool(app=True)
 @with_tool_metrics()
 async def manageEncounter(
     patient_id: str,
@@ -90,43 +91,9 @@ async def manageEncounter(
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
     """
-    # Extract user tokens and environment from HTTP headers (proper FastMCP way)
-    access_token = None
-    refresh_token = None
-    base_url = None
-    token_url = None
+    auth = resolve_auth("manageEncounter")
     
-    try:
-        headers = get_http_headers()
-        access_token = headers.get('x-user-access-token')
-        refresh_token = headers.get('x-user-refresh-token')
-        base_url = headers.get('x-charmhealth-base-url')
-        token_url = headers.get('x-charmhealth-token-url')
-        client_secret = headers.get('x-charmhealth-client-secret')
-        accounts_server = headers.get('x-charmhealth-accounts-server')
-        
-        # If accounts_server is provided, use it for token URL (mobile flow)
-        if accounts_server:
-            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
-        
-        # Normalize base URL to include API path
-        if base_url and not base_url.endswith('/api/ehr/v1'):
-            base_url = base_url.rstrip('/') + '/api/ehr/v1'
-        
-        if access_token:
-            logger.info(f"manageEncounter using user credentials")
-        else:
-            logger.info("manageEncounter using environment variable credentials")
-    except Exception as e:
-        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
-    
-    async with CharmHealthAPIClient(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        base_url=base_url,
-        token_url=token_url,
-        client_secret=client_secret
-    ) as client:
+    async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             match action:
                 case "list":
@@ -156,7 +123,7 @@ async def manageEncounter(
                         )
                     else:
                         response["guidance"] = "No encounters found matching the filters."
-                    return strip_empty_values(response)
+                    return app_result(strip_empty_values(response), "encounter_list")
 
                 case "review":
                     if not encounter_id:

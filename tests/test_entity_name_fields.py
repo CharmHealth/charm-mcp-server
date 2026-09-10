@@ -9,6 +9,8 @@ so no real network/API access is needed.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tools import core_tools, patient_management, clinical_data, task_management, encounter_management, scheduling_tools
@@ -39,6 +41,18 @@ class _FakeAPIClient:
         return self._put[endpoint]
 
 
+def _payload(result):
+    """The JSON payload of a tool result, whichever form it takes.
+
+    Tools whose read cases carry an MCP App view return a `ToolResult`, with the
+    data in the first text content block — that block is what cortex and NoEHR
+    read. Tools without a view still return a plain dict.
+    """
+    if hasattr(result, "content"):
+        return json.loads(result.content[0].text)
+    return result
+
+
 def _patch_client(monkeypatch, module, fake_client) -> None:
     monkeypatch.setattr(module, "CharmHealthAPIClient", lambda **kwargs: fake_client)
 
@@ -52,9 +66,9 @@ async def test_find_patients_adds_patient_name(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, core_tools, fake)
 
-    result = await core_tools.findPatients.fn(query="Jane")
+    result = await core_tools.findPatients(query="Jane")
 
-    patient = result["patients"][0]
+    patient = _payload(result)["patients"][0]
     assert patient["full_name"] == "Jane Smith"
     assert patient["patient_name"] == "Jane Smith"
 
@@ -68,9 +82,9 @@ async def test_get_practice_info_providers_adds_provider_name(monkeypatch) -> No
     })
     _patch_client(monkeypatch, core_tools, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="providers")
+    result = await core_tools.getPracticeInfo(info_type="providers")
 
-    provider = result["providers"][0]
+    provider = _payload(result)["providers"][0]
     assert provider["full_name"] == "Alex Doe"
     assert provider["provider_name"] == "Alex Doe"
 
@@ -84,7 +98,7 @@ async def test_manage_patient_create_adds_patient_name(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, patient_management, fake)
 
-    result = await patient_management.managePatient.fn(
+    result = await patient_management.managePatient(
         action="create", first_name="Jane", last_name="Smith",
         gender="female", facility_ids="1", age="30",
     )
@@ -110,7 +124,7 @@ async def test_manage_patient_update_adds_patient_name(monkeypatch) -> None:
     )
     _patch_client(monkeypatch, patient_management, fake)
 
-    result = await patient_management.managePatient.fn(action="update", patient_id="p1")
+    result = await patient_management.managePatient(action="update", patient_id="p1")
 
     assert result["patient"]["patient_name"] == "Jane Smith"
 
@@ -124,11 +138,11 @@ async def test_manage_patient_drugs_list_supplements_adds_drug_name(monkeypatch)
     })
     _patch_client(monkeypatch, clinical_data, fake)
 
-    result = await clinical_data.managePatientDrugs.fn(
+    result = await clinical_data.managePatientDrugs(
         action="list", patient_id="p1", substance_type="supplement",
     )
 
-    supplement = result["supplements"][0]
+    supplement = _payload(result)["supplements"][0]
     assert supplement["supplement_name"] == "Vitamin D3"
     assert supplement["drug_name"] == "Vitamin D3"
 
@@ -145,9 +159,9 @@ async def test_manage_tasks_list_flattens_owner_id_and_name(monkeypatch) -> None
     })
     _patch_client(monkeypatch, task_management, fake)
 
-    result = await task_management.manageTasks.fn(action="list")
+    result = await task_management.manageTasks(action="list")
 
-    task = result["tasks"][0]
+    task = _payload(result)["tasks"][0]
     assert task["owner"] == {"member_id": "m1", "full_name": "Alex Doe", "prefix": "Dr."}
     assert task["owner_id"] == "m1"
     assert task["owner_name"] == "Alex Doe"
@@ -170,7 +184,7 @@ async def test_manage_encounter_review_adds_provider_name(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, encounter_management, fake)
 
-    result = await encounter_management.manageEncounter.fn(
+    result = await encounter_management.manageEncounter(
         patient_id="p1", action="review", encounter_id="e1",
     )
 
@@ -191,12 +205,12 @@ async def test_manage_appointments_list_adds_provider_name(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, scheduling_tools, fake)
 
-    result = await scheduling_tools.manageAppointments.fn(
+    result = await scheduling_tools.manageAppointments(
         action="list",
         start_date=datetime.date(2026, 7, 1),
         end_date_range=datetime.date(2026, 7, 31),
         facility_ids="1",
     )
 
-    appt = result["appointments"][0]
+    appt = _payload(result)["appointments"][0]
     assert appt["provider_name"] == "Dr. Alex Doe"

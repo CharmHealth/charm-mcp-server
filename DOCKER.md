@@ -59,6 +59,8 @@ Add configuration like the following in your MCP client.
         "CHARMHEALTH_REDIRECT_URI=<redirect_uri>",
         "-e",
         "CHARMHEALTH_TOKEN_URL=<token_url>",
+        "-e",
+        "CHARMHEALTH_ALLOW_SERVER_CREDENTIALS=1",
         "charm-mcp-server:latest"
       ]
     }
@@ -80,6 +82,7 @@ docker run --rm -i \
   -e CHARMHEALTH_CLIENT_SECRET="<client_secret>" \
   -e CHARMHEALTH_REDIRECT_URI="https://sandbox3.charmtracker.com/ehr/physician/mySpace.do?ACTION=SHOW_OAUTH_JSON" \
   -e CHARMHEALTH_TOKEN_URL="https://accounts106.charmtracker.com/oauth/v2/token" \
+  -e CHARMHEALTH_ALLOW_SERVER_CREDENTIALS="1" \
   charm-mcp-server:latest
 ```
 
@@ -112,6 +115,7 @@ Required to authenticate against CharmHealth APIs:
 | `CHARMHEALTH_CLIENT_SECRET` | OAuth client secret | Yes |
 | `CHARMHEALTH_REDIRECT_URI` | OAuth redirect URI | Yes |
 | `CHARMHEALTH_TOKEN_URL` | OAuth token endpoint URL | Yes |
+| `CHARMHEALTH_ALLOW_SERVER_CREDENTIALS` | Answer with the server's own credentials when a request carries no per-user token. Required for stdio use. **Do not set on a deployment that serves per-user tokens** — a tokenless request would be answered as the wrong practice. | Yes for stdio |
 
 Optional runtime settings:
 
@@ -146,6 +150,7 @@ services:
       - CHARMHEALTH_CLIENT_SECRET=<client_secret>
       - CHARMHEALTH_REDIRECT_URI=https://sandbox3.charmtracker.com/ehr/physician/mySpace.do?ACTION=SHOW_OAUTH_JSON
       - CHARMHEALTH_TOKEN_URL=https://accounts106.charmtracker.com/oauth/v2/token
+      - CHARMHEALTH_ALLOW_SERVER_CREDENTIALS=1
       - ENV=prod
     stdin_open: true   # required for stdio transport
     tty: true

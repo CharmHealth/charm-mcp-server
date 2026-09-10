@@ -30,15 +30,30 @@ class CharmHealthAPIClient:
                  timeout: int = 30):
         self.base_url = base_url or os.getenv("CHARMHEALTH_BASE_URL")
         self.api_key = api_key or os.getenv("CHARMHEALTH_API_KEY")
-        self.refresh_token = refresh_token or os.getenv("CHARMHEALTH_REFRESH_TOKEN")
         self.client_id = client_id or os.getenv("CHARMHEALTH_CLIENT_ID")
         self.client_secret = client_secret or os.getenv("CHARMHEALTH_CLIENT_SECRET")
         self.redirect_uri = redirect_uri or os.getenv("CHARMHEALTH_REDIRECT_URI")
         self.token_url = token_url or os.getenv("CHARMHEALTH_TOKEN_URL")
 
-        # Flexible validation: require refresh_token and client_id (allow env vars OR passed credentials)
-        if not self.refresh_token:
-            raise ValueError("Missing refresh_token (required for token refresh)")
+        # A caller that supplies an access token is acting for a specific user.
+        # A bearer-auth client is the case with no refresh token at all — it keeps that
+        # itself and re-mints. Falling back to CHARMHEALTH_REFRESH_TOKEN there
+        # would pair a user's access token with the *server's* refresh token, so
+        # the session would silently become the server's account on the first
+        # refresh: a cross-tenant escalation that raises nothing and logs nothing.
+        self.user_scoped = bool(access_token)
+        if self.user_scoped:
+            self.refresh_token = refresh_token
+        else:
+            self.refresh_token = refresh_token or os.getenv("CHARMHEALTH_REFRESH_TOKEN")
+
+        # One of the two is required: a per-user access token, or a refresh token
+        # to mint one with.
+        if not self.refresh_token and not access_token:
+            raise ValueError(
+                "Missing credentials: supply an access_token (per-user) or a "
+                "refresh_token (server-scoped)"
+            )
         if not self.client_id:
             raise ValueError("Missing client_id")
         
@@ -105,6 +120,14 @@ class CharmHealthAPIClient:
         if self._auth_token and current_time < (self._token_expires_at - 300):
             return self._auth_token
 
+        if not self.refresh_token:
+            # A per-user session with nothing of its own to refresh with. Skip the
+            # shared cache entirely: its key hashes the refresh token, so a
+            # user-scoped client has no key of its own, and the entry it would
+            # otherwise find belongs to whoever minted it. _refresh_token raises
+            # a clear "re-authorise" error.
+            return await self._refresh_token()
+
         key = self._token_cache_key()
         entry = self.__class__._shared_token_cache.get(key)
         if entry and current_time < (entry["expires_at"] - 300):
@@ -126,11 +149,19 @@ class CharmHealthAPIClient:
     
 
     async def _refresh_token(self) -> str:
+        if not self.refresh_token:
+            # A per-user session whose access token has expired. There is
+            # nothing to refresh with, and borrowing the server's refresh token
+            # would answer as the wrong account. Fail so the caller re-authorises.
+            raise ValueError(
+                "Access token expired and no per-user refresh token is available. "
+                "The caller must supply a fresh token."
+            )
         logger.info("Refreshing CharmHealth API token")
         logger.info(f"Token URL: {self.token_url}")
         logger.info(f"Client ID: {self.client_id}")
-        logger.info(f"Client secret present: {bool(self.client_secret)} (length: {len(self.client_secret) if self.client_secret else 0})")
-        logger.info(f"Refresh token present: {bool(self.refresh_token)} (prefix: {self.refresh_token[:20] if self.refresh_token else 'None'}...)")
+        logger.info(f"Client secret present: {bool(self.client_secret)}")
+        logger.info(f"Refresh token present: {bool(self.refresh_token)}")
         
         headers = {
             'Content-Type': 'application/x-www-form-urlencoded',

@@ -1,5 +1,6 @@
 from fastmcp import FastMCP, Context
-from fastmcp.server.dependencies import get_http_headers
+from common.auth import resolve_auth
+from common.app_views import app_result
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 core_tools_mcp = FastMCP(name="CharmHealth Core Tools MCP Server")
 
-@core_tools_mcp.tool
+@core_tools_mcp.tool(app=True)
 @with_tool_metrics()
 async def findPatients(
     query: Optional[str] = None,
@@ -77,52 +78,9 @@ async def findPatients(
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
     """
-    # Extract user tokens and environment from HTTP headers (proper FastMCP way)
-    access_token = None
-    refresh_token = None
-    base_url = None
-    token_url = None
+    auth = resolve_auth("findPatients")
     
-    try:
-        headers = get_http_headers()
-        logger.info(f"HTTP headers received: {list(headers.keys())}")
-        
-        # Extract authentication tokens
-        access_token = headers.get('x-user-access-token')
-        refresh_token = headers.get('x-user-refresh-token')
-        
-        # Extract CharmHealth environment URLs and credentials
-        base_url = headers.get('x-charmhealth-base-url')
-        token_url = headers.get('x-charmhealth-token-url')
-        client_secret = headers.get('x-charmhealth-client-secret')
-        accounts_server = headers.get('x-charmhealth-accounts-server')
-        
-        # If accounts_server is provided, use it for token URL (mobile flow)
-        if accounts_server:
-            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
-        
-        # Normalize base URL to include API path
-        if base_url and not base_url.endswith('/api/ehr/v1'):
-            base_url = base_url.rstrip('/') + '/api/ehr/v1'
-        
-        if access_token:
-            logger.info(f"findPatients using user credentials (access token: {access_token[:20]}...)")
-            logger.info(f"Using CharmHealth environment: {base_url}")
-            logger.info(f"Token URL for refresh: {token_url}")
-            logger.info(f"Client secret present: {bool(client_secret)} (length: {len(client_secret) if client_secret else 0})")
-            logger.info(f"Accounts server: {accounts_server}")
-        else:
-            logger.info("findPatients using environment variable credentials (no user tokens in headers)")
-    except Exception as e:
-        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
-    
-    async with CharmHealthAPIClient(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        base_url=base_url,
-        token_url=token_url,
-        client_secret=client_secret
-    ) as client:
+    async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             # Build parameters based on search type and criteria
             params = {
@@ -305,7 +263,7 @@ async def findPatients(
                 response["guidance"] = "No patients found. Check your search criteria and try again. Use search_type='name' for basic name searches or search_type='advanced' for complex filtering."
             
             logger.info(f"findPatients completed: {search_type} search with {patient_count if response.get('patients') else 0} results")
-            return strip_empty_values(response)
+            return app_result(strip_empty_values(response), "patient_list")
             
         except Exception as e:
             logger.error(f"Error in findPatients: {e}")
@@ -314,7 +272,7 @@ async def findPatients(
                 "guidance": "Search failed. Check your query format and parameters. For technical issues, verify API connectivity. Use simpler search criteria if advanced search fails."
             }
 
-@core_tools_mcp.tool
+@core_tools_mcp.tool(app=True)
 @with_tool_metrics()
 async def getPracticeInfo(
     info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details"] = "overview",
@@ -340,44 +298,9 @@ async def getPracticeInfo(
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
     """
-    # Extract user tokens and environment from HTTP headers (proper FastMCP way)
-    access_token = None
-    refresh_token = None
-    base_url = None
-    token_url = None
-    client_secret = None
+    auth = resolve_auth("getPracticeInfo")
     
-    try:
-        headers = get_http_headers()
-        access_token = headers.get('x-user-access-token')
-        refresh_token = headers.get('x-user-refresh-token')
-        base_url = headers.get('x-charmhealth-base-url')
-        token_url = headers.get('x-charmhealth-token-url')
-        client_secret = headers.get('x-charmhealth-client-secret')
-        accounts_server = headers.get('x-charmhealth-accounts-server')
-        
-        # If accounts_server is provided, use it for token URL (mobile flow)
-        if accounts_server:
-            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
-        
-        # Normalize base URL to include API path
-        if base_url and not base_url.endswith('/api/ehr/v1'):
-            base_url = base_url.rstrip('/') + '/api/ehr/v1'
-        
-        if access_token:
-            logger.info(f"getPracticeInfo using user credentials")
-        else:
-            logger.info("getPracticeInfo using environment variable credentials")
-    except Exception as e:
-        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
-    
-    async with CharmHealthAPIClient(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        base_url=base_url,
-        token_url=token_url,
-        client_secret=client_secret
-    ) as client:
+    async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             result = {"practice_info_type": info_type}
 
@@ -449,7 +372,8 @@ async def getPracticeInfo(
                     result["guidance"] = "Each soap_template contains soap_templates_inner (widget placements) → soap_widgets → soap_widget_entries. Use entry_id values when populating entries in manageEncounter(action='update'). Entry types: 'Simple Question'/'Text Box'/'Radio' → free text; 'Yes/No Question' → 'Yes' or 'No'; 'Header' → skip (display only)."
             
             logger.info(f"getPracticeInfo completed for {info_type}")
-            return strip_empty_values(result)
+            payload = strip_empty_values(result)
+            return app_result(payload, "facility_list" if payload.get("facilities") else "provider_list")
             
         except Exception as e:
             logger.error(f"Error in getPracticeInfo: {e}")

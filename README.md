@@ -48,7 +48,7 @@ The server provides **16 comprehensive tools** for complete EHR functionality:
 
 2. **Configure environment**:
    ```bash
-   cp .env.example .env  # Create from template if available
+   cp .env.example .env
    # Edit .env with your CharmHealth API credentials
    ```
 
@@ -103,6 +103,15 @@ CHARMHEALTH_CLIENT_SECRET=your_client_secret_here
 CHARMHEALTH_REDIRECT_URI=your_redirect_uri_here
 CHARMHEALTH_TOKEN_URL=your_token_url_here
 
+# Lets this server answer with its OWN credentials when a request carries no
+# per-user token. Required for a local stdio server (Claude Desktop, Cursor),
+# which has no OAuth flow and always authenticates as itself.
+#
+# Do NOT set this on a deployment that serves per-user tokens. There, a request
+# without a token would be answered as whatever practice this server is
+# configured for — a successful response containing the wrong patients.
+CHARMHEALTH_ALLOW_SERVER_CREDENTIALS=1
+
 # Optional: Set to "prod" for production logging
 ENV=dev
 
@@ -155,6 +164,7 @@ docker run --rm -i \
   -e CHARMHEALTH_CLIENT_SECRET='your_client_secret_here' \
   -e CHARMHEALTH_REDIRECT_URI='your_redirect_uri_here' \
   -e CHARMHEALTH_TOKEN_URL='your_token_url_here' \
+  -e CHARMHEALTH_ALLOW_SERVER_CREDENTIALS='1' \
   charm-mcp-server
 ```
 
@@ -171,6 +181,7 @@ docker run --rm -i \
   -e CHARMHEALTH_CLIENT_SECRET='your_client_secret_here' \
   -e CHARMHEALTH_REDIRECT_URI='your_redirect_uri_here' \
   -e CHARMHEALTH_TOKEN_URL='your_token_url_here' \
+  -e CHARMHEALTH_ALLOW_SERVER_CREDENTIALS='1' \
   -p 8080:8080 \
   charm-mcp-server
 ```

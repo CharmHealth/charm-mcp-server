@@ -1,5 +1,5 @@
 from fastmcp import FastMCP, Context
-from fastmcp.server.dependencies import get_http_headers
+from common.auth import resolve_auth
 from typing import Optional, List, Dict, Any, Literal
 from api import CharmHealthAPIClient
 from common.utils import strip_empty_values
@@ -9,45 +9,6 @@ from telemetry import with_tool_metrics
 logger = logging.getLogger(__name__)
 
 communication_mcp = FastMCP(name="CharmHealth Communication MCP Server")
-
-
-def _get_client_params() -> Dict[str, Any]:
-    """Extract HTTP headers for API client initialization."""
-    access_token = None
-    refresh_token = None
-    base_url = None
-    token_url = None
-    client_secret = None
-
-    try:
-        headers = get_http_headers()
-        access_token = headers.get('x-user-access-token')
-        refresh_token = headers.get('x-user-refresh-token')
-        base_url = headers.get('x-charmhealth-base-url')
-        token_url = headers.get('x-charmhealth-token-url')
-        client_secret = headers.get('x-charmhealth-client-secret')
-        accounts_server = headers.get('x-charmhealth-accounts-server')
-
-        if accounts_server:
-            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
-
-        if base_url and not base_url.endswith('/api/ehr/v1'):
-            base_url = base_url.rstrip('/') + '/api/ehr/v1'
-
-        if access_token:
-            logger.info("Communication tool using user credentials")
-        else:
-            logger.info("Communication tool using environment variable credentials")
-    except Exception as e:
-        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
-
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "base_url": base_url,
-        "token_url": token_url,
-        "client_secret": client_secret,
-    }
 
 
 @communication_mcp.tool
@@ -114,9 +75,9 @@ async def manageMessages(
     (appointment reminders, general notifications) can be sent directly.
     </instructions>
     """
-    client_params = _get_client_params()
+    auth = resolve_auth("manageMessages")
 
-    async with CharmHealthAPIClient(**client_params) as client:
+    async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             match action:
                 case "send":
