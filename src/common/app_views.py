@@ -119,26 +119,63 @@ def _time_of_day(appt: Dict[str, Any]) -> str:
     return _first(appt, "start_time", "appointment_time", "from_time", default="")
 
 
-def appointment_list_view(data: Dict[str, Any]) -> DataTable:
-    """The schedule. Stays a table — it is genuinely tabular and time-ordered —
-    but carries the fields NoEHR's AppointmentListWidget shows: status, visit
-    type, mode and duration, not just a time and a name."""
-    appointments: List[Dict[str, Any]] = data.get("appointments") or []
-    rows = []
-    for appt in appointments:
-        if not isinstance(appt, dict):
-            continue
-        row = {
-            "Time": _time_of_day(appt) or "—",
-            "Patient": _first(appt, "patient_name", "full_name"),
-            "Reason": _first(appt, "reason_for_appointment", "reason", "visit_type",
-                             "appointment_type"),
-            "Provider": _first(appt, "provider_name", "member_name", "physician_name"),
-            "Status": _status_of(appt, "appointment_status", "status"),
-            "Mode": _first(appt, "appointment_mode", "mode"),
-        }
-        if any(value not in ("—", "") for value in row.values()):
-            rows.append(row)
+_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def _appt_day(appt: Dict[str, Any]) -> str:
+    """The ISO date an appointment falls on, or "" when it cannot be read.
+
+    `appointment_date` is "2026-09-15 09:30:00" — date and time in one field —
+    so the day is the part before the space. Falls back to
+    `appointment_start_time_utc` in epoch milliseconds, the same order
+    `_time_of_day` uses.
+    """
+    raw = str(_first(appt, "appointment_date", "date", default="")).strip()
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})", raw)
+    if m:
+        return m.group(1)
+    utc = str(_first(appt, "appointment_start_time_utc", default="")).strip()
+    if utc.isdigit() and 12 <= len(utc) <= 14:
+        try:
+            return datetime.fromtimestamp(int(utc) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        except (ValueError, OSError, OverflowError):
+            return ""
+    return ""
+
+
+def _day_heading(iso_day: str) -> str:
+    """"Tue 15 Sep" — weekday included because a bare date does not tell a
+    clinician which day of the week they are looking at."""
+    try:
+        d = datetime.strptime(iso_day, "%Y-%m-%d")
+    except ValueError:
+        return iso_day or "Date not recorded"
+    return f"{_WEEKDAYS[d.weekday()]} {d.day} {_MONTHS[d.month - 1]}"
+
+
+def _appt_sort_key(appt: Dict[str, Any]) -> tuple:
+    """Chronological within a day. Sorts on the raw 24-hour clock, never on the
+    rendered string — "9:30am" sorts after "2:00pm" as text."""
+    raw = str(_first(appt, "appointment_date", "date", default="")).strip()
+    m = re.match(r"^\d{4}-\d{2}-\d{2}[ T](\d{1,2}):(\d{2})", raw)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+    return (99, 99)
+
+
+def _appt_row(appt: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "Time": _time_of_day(appt) or "—",
+        "Patient": _first(appt, "patient_name", "full_name"),
+        "Reason": _first(appt, "reason_for_appointment", "reason", "visit_type",
+                         "appointment_type"),
+        "Provider": _first(appt, "provider_name", "member_name", "physician_name"),
+        "Status": _status_of(appt, "appointment_status", "status"),
+        "Mode": _first(appt, "appointment_mode", "mode"),
+    }
+
+
+def _appt_table(rows: List[Dict[str, str]], *, searchable: bool) -> DataTable:
     return DataTable(
         columns=[
             DataTableColumn(key="Time", header="Time", width="90px"),
@@ -150,9 +187,68 @@ def appointment_list_view(data: Dict[str, Any]) -> DataTable:
         ],
         rows=rows,
         # Searching a short day is noise; searching a full clinic day is not.
-        search=len(rows) > 8,
+        search=searchable and len(rows) > 8,
         paginated=len(rows) > 25,
     )
+
+
+def appointment_list_view(data: Dict[str, Any]):
+    """The schedule, grouped by day.
+
+    Carries the fields NoEHR's AppointmentListWidget shows — status, visit type,
+    mode and duration, not just a time and a name.
+
+    **Why it groups.** A single flat table shows only a time, so a week's
+    schedule reads as one impossible day: 3:30pm is followed by 9:30am with
+    nothing marking the boundary. That is the same failure as the facilities
+    list that omitted the id column — an MCP App view is read by the model as
+    well as by a person, so a field the view drops is invisible to the caller
+    even though the JSON alongside it carries the value.
+
+    A single-day list stays one plain table: its date is unambiguous from the
+    request, and a heading over one group is chrome without information.
+    """
+    appointments: List[Dict[str, Any]] = [
+        a for a in (data.get("appointments") or []) if isinstance(a, dict)
+    ]
+
+    by_day: Dict[str, List[Dict[str, Any]]] = {}
+    for appt in appointments:
+        row = _appt_row(appt)
+        if all(value in ("—", "") for value in row.values()):
+            continue
+        by_day.setdefault(_appt_day(appt), []).append(appt)
+
+    if not by_day:
+        return _appt_table([], searchable=False)
+
+    # Undated last: an appointment whose date could not be read is still shown,
+    # under a heading that says so, rather than silently dropped or filed under
+    # a day it may not belong to.
+    days = sorted(k for k in by_day if k) + ([""] if "" in by_day else [])
+
+    if len(days) == 1:
+        appts = sorted(by_day[days[0]], key=_appt_sort_key)
+        return _appt_table([_appt_row(a) for a in appts], searchable=True)
+
+    sections: List[Any] = []
+    for day in days:
+        appts = sorted(by_day[day], key=_appt_sort_key)
+        count = len(appts)
+        sections.append(
+            Card(
+                children=[
+                    CardHeader(children=[
+                        CardTitle(content=_day_heading(day)),
+                        Muted(content=f"{count} appointment{'' if count == 1 else 's'}"),
+                    ]),
+                    CardContent(children=[
+                        _appt_table([_appt_row(a) for a in appts], searchable=False),
+                    ]),
+                ]
+            )
+        )
+    return Column(gap=3, children=sections)
 
 
 # Name candidates per entity, in priority order. Shared by the summary card and
