@@ -248,7 +248,7 @@ class CharmHealthAPIClient:
             result = response.json()
             duration = time.time() - start_time
             api_success = True
-            logger.info(f"Received {result} from {endpoint} with status code {response.status_code}")
+            logger.info(f"{method} {clean_endpoint} succeeded with status code {response.status_code} in {duration:.3f}s")
             # Record successful API call
             record_api_call(self.client_id, True, clean_endpoint, method, duration)
             return result
@@ -268,8 +268,7 @@ class CharmHealthAPIClient:
                 except Exception:
                     pass
                 return await self._make_request(method, endpoint, params, data, retry_count + 1)
-            logger.error(f"HTTP error {e.response.status_code}: {e}")
-            logger.error(f"Response body: {e.response.text}")
+            logger.error(f"HTTP error {e.response.status_code} on {method} {clean_endpoint} in {duration:.3f}s")
             return {"error": f"HTTP {e.response.status_code}: {e.response.text}"}
             
         except httpx.RequestError as e:
