@@ -110,6 +110,29 @@ async def test_list_procedures_missing_ids_returns_clean_error(monkeypatch) -> N
     assert "encounter_id" in json.loads(str(exc_info.value))["error"]
 
 
+@pytest.mark.asyncio
+async def test_list_procedures_surfaces_real_api_failure_instead_of_empty_state(monkeypatch) -> None:
+    """On a GET failure (bad encounter_id, expired auth, 404/500),
+    CharmHealthAPIClient._make_request returns only {"error": "..."} with no
+    "procedures" key. Before this fix, `response.get("procedures") or []`
+    turned that into an empty list, so the caller saw total_count=0 and
+    "No procedures attached to this encounter yet" instead of the real
+    error — indistinguishable from an encounter that's genuinely
+    uncoded (PR #22 review)."""
+    fake = _FakeAPIClient(get_responses={
+        "/patients/p1/encounters/e1/procedures": {"error": "HTTP 404: Not Found"},
+    })
+    _patch_client(monkeypatch, billing, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await billing.manageEncounterProcedures.fn(action="list", patient_id="p1", encounter_id="e1")
+
+    result = json.loads(str(exc_info.value))
+    assert result["error"] == "HTTP 404: Not Found"
+    assert "procedures" not in result
+    assert "No procedures attached" not in result.get("guidance", "")
+
+
 # ── manageEncounterProcedures: add ─────────────────────────────────────────
 
 
@@ -193,6 +216,47 @@ async def test_add_procedure_with_modifiers_and_diagnosis_links(monkeypatch) -> 
     _, sent_data = fake.post_calls[0]
     procedure_item = sent_data["procedures"][0]
     assert procedure_item["modifier_1"] == "25"
+    assert procedure_item["related_diagnosis_ids"] == ["d1", "d2"]
+
+
+@pytest.mark.asyncio
+async def test_add_procedure_accepts_native_array_for_diagnosis_links(monkeypatch) -> None:
+    """A calling model that just fetched diagnosis IDs via
+    manageDiagnoses(action='list') has a native list in hand, not a
+    comma-separated string. related_diagnosis_ids must accept that
+    directly rather than only a str (PR #22 review)."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/encounters/e1/procedures": {"procedures": []},
+    })
+    _patch_client(monkeypatch, billing, fake)
+
+    await billing.manageEncounterProcedures.fn(
+        action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
+        related_diagnosis_ids=["d1", "d2"],
+    )
+
+    _, sent_data = fake.post_calls[0]
+    procedure_item = sent_data["procedures"][0]
+    assert procedure_item["related_diagnosis_ids"] == ["d1", "d2"]
+
+
+@pytest.mark.asyncio
+async def test_add_procedure_accepts_json_encoded_array_for_diagnosis_links(monkeypatch) -> None:
+    """Some callers stringify a native array into JSON instead of sending
+    it natively (same pitfall CLAUDE.md documents for create_template's
+    `questions`) — tolerate that too, not just comma-separated."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/encounters/e1/procedures": {"procedures": []},
+    })
+    _patch_client(monkeypatch, billing, fake)
+
+    await billing.manageEncounterProcedures.fn(
+        action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
+        related_diagnosis_ids=json.dumps(["d1", "d2"]),
+    )
+
+    _, sent_data = fake.post_calls[0]
+    procedure_item = sent_data["procedures"][0]
     assert procedure_item["related_diagnosis_ids"] == ["d1", "d2"]
 
 

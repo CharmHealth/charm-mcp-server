@@ -1,6 +1,6 @@
 from fastmcp import FastMCP, Context
 from fastmcp.server.dependencies import get_http_headers
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict, Any, Literal, Union
 from datetime import date, timedelta
 from api import CharmHealthAPIClient
 from common.utils import strip_empty_values
@@ -319,7 +319,7 @@ async def manageEncounterProcedures(
     modifier_3: Optional[str] = None,
     modifier_4: Optional[str] = None,
     place_of_service: Optional[str] = "11",  # default Office, per CH-489 acceptance criteria
-    related_diagnosis_ids: Optional[str] = None,  # comma-separated diagnosis IDs from the encounter
+    related_diagnosis_ids: Optional[Union[str, List[str]]] = None,  # diagnosis IDs from the encounter — comma-separated string or a native array
     claim_comments: Optional[str] = None,
     skip_invoice_check: Optional[bool] = False,
 
@@ -343,7 +343,8 @@ async def manageEncounterProcedures(
     - "add": Attach a new procedure to the encounter (requires patient_id, encounter_id, code_id,
       item_charge). item_quantity defaults to 1. place_of_service defaults to "11" (Office) —
       valid values are "01"-"62", "65", "71", "72", "81", "99". modifier_1-4 and
-      related_diagnosis_ids (comma-separated diagnosis IDs) are optional.
+      related_diagnosis_ids (a comma-separated string or a native array of diagnosis IDs)
+      is optional.
     - "update": Modify an already-attached procedure (requires patient_id, encounter_id,
       consultation_cpt_map_id — the ID returned by "list"/"add" — plus whichever fields are
       changing).
@@ -407,6 +408,11 @@ async def manageEncounterProcedures(
                     # GET /patients/{pid}/encounters/{eid}/procedures (InvoicesAPI.getCPTsForEncounter)
                     # — confirmed against APIRequestByGet.xml + InvoicesAPIUtil.fetchCPTsForEncounterInJSON.
                     response = await client.get(f"/patients/{patient_id}/encounters/{encounter_id}/procedures")
+                    if isinstance(response, dict) and response.get("error"):
+                        return {
+                            "error": response["error"],
+                            "guidance": "Could not list procedures. Verify patient_id and encounter_id are correct."
+                        }
                     procedures = response.get("procedures") or []
                     result = {"procedures": procedures, "total_count": len(procedures)}
 
@@ -445,6 +451,26 @@ async def manageEncounterProcedures(
                             "guidance": "place_of_service must be one of \"01\"-\"62\", \"65\", \"71\", \"72\", \"81\", \"99\"."
                         }
 
+                    # Accept a native array directly (e.g. diagnosis IDs fetched from
+                    # manageDiagnoses(action='list')) or a JSON-encoded array string,
+                    # falling back to the documented comma-separated string. Callers
+                    # sending a native list against a str-only param get rejected at
+                    # the protocol layer before this code ever runs — same pitfall
+                    # as create_template's `questions` (see CLAUDE.md).
+                    if isinstance(related_diagnosis_ids, str):
+                        try:
+                            decoded = json.loads(related_diagnosis_ids)
+                        except json.JSONDecodeError:
+                            decoded = None
+                        related_diagnosis_ids = decoded if isinstance(decoded, list) else [
+                            d.strip() for d in related_diagnosis_ids.split(",") if d.strip()
+                        ]
+                    elif related_diagnosis_ids is not None and not isinstance(related_diagnosis_ids, list):
+                        return {
+                            "error": "related_diagnosis_ids must be a comma-separated string or an array of diagnosis IDs",
+                            "guidance": "Pass related_diagnosis_ids as e.g. [\"d1\", \"d2\"] or \"d1,d2\"."
+                        }
+
                     procedure_item: Dict[str, Any] = {
                         "item_quantity": item_quantity or 1,
                         "place_of_service": pos,
@@ -465,7 +491,7 @@ async def manageEncounterProcedures(
                         procedure_item["claim_comments"] = claim_comments
                     if related_diagnosis_ids:
                         procedure_item["related_diagnosis_ids"] = [
-                            d.strip() for d in related_diagnosis_ids.split(",") if d.strip()
+                            str(d).strip() for d in related_diagnosis_ids if str(d).strip()
                         ]
                     if action == "update":
                         procedure_item["consultation_cpt_map_id"] = consultation_cpt_map_id
