@@ -172,6 +172,7 @@ def _appt_row(appt: Dict[str, Any]) -> Dict[str, str]:
         "Provider": _first(appt, "provider_name", "member_name", "physician_name"),
         "Status": _status_of(appt, "appointment_status", "status"),
         "Mode": _first(appt, "appointment_mode", "mode"),
+        "ID": _first(appt, "appointment_id", "id", default=""),
     }
 
 
@@ -184,6 +185,10 @@ def _appt_table(rows: List[Dict[str, str]], *, searchable: bool) -> DataTable:
             DataTableColumn(key="Provider", header="Provider", sortable=True),
             DataTableColumn(key="Status", header="Status", sortable=True),
             DataTableColumn(key="Mode", header="Mode"),
+            # Last because it is for the caller, not the reader: rescheduling or
+            # cancelling takes appointment_id, and a schedule that shows only a
+            # time and a name cannot answer "move Eve's Tuesday visit".
+            DataTableColumn(key="ID", header="ID"),
         ],
         rows=rows,
         # Searching a short day is noise; searching a full clinic day is not.
@@ -639,13 +644,23 @@ def _status_of(record: Dict[str, Any], *keys: str) -> str:
     return ""
 
 
-def _record_block(title: str, status: str, detail: str, meta: str) -> List[Any]:
+def _record_block(title: str, status: str, detail: str, meta: str,
+                  ident: str = "") -> List[Any]:
     """One item, laid out the way NoEHR lays out a list row.
 
     A record with neither a title nor a detail renders nothing. The quick-notes
     card drew an empty block containing a single em-dash, because the title fell
     through to `_first`'s placeholder and every other field was looked up under
     the wrong name — a card that asserts a record exists while showing none of it.
+
+    `ident` is the id the record's own mutations require — `record_id` for a
+    drug or allergy, `task_id` for a task. It renders on the metadata line
+    because a view is read by the model as well as by a person: a list that
+    shows a medication but not its record_id cannot answer "discontinue the
+    lisinopril", even though the JSON alongside it carries the value. Same
+    failure as the facilities list that omitted its id column, on the write path
+    rather than the read path — and the recovery is worse, because a read can be
+    retried and a write has only a wrong guess.
     """
     title = "" if title in (None, "—") else str(title).strip()
     if not title and not detail:
@@ -658,8 +673,10 @@ def _record_block(title: str, status: str, detail: str, meta: str) -> List[Any]:
     block: List[Any] = [Row(gap=2, align="center", children=header)]
     if detail:
         block.append(Text(content=detail))
-    if meta:
-        block.append(Muted(content=meta))
+    ident = "" if ident in (None, "—") else str(ident).strip()
+    line = " · ".join(x for x in (meta, f"ID {ident}" if ident else "") if x)
+    if line:
+        block.append(Muted(content=line))
     block.append(Separator(spacing=2))
     return block
 
@@ -702,23 +719,30 @@ _LIST_SPECS: Dict[str, tuple] = {
     # cannot carry a status badge or a second line, and that is most of what a
     # clinician reads. These three are genuinely tabular: short rows, scannable,
     # and worth sorting.
+    # These three carry their identifier, unlike the clinical lists. Their whole
+    # purpose is supplying an ID for the *next* call — getPracticeInfo's own
+    # guidance says "use facility IDs from this list" and "use provider IDs
+    # (member_id) from this list", and findPatients exists to turn a name into
+    # the patient_id every clinical tool requires. A rendered list that omits
+    # them makes that instruction unfollowable for any caller reading the view
+    # rather than the raw JSON, which is how a model came to pass the facility
+    # *name* as facility_ids after fetching this list twice.
+    #
+    # MRN is not a substitute. "PAT0018" is the human-facing record number;
+    # patient_id is the 19-digit key the API takes. Showing only the first is
+    # what sent a caller back round the loop looking for an id that was in the
+    # payload all along.
     "patient_list": (
         ("patients",),
         [
             ("Patient", ("patient_name", "full_name"), True),
+            ("Patient ID", ("patient_id", "id"), False),
             ("MRN", ("record_id", "patient_record_id", "mrn"), False),
             ("DOB", ("dob", "date_of_birth"), False),
             ("Phone", ("mobile", "home_phone", "phone"), False),
             ("Email", ("email",), False),
         ],
     ),
-    # These two carry their identifier, unlike the clinical lists. Their whole
-    # purpose is supplying an ID for the *next* call — getPracticeInfo's own
-    # guidance says "use facility IDs from this list" and "use provider IDs
-    # (member_id) from this list". A rendered list that omits them makes that
-    # instruction unfollowable for any caller reading the view rather than the
-    # raw JSON, which is how a model came to pass the facility *name* as
-    # facility_ids after fetching this list twice.
     "facility_list": (
         ("facilities",),
         [
@@ -796,6 +820,7 @@ def medication_list_view(data: Dict[str, Any]) -> Column:
             _joined(m, "strength_description", "doseform_description", "route_description")
             or _first(m, "directions", "sig", default=""),
             _joined({"d": _first(m, "directions", "sig", default=""), "m": meta}, "d", "m"),
+            ident=_first(m, "record_id", "id", default=""),
         )
     return _records_view(_items(data, "current_medications", "medications"), build,
                          "No medications on the chart.")
@@ -811,6 +836,7 @@ def supplement_list_view(data: Dict[str, Any]) -> Column:
                      "freq": _first(sp, "frequency", "intake_type", default=""),
                      "dates": _date_range(sp, ("start_date",), ("end_date",))},
                     "dose", "freq", "dates"),
+            ident=_first(sp, "record_id", "id", default=""),
         )
     return _records_view(_items(data, "current_supplements", "supplements"), build,
                          "No supplements on the chart.")
@@ -835,6 +861,7 @@ def allergy_list_view(data: Dict[str, Any]) -> Column:
                      # something when it is not already what the badge says.
                      "status": status if status.lower() != severity.lower() else ""},
                     "type", "observed", "status"),
+            ident=_first(a, "record_id", "allergy_id", "id", default=""),
         )
     return _records_view(_items(data, "allergies", "patient_allergies"), build,
                          "No known allergies recorded.")
@@ -850,6 +877,7 @@ def diagnosis_list_view(data: Dict[str, Any]) -> Column:
             _joined({"onset": _date_range(d, ("from_date", "onset_date", "date"), ("to_date",)),
                      "comments": _first(d, "comments", default="")},
                     "onset", "comments"),
+            ident=_first(d, "record_id", "diagnosis_id", "id", default=""),
         )
     return _records_view(_items(data, "diagnoses", "patient_diagnoses"), build,
                          "No diagnoses on the problem list.")
@@ -912,20 +940,29 @@ def task_list_view(data: Dict[str, Any]) -> Column:
                      "priority": f"{priority} priority" if priority else "",
                      "owner": owner_name, "patient": patient_name},
                     "due", "priority", "owner", "patient"),
+            ident=_first(t, "task_id", "record_id", "id", default=""),
         )
     return _records_view(_items(data, "tasks"), build, "No tasks.")
 
 
 def recall_list_view(data: Dict[str, Any]) -> Column:
+    # Key names verified against a live response (2026-09-14), not inferred.
+    # managePatientRecalls returns recall_type / recall_status /
+    # patient_recall_id; this looked for recall_name / status / record_id and
+    # found none of them, so a recall had neither a title nor a detail and
+    # `_record_block` returned an empty list — every real recall rendered as
+    # nothing at all, with no error anywhere. Same shape as the medications
+    # section that drew three bullets of "—".
     def build(r: Dict[str, Any]) -> List[Any]:
         return _record_block(
-            _first(r, "recall_name", "name", "reason"),
-            _status_of(r, "status"),
+            _first(r, "recall_type", "recall_name", "name", "reason"),
+            _status_of(r, "recall_status", "status"),
             _first(r, "notes", "comments", default=""),
             _joined({"due": f"Due {_fmt_date(_first(r, 'due_date', 'recall_date', 'date', default=''))}"
                             if _first(r, "due_date", "recall_date", "date", default="") else "",
                      "provider": _first(r, "provider_name", "member_name", default="")},
                     "due", "provider"),
+            ident=_first(r, "patient_recall_id", "record_id", "recall_id", "id", default=""),
         )
     return _records_view(_items(data, "recalls", "recall"), build, "No recalls scheduled.")
 
@@ -944,6 +981,7 @@ def note_list_view(data: Dict[str, Any]) -> Column:
                      "who": _first(n, "member_name", "provider_name", "created_by",
                                    default="")},
                     "when", "who"),
+            ident=_first(n, "record_id", "note_id", "id", default=""),
         )
     return _records_view(_items(data, "quick_notes", "notes"), build, "No notes.")
 
@@ -961,6 +999,7 @@ def encounter_list_view(data: Dict[str, Any]) -> Column:
                      "provider": _first(e, "provider_name", "physician_name", "member_name", default=""),
                      "facility": _first(e, "facility_name", default="")},
                     "date", "provider", "facility"),
+            ident=_first(e, "encounter_id", "record_id", "id", default=""),
         )
     return _records_view(_items(data, "recent_encounters", "encounters"), build,
                          "No encounters on file.")
