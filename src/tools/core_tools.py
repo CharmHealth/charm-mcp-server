@@ -317,7 +317,7 @@ async def findPatients(
 @core_tools_mcp.tool
 @with_tool_metrics()
 async def getPracticeInfo(
-    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details"] = "overview",
+    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details", "procedure_codes"] = "overview",
     template_ids: Optional[str] = None,  # comma-separated, required for template_details
     ctx: Context = None
 ) -> Dict[str, Any]:
@@ -336,6 +336,9 @@ async def getPracticeInfo(
     - "overview": Summary of practice setup with key counts and recent activity
     - "templates": List all available SOAP templates (id, name, type) for the practice
     - "template_details": Full template schema (widgets + entries) for given template_ids (comma-separated)
+    - "procedure_codes": The practice's procedure/CPT code catalog (fee schedule) — code_id, code_number
+      (e.g. "99214"), code_name, default charge, modifiers. Use code_id values from this list with
+      manageEncounterProcedures(action="add") to attach a procedure to an encounter.
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -447,7 +450,17 @@ async def getPracticeInfo(
                     soap_response = await client.get("/soap/templates", params={"template_ids": template_ids})
                     result["soap_templates"] = soap_response.get("soap_templates") or []
                     result["guidance"] = "Each soap_template contains soap_templates_inner (widget placements) → soap_widgets → soap_widget_entries. Use entry_id values when populating entries in manageEncounter(action='update'). Entry types: 'Simple Question'/'Text Box'/'Radio' → free text; 'Yes/No Question' → 'Yes' or 'No'; 'Header' → skip (display only)."
-            
+
+                case "procedure_codes":
+                    # GET /billing/procedures (InvoicesAPI.fetchProcedureCodes) — confirmed
+                    # against webapps/ehr/WEB-INF/conf/api/rest/v1/APIRequestByGet.xml.
+                    # Unfiltered call returns the practice's full catalog, same shape as
+                    # "facilities"/"providers" above.
+                    procedures_response = await client.get("/billing/procedures")
+                    result["procedure_codes"] = procedures_response.get("procedures") or []
+                    result["procedure_code_count"] = len(result["procedure_codes"])
+                    result["guidance"] = "Use code_id values from this list with manageEncounterProcedures(action='add') to attach a procedure to an encounter. code_number is the CPT/HCPCS code (e.g. '99214'); code_name is its description."
+
             logger.info(f"getPracticeInfo completed for {info_type}")
             return strip_empty_values(result)
             

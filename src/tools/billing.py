@@ -1,6 +1,6 @@
 from fastmcp import FastMCP, Context
 from fastmcp.server.dependencies import get_http_headers
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict, Any, Literal, Union
 from datetime import date, timedelta
 from api import CharmHealthAPIClient
 from common.utils import strip_empty_values
@@ -296,4 +296,253 @@ async def managePatientBilling(
                 "error": str(e),
                 "guidance": f"Failed to {action} for patient billing. Verify patient_id and other "
                             "required fields are correct."
+            }
+
+
+# Place-of-service codes CH-489 documents as legal: 01-62, 65, 71, 72, 81, 99.
+_VALID_PLACE_OF_SERVICE = {str(n).zfill(2) for n in range(1, 63)} | {"65", "71", "72", "81", "99"}
+
+
+@billing_mcp.tool
+@with_tool_metrics()
+async def manageEncounterProcedures(
+    action: Literal["list", "add", "update", "delete"],
+    patient_id: str,
+    encounter_id: str,
+
+    # add/update fields
+    code_id: Optional[str] = None,  # from getPracticeInfo(info_type="procedure_codes")
+    item_charge: Optional[float] = None,
+    item_quantity: Optional[int] = 1,
+    modifier_1: Optional[str] = None,
+    modifier_2: Optional[str] = None,
+    modifier_3: Optional[str] = None,
+    modifier_4: Optional[str] = None,
+    place_of_service: Optional[str] = "11",  # default Office, per CH-489 acceptance criteria
+    related_diagnosis_ids: Optional[Union[str, List[str]]] = None,  # diagnosis IDs from the encounter — comma-separated string or a native array
+    claim_comments: Optional[str] = None,
+    skip_invoice_check: Optional[bool] = False,
+
+    # update/delete fields
+    consultation_cpt_map_id: Optional[str] = None,
+
+    ctx: Context = None,
+) -> Dict[str, Any]:
+    """
+    Attach, update, remove, or list billing-grade CPT/HCPCS procedures on an encounter.
+
+    <usecase>
+    Per-encounter procedure coding — attaching a CPT code (with modifiers, place of service,
+    and linked diagnoses) to an encounter so it's billable, not just narrative text in the
+    chart note. Look up code_id first with getPracticeInfo(info_type="procedure_codes").
+    </usecase>
+
+    <instructions>
+    Actions:
+    - "list": List procedures already attached to an encounter (requires patient_id, encounter_id).
+    - "add": Attach a new procedure to the encounter (requires patient_id, encounter_id, code_id,
+      item_charge). item_quantity defaults to 1. place_of_service defaults to "11" (Office) —
+      valid values are "01"-"62", "65", "71", "72", "81", "99". modifier_1-4 and
+      related_diagnosis_ids (a comma-separated string or a native array of diagnosis IDs)
+      is optional.
+    - "update": Modify an already-attached procedure (requires patient_id, encounter_id,
+      consultation_cpt_map_id — the ID returned by "list"/"add" — plus whichever fields are
+      changing).
+    - "delete": Remove a procedure from the encounter (requires patient_id, encounter_id,
+      consultation_cpt_map_id).
+
+    If an invoice has already been generated for this encounter, add/update is rejected —
+    the response will say so. Pass skip_invoice_check=True only if the caller explicitly
+    intends to modify billed procedures after invoicing.
+
+    When required parameters are missing, ask the user to provide the specific values rather
+    than proceeding with defaults or auto-generated values.
+    </instructions>
+    """
+    access_token = None
+    refresh_token = None
+    base_url = None
+    token_url = None
+    client_secret = None
+    accounts_server = None
+
+    try:
+        headers = get_http_headers()
+        access_token = headers.get('x-user-access-token')
+        refresh_token = headers.get('x-user-refresh-token')
+        base_url = headers.get('x-charmhealth-base-url')
+        token_url = headers.get('x-charmhealth-token-url')
+        client_secret = headers.get('x-charmhealth-client-secret')
+        accounts_server = headers.get('x-charmhealth-accounts-server')
+
+        if accounts_server:
+            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
+
+        if base_url and not base_url.endswith('/api/ehr/v1'):
+            base_url = base_url.rstrip('/') + '/api/ehr/v1'
+
+        if access_token:
+            logger.info("manageEncounterProcedures using user credentials")
+        else:
+            logger.info("manageEncounterProcedures using environment variable credentials")
+    except Exception as e:
+        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
+
+    async with CharmHealthAPIClient(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        base_url=base_url,
+        token_url=token_url,
+        client_secret=client_secret
+    ) as client:
+        try:
+            match action:
+
+                case "list":
+                    if not patient_id or not encounter_id:
+                        return {
+                            "error": "patient_id and encounter_id required for list",
+                            "guidance": "Provide both patient_id and encounter_id to list procedures on the encounter."
+                        }
+
+                    # GET /patients/{pid}/encounters/{eid}/procedures (InvoicesAPI.getCPTsForEncounter)
+                    # — confirmed against APIRequestByGet.xml + InvoicesAPIUtil.fetchCPTsForEncounterInJSON.
+                    response = await client.get(f"/patients/{patient_id}/encounters/{encounter_id}/procedures")
+                    if isinstance(response, dict) and response.get("error"):
+                        return {
+                            "error": response["error"],
+                            "guidance": "Could not list procedures. Verify patient_id and encounter_id are correct."
+                        }
+                    procedures = response.get("procedures") or []
+                    result = {"procedures": procedures, "total_count": len(procedures)}
+
+                    if procedures:
+                        result["guidance"] = f"Found {len(procedures)} procedure(s) on this encounter. Use consultation_cpt_map_id with action='update' or 'delete'."
+                    else:
+                        result["guidance"] = "No procedures attached to this encounter yet. Use action='add' with a code_id from getPracticeInfo(info_type='procedure_codes')."
+
+                    return strip_empty_values(result)
+
+                case "add" | "update":
+                    if not patient_id or not encounter_id:
+                        return {
+                            "error": "patient_id and encounter_id required",
+                            "guidance": f"Provide both patient_id and encounter_id to {action} a procedure."
+                        }
+                    if action == "add" and not code_id:
+                        return {
+                            "error": "code_id required for add",
+                            "guidance": "Look up code_id with getPracticeInfo(info_type='procedure_codes'), then retry."
+                        }
+                    if action == "add" and item_charge is None:
+                        return {
+                            "error": "item_charge required for add",
+                            "guidance": "Provide item_charge (the practice's real API requires it explicitly — it does not fall back to the catalog's default charge)."
+                        }
+                    if action == "update" and not consultation_cpt_map_id:
+                        return {
+                            "error": "consultation_cpt_map_id required for update",
+                            "guidance": "Use action='list' first to find the consultation_cpt_map_id of the procedure to update."
+                        }
+                    pos = place_of_service or "11"
+                    if pos not in _VALID_PLACE_OF_SERVICE:
+                        return {
+                            "error": f"Invalid place_of_service: {pos}",
+                            "guidance": "place_of_service must be one of \"01\"-\"62\", \"65\", \"71\", \"72\", \"81\", \"99\"."
+                        }
+
+                    # Accept a native array directly (e.g. diagnosis IDs fetched from
+                    # manageDiagnoses(action='list')) or a JSON-encoded array string,
+                    # falling back to the documented comma-separated string. Callers
+                    # sending a native list against a str-only param get rejected at
+                    # the protocol layer before this code ever runs — same pitfall
+                    # as create_template's `questions` (see CLAUDE.md).
+                    if isinstance(related_diagnosis_ids, str):
+                        try:
+                            decoded = json.loads(related_diagnosis_ids)
+                        except json.JSONDecodeError:
+                            decoded = None
+                        related_diagnosis_ids = decoded if isinstance(decoded, list) else [
+                            d.strip() for d in related_diagnosis_ids.split(",") if d.strip()
+                        ]
+                    elif related_diagnosis_ids is not None and not isinstance(related_diagnosis_ids, list):
+                        return {
+                            "error": "related_diagnosis_ids must be a comma-separated string or an array of diagnosis IDs",
+                            "guidance": "Pass related_diagnosis_ids as e.g. [\"d1\", \"d2\"] or \"d1,d2\"."
+                        }
+
+                    procedure_item: Dict[str, Any] = {
+                        "item_quantity": item_quantity or 1,
+                        "place_of_service": pos,
+                    }
+                    if code_id:
+                        procedure_item["code_id"] = code_id
+                    if item_charge is not None:
+                        procedure_item["item_charge"] = item_charge
+                    if modifier_1:
+                        procedure_item["modifier_1"] = modifier_1
+                    if modifier_2:
+                        procedure_item["modifier_2"] = modifier_2
+                    if modifier_3:
+                        procedure_item["modifier_3"] = modifier_3
+                    if modifier_4:
+                        procedure_item["modifier_4"] = modifier_4
+                    if claim_comments:
+                        procedure_item["claim_comments"] = claim_comments
+                    if related_diagnosis_ids:
+                        procedure_item["related_diagnosis_ids"] = [
+                            str(d).strip() for d in related_diagnosis_ids if str(d).strip()
+                        ]
+                    if action == "update":
+                        procedure_item["consultation_cpt_map_id"] = consultation_cpt_map_id
+                    if skip_invoice_check:
+                        procedure_item["skip_invoice_check"] = True
+
+                    # POST body is a batch envelope — {"procedures": [...]} — even for a
+                    # single procedure. Confirmed against InvoicesAPIUtil.addOrUpdateCPTsForEncounter,
+                    # which does inputStream.optJSONArray("procedures") and NPEs on a flat body.
+                    # consultation_cpt_map_id presence/absence in each item (not a URL/action
+                    # distinction) is what the real API uses to tell add from update.
+                    response = await client.post(
+                        f"/patients/{patient_id}/encounters/{encounter_id}/procedures",
+                        data={"procedures": [procedure_item]}
+                    )
+
+                    if isinstance(response, dict) and response.get("error"):
+                        error_msg = str(response["error"])
+                        guidance = f"Failed to {action} the procedure. Verify code_id and consultation_cpt_map_id (if updating) are correct."
+                        if "invoice" in error_msg.lower():
+                            guidance = "An invoice already exists for this encounter, so procedures can't be modified without an explicit override. Retry with skip_invoice_check=True only if that's actually intended."
+                        return {"error": error_msg, "guidance": guidance}
+
+                    procedures = response.get("procedures") if isinstance(response, dict) else None
+                    result = {"procedures": procedures or []}
+                    result["guidance"] = f"Procedure {'added to' if action == 'add' else 'updated on'} the encounter. Use action='list' to see the full current set, or action='delete' with consultation_cpt_map_id to remove one."
+                    return strip_empty_values(result)
+
+                case "delete":
+                    if not patient_id or not encounter_id or not consultation_cpt_map_id:
+                        return {
+                            "error": "patient_id, encounter_id, and consultation_cpt_map_id required for delete",
+                            "guidance": "Use action='list' first to find the consultation_cpt_map_id of the procedure to remove."
+                        }
+
+                    # DELETE /patients/{pid}/encounters/{eid}/procedures/{cpt_map_id}
+                    # (InvoicesAPI.removeProcedure) — confirmed against APIRequestByDelete.xml.
+                    response = await client.delete(
+                        f"/patients/{patient_id}/encounters/{encounter_id}/procedures/{consultation_cpt_map_id}"
+                    )
+                    if isinstance(response, dict) and response.get("error"):
+                        return {
+                            "error": response["error"],
+                            "guidance": "Could not remove the procedure. Verify consultation_cpt_map_id is correct via action='list'."
+                        }
+                    return {"guidance": "Procedure removed from the encounter."}
+
+        except Exception as e:
+            logger.error(f"Error in manageEncounterProcedures: {e}")
+            return {
+                "error": str(e),
+                "guidance": f"Failed to {action} encounter procedure. Verify patient_id, encounter_id, "
+                            "and other required fields are correct."
             }
