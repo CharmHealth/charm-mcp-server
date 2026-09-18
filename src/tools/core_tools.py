@@ -317,7 +317,7 @@ async def findPatients(
 @core_tools_mcp.tool
 @with_tool_metrics()
 async def getPracticeInfo(
-    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details", "procedure_codes", "providers_by_privilege"] = "overview",
+    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details", "providers_by_privilege"] = "overview",
     template_ids: Optional[str] = None,  # comma-separated, required for template_details
     privilege: Optional[str] = None,  # RBAC privilege token, required for providers_by_privilege
     ctx: Context = None
@@ -337,9 +337,6 @@ async def getPracticeInfo(
     - "overview": Summary of practice setup with key counts and recent activity
     - "templates": List all available SOAP templates (id, name, type) for the practice
     - "template_details": Full template schema (widgets + entries) for given template_ids (comma-separated)
-    - "procedure_codes": The practice's procedure/CPT code catalog (fee schedule) — code_id, code_number
-      (e.g. "99214"), code_name, default charge, modifiers. Use code_id values from this list with
-      manageEncounterProcedures(action="add") to attach a procedure to an encounter.
     - "providers_by_privilege": List providers holding a specific RBAC privilege token (e.g. "add_medications",
       the same privilege the real prescription-add endpoint requires server-side). Requires `privilege`. Use to
       check scope-of-practice/role authorization before allowing a role-gated action, by checking whether a
@@ -455,16 +452,6 @@ async def getPracticeInfo(
                     soap_response = await client.get("/soap/templates", params={"template_ids": template_ids})
                     result["soap_templates"] = soap_response.get("soap_templates") or []
                     result["guidance"] = "Each soap_template contains soap_templates_inner (widget placements) → soap_widgets → soap_widget_entries. Use entry_id values when populating entries in manageEncounter(action='update'). Entry types: 'Simple Question'/'Text Box'/'Radio' → free text; 'Yes/No Question' → 'Yes' or 'No'; 'Header' → skip (display only)."
-
-                case "procedure_codes":
-                    # GET /billing/procedures (InvoicesAPI.fetchProcedureCodes) — confirmed
-                    # against webapps/ehr/WEB-INF/conf/api/rest/v1/APIRequestByGet.xml.
-                    # Unfiltered call returns the practice's full catalog, same shape as
-                    # "facilities"/"providers" above.
-                    procedures_response = await client.get("/billing/procedures")
-                    result["procedure_codes"] = procedures_response.get("procedures") or []
-                    result["procedure_code_count"] = len(result["procedure_codes"])
-                    result["guidance"] = "Use code_id values from this list with manageEncounterProcedures(action='add') to attach a procedure to an encounter. code_number is the CPT/HCPCS code (e.g. '99214'); code_name is its description."
 
                 case "providers_by_privilege":
                     if not privilege:
