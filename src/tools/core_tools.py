@@ -317,8 +317,9 @@ async def findPatients(
 @core_tools_mcp.tool
 @with_tool_metrics()
 async def getPracticeInfo(
-    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details"] = "overview",
+    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details", "providers_by_privilege"] = "overview",
     template_ids: Optional[str] = None,  # comma-separated, required for template_details
+    privilege: Optional[str] = None,  # RBAC privilege token, required for providers_by_privilege
     ctx: Context = None
 ) -> Dict[str, Any]:
     """
@@ -336,6 +337,10 @@ async def getPracticeInfo(
     - "overview": Summary of practice setup with key counts and recent activity
     - "templates": List all available SOAP templates (id, name, type) for the practice
     - "template_details": Full template schema (widgets + entries) for given template_ids (comma-separated)
+    - "providers_by_privilege": List providers holding a specific RBAC privilege token (e.g. "add_medications",
+      the same privilege the real prescription-add endpoint requires server-side). Requires `privilege`. Use to
+      check scope-of-practice/role authorization before allowing a role-gated action, by checking whether a
+      given member_id appears in the returned list.
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -447,7 +452,21 @@ async def getPracticeInfo(
                     soap_response = await client.get("/soap/templates", params={"template_ids": template_ids})
                     result["soap_templates"] = soap_response.get("soap_templates") or []
                     result["guidance"] = "Each soap_template contains soap_templates_inner (widget placements) → soap_widgets → soap_widget_entries. Use entry_id values when populating entries in manageEncounter(action='update'). Entry types: 'Simple Question'/'Text Box'/'Radio' → free text; 'Yes/No Question' → 'Yes' or 'No'; 'Header' → skip (display only)."
-            
+
+                case "providers_by_privilege":
+                    if not privilege:
+                        return {
+                            "error": "privilege required for providers_by_privilege",
+                            "guidance": "Provide the RBAC privilege token to filter by, e.g. 'add_medications' for prescribing authority (the same privilege the real prescription-add endpoint requires server-side)."
+                        }
+                    # Same /members?privilege= filter the "providers"/"overview" cases already use
+                    # with privilege="sign_encounter" — generalized to accept any privilege token.
+                    providers_response = await client.get("/members", params={"privilege": privilege})
+                    result["privilege"] = privilege
+                    result["providers"] = _add_provider_name(providers_response.get("members") or [])
+                    result["provider_count"] = len(result["providers"])
+                    result["guidance"] = f"Providers holding the '{privilege}' privilege. Check whether a specific provider_id/member_id appears in this list to determine scope-of-practice authorization for actions gated on this privilege."
+
             logger.info(f"getPracticeInfo completed for {info_type}")
             return strip_empty_values(result)
             
