@@ -995,10 +995,16 @@ def encounter_list_view(data: Dict[str, Any]) -> Column:
             _first(e, "visit_name", "encounter_type", "chart_type", default="Encounter"),
             status,
             _first(e, "chief_complaints", "chief_complaint", default=""),
-            _joined({"date": _fmt_date(_first(e, "date", "encounter_date", default="")),
+            # Patient first, because this list is no longer always about one
+            # patient: manageEncounter(action="list") can now omit patient_id
+            # and return every unsigned note in the practice. Without a name
+            # per row those rows are unattributable — the patient used to be
+            # the context of the whole list rather than a property of a row.
+            _joined({"patient": _first(e, "patient_name", default=""),
+                     "date": _fmt_date(_first(e, "date", "encounter_date", default="")),
                      "provider": _first(e, "provider_name", "physician_name", "member_name", default=""),
                      "facility": _first(e, "facility_name", default="")},
-                    "date", "provider", "facility"),
+                    "patient", "date", "provider", "facility"),
             ident=_first(e, "encounter_id", "record_id", "id", default=""),
         )
     return _records_view(_items(data, "recent_encounters", "encounters"), build,

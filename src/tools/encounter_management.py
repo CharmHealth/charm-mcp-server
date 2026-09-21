@@ -15,7 +15,7 @@ encounter_management_mcp = FastMCP(name="CharmHealth Encounter Management MCP Se
 @encounter_management_mcp.tool(app=True)
 @with_tool_metrics()
 async def manageEncounter(
-    patient_id: str,
+    patient_id: Optional[str] = None,
     action: Literal["create", "review", "sign", "unlock", "update", "list"] = "create",
     provider_id: Optional[str] = None,
     facility_id: Optional[str] = None,
@@ -50,7 +50,7 @@ async def manageEncounter(
     
     <instructions>
     Actions:
-    - "list": List encounters for a patient (requires patient_id; optionally filter by filter_by, start_date, end_date, per_page, page)
+    - "list": List encounters (patient_id optional — omit it to list across the practice, e.g. filter_by="Status.Unsigned" for every unsigned note; optionally filter by start_date, end_date, per_page, page)
     - "create": Create new encounter and document clinical findings (default)
     - "review": Display complete encounter details for review before signing
     - "sign": Electronically sign encounter after review and confirmation
@@ -92,12 +92,31 @@ async def manageEncounter(
     </instructions>
     """
     auth = resolve_auth("manageEncounter")
-    
+
+    # Only "list" works without a patient. Every other action builds a path of
+    # the form /patients/{patient_id}/..., so a missing id there would request
+    # /patients/None/... and fail as something unrelated — a 404 about an
+    # encounter rather than a message about the argument that was left out.
+    if action != "list" and not patient_id:
+        return {
+            "error": f"patient_id is required for action='{action}'",
+            "guidance": "Only action='list' can omit patient_id. Pass the patient_id you are acting on.",
+        }
+
     async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             match action:
                 case "list":
-                    params: Dict[str, Any] = {"patient_id": int(patient_id)}
+                    # Omitting patient_id lists across the practice. The EHR's
+                    # GET /encounters treats it as optional — verified against
+                    # the live API, which returns the practice-wide list rather
+                    # than an error. Combined with filter_by="Status.Unsigned"
+                    # that makes "every unsigned note" one call, where a caller
+                    # previously had to fan out per patient and so could only
+                    # see the patients it already knew to ask about.
+                    params: Dict[str, Any] = {}
+                    if patient_id:
+                        params["patient_id"] = int(patient_id)
                     if filter_by:
                         params["filter_by"] = filter_by
                     if facility_id:
@@ -117,8 +136,9 @@ async def manageEncounter(
                     encounters = response.get("encounters") or []
                     response["total_count"] = len(encounters)
                     if encounters:
+                        scope = "for this patient" if patient_id else "across the practice"
                         response["guidance"] = (
-                            f"Found {len(encounters)} encounters for this patient."
+                            f"Found {len(encounters)} encounters {scope}."
                             " Use action='review' with an encounter_id to see full details."
                         )
                     else:
