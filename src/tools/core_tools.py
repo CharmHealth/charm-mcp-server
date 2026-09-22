@@ -317,7 +317,7 @@ async def findPatients(
 @core_tools_mcp.tool
 @with_tool_metrics()
 async def getPracticeInfo(
-    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details"] = "overview",
+    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details", "visit_types"] = "overview",
     template_ids: Optional[str] = None,  # comma-separated, required for template_details
     ctx: Context = None
 ) -> Dict[str, Any]:
@@ -336,6 +336,11 @@ async def getPracticeInfo(
     - "overview": Summary of practice setup with key counts and recent activity
     - "templates": List all available SOAP templates (id, name, type) for the practice
     - "template_details": Full template schema (widgets + entries) for given template_ids (comma-separated)
+    - "visit_types": The practice's visit types (visit_type_id, visit_type, duration, appointment_mode) with
+      the SOAP templates configured against each one in `chart_templates`. Use a visit type's chart_templates
+      to decide which template_ids to attach with manageEncounter(action="update"), instead of guessing from
+      the full practice-wide list in info_type="templates". `chart_templates` is an empty list when the
+      practice has configured no template for that visit type.
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -447,6 +452,43 @@ async def getPracticeInfo(
                     soap_response = await client.get("/soap/templates", params={"template_ids": template_ids})
                     result["soap_templates"] = soap_response.get("soap_templates") or []
                     result["guidance"] = "Each soap_template contains soap_templates_inner (widget placements) → soap_widgets → soap_widget_entries. Use entry_id values when populating entries in manageEncounter(action='update'). Entry types: 'Simple Question'/'Text Box'/'Radio' → free text; 'Yes/No Question' → 'Yes' or 'No'; 'Header' → skip (display only)."
+
+                case "visit_types":
+                    # GET /settings/visittypes — the practice's visit types, each
+                    # carrying the SOAP templates configured against it in
+                    # "chart_templates". CONFIRMED LIVE (2026-09-21): present on
+                    # ehr2.charmtracker.com, absent entirely on sandbox3, which
+                    # runs an older build — a caller pointed at sandbox sees visit
+                    # types with no chart_templates key at all, not an empty one.
+                    #
+                    # Paginated, and per_page is NOT honoured on every build (asked
+                    # for 200, got page_context.per_page=50), so follow
+                    # has_more_page rather than trusting one large page. Capped so a
+                    # backend that never flips the flag can't spin here.
+                    visit_types: list = []
+                    page = 1
+                    while page <= 20:
+                        vt_response = await client.get(
+                            "/settings/visittypes",
+                            params={"page": page, "per_page": 200},
+                        )
+                        visit_types.extend(vt_response.get("visittypes") or [])
+                        page_context = vt_response.get("page_context") or {}
+                        if str(page_context.get("has_more_page", "")).lower() != "true":
+                            break
+                        page += 1
+
+                    result["visit_types"] = visit_types
+                    result["visit_type_count"] = len(visit_types)
+                    linked = sum(1 for v in visit_types if isinstance(v, dict) and v.get("chart_templates"))
+                    result["guidance"] = (
+                        f"{linked} of {len(visit_types)} visit type(s) have chart_templates configured. "
+                        "Each chart_templates entry is a SOAP template linked to that visit type in practice "
+                        "settings — pass its template_id to manageEncounter(action='update', template_ids=...) "
+                        "to attach it to an encounter. An empty chart_templates means the practice linked no "
+                        "template to that visit type, so fall back to info_type='templates' and pick from the "
+                        "practice-wide list."
+                    )
             
             logger.info(f"getPracticeInfo completed for {info_type}")
             return strip_empty_values(result)
