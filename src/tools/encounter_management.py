@@ -11,6 +11,32 @@ logger = logging.getLogger(__name__)
 
 encounter_management_mcp = FastMCP(name="CharmHealth Encounter Management MCP Server")
 
+def _describe_attached_templates(encounter_details: dict) -> str:
+    """One line for the review guidance about this encounter's SOAP templates.
+
+    Absent key means a non-SOAP chart (no template concept), so say nothing
+    rather than imply templates are missing.
+    """
+    templates = encounter_details.get("attached_templates")
+    if templates is None:
+        return ""
+    if not templates:
+        return (
+            "SOAP Templates: none attached. Attach one with "
+            "manageEncounter(action='update', template_ids='...'); "
+            "getPracticeInfo(info_type='templates') lists what the practice has."
+        )
+    names = ", ".join(
+        f"{t.get('template_name') or 'unnamed'} (template_id {t.get('template_id')})"
+        for t in templates
+    )
+    return (
+        f"SOAP Templates attached: {names}. Use getPracticeInfo("
+        "info_type='template_details') with these template_ids to get the "
+        "entry_ids before populating entries via manageEncounter(action='update')."
+    )
+
+
 @encounter_management_mcp.tool
 @with_tool_metrics()
 async def manageEncounter(
@@ -211,6 +237,36 @@ async def manageEncounter(
                             "record_id": patient.get("record_id")
                         }
                     
+                    # SOAP templates already attached to this encounter. They reach
+                    # an encounter two ways — the practice's visit-type configuration
+                    # (attached by CharmHealth at creation) or an explicit
+                    # manageEncounter(action="update", template_ids=...) — and this
+                    # read doesn't distinguish them, because a caller populating
+                    # entries only needs to know what is attached now.
+                    #
+                    # Best-effort: /soap/encounters/{id} exists only for SOAP charts,
+                    # so a Quick/Brief/Comprehensive/QuickRx encounter errors here and
+                    # the key is omitted. That's deliberate — an absent key and
+                    # attached_templates=[] are different answers ("this chart can't
+                    # carry templates" vs "it can and none are attached"), and an
+                    # empty list would state the wrong one.
+                    try:
+                        soap_response = await client.get(f"/soap/encounters/{encounter_id}")
+                        soap_encounter = soap_response.get("soap_encounter")
+                        if isinstance(soap_encounter, dict):
+                            encounter_details["attached_templates"] = [
+                                {
+                                    "template_id": t.get("template_id"),
+                                    "template_name": t.get("template_name"),
+                                    "position": t.get("position"),
+                                }
+                                for t in (soap_encounter.get("templates") or [])
+                                if isinstance(t, dict)
+                                and str(t.get("is_template_deleted", "")).lower() != "true"
+                            ]
+                    except Exception as e:
+                        logger.warning(f"Could not fetch attached SOAP templates: {e}")
+
                     # Get vitals for this encounter
                     try:
                         vitals_response = await client.get(f"/patients/{patient_id}/vitals")
@@ -335,6 +391,8 @@ async def manageEncounter(
 
                 Documentation Summary:
                 {chr(10).join(summary_items) if summary_items else 'WARNING: No clinical documentation found'}
+
+                {_describe_attached_templates(encounter_details)}
 
                 {'SIGNED: This encounter is already signed.' if is_signed else f'''
                 IMPORTANT: Review all details above carefully. Once signed, this encounter becomes legally binding and cannot be modified.
