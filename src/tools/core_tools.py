@@ -472,6 +472,17 @@ async def getPracticeInfo(
                             "/settings/visittypes",
                             params={"page": page, "per_page": 200},
                         )
+                        # The client returns {"error": ...} rather than raising, and
+                        # `.get("visittypes") or []` on that reads as "no visit
+                        # types" — which then reported a confident "0 of 0
+                        # configured" to a caller that may skip template checks on
+                        # the strength of it. A failure on any page fails the call:
+                        # a partial list presented as complete is the same mistake.
+                        if not isinstance(vt_response, dict) or vt_response.get("error"):
+                            return {
+                                "error": f"Could not read visit types: {str(vt_response.get('error') if isinstance(vt_response, dict) else vt_response)[:200]}",
+                                "guidance": "The visit-types read failed, so it isn't known which templates are configured. Retry; don't treat this as the practice having none.",
+                            }
                         visit_types.extend(vt_response.get("visittypes") or [])
                         page_context = vt_response.get("page_context") or {}
                         if str(page_context.get("has_more_page", "")).lower() != "true":

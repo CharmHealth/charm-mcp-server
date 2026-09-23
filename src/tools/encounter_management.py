@@ -12,15 +12,22 @@ logger = logging.getLogger(__name__)
 encounter_management_mcp = FastMCP(name="CharmHealth Encounter Management MCP Server")
 
 def _describe_attached_templates(encounter_details: dict) -> str:
-    """One line for the review guidance about this encounter's SOAP templates.
-
-    Absent key means a non-SOAP chart (no template concept), so say nothing
-    rather than imply templates are missing.
-    """
+    """One line for the review guidance about this encounter's SOAP templates."""
+    if encounter_details.get("attached_templates_unavailable"):
+        return (
+            "SOAP Templates: could not be read just now. Don't assume none are "
+            "attached — retry the review before attaching or populating templates."
+        )
     templates = encounter_details.get("attached_templates")
     if templates is None:
         return ""
     if not templates:
+        chart_type = str(encounter_details.get("encounter_info", {}).get("chart_type") or "")
+        if chart_type and chart_type.upper() != "SOAP":
+            # CharmHealth answers the SOAP read for every chart type, with an
+            # empty list for a non-SOAP one — so "none attached" is true here,
+            # but suggesting a SOAP template would not be.
+            return f"SOAP Templates: none attached ({chart_type} chart)."
         return (
             "SOAP Templates: none attached. Attach one with "
             "manageEncounter(action='update', template_ids='...'); "
@@ -38,12 +45,14 @@ def _describe_attached_templates(encounter_details: dict) -> str:
 
 
 async def _fetch_encounter_templates(client, encounter_id):
-    """Every template record on a SOAP encounter, soft-deleted ones included.
+    """Every template record on an encounter, soft-deleted ones included.
 
-    Returns None when there is nothing to read: the encounter isn't a SOAP
-    chart (Quick/Brief/Comprehensive/QuickRx have no /soap/encounters record),
-    or the read failed. Callers must treat None as "unknown", not as "no
-    templates" — the two lead to different answers.
+    Returns None only when the read failed. CharmHealth answers
+    /soap/encounters/{id} with success for every chart type — Comprehensive,
+    Brief and untyped charts get an empty template list, and so does an
+    encounter id that doesn't exist (checked live 2026-09-23). So a genuine
+    answer is always a list, possibly empty, and None always means "unknown".
+    Callers must never read None as "no templates".
     """
     try:
         response = await client.get(f"/soap/encounters/{encounter_id}")
@@ -261,7 +270,8 @@ async def manageEncounter(
                         "facility": found_encounter.get("facility_id"),  # Note: This is ID not name
                         "encounter_mode": found_encounter.get("appointment_mode"),  # Changed from encounter_mode
                         "visit_type": found_encounter.get("visit_name"),  # Changed from visit_type
-                        "status": "signed" if found_encounter.get("is_approved") == "true" else "unsigned"  # Changed
+                        "status": "signed" if found_encounter.get("is_approved") == "true" else "unsigned",  # Changed
+                        "chart_type": found_encounter.get("chart_type"),
                     }
                     
                     # Get patient demographics for context
@@ -282,14 +292,14 @@ async def manageEncounter(
                     # read doesn't distinguish them, because a caller populating
                     # entries only needs to know what is attached now.
                     #
-                    # Best-effort: /soap/encounters/{id} exists only for SOAP charts,
-                    # so a Quick/Brief/Comprehensive/QuickRx encounter errors here and
-                    # the key is omitted. That's deliberate — an absent key and
-                    # attached_templates=[] are different answers ("this chart can't
-                    # carry templates" vs "it can and none are attached"), and an
-                    # empty list would state the wrong one.
+                    # A failed read is flagged rather than silently omitted. The
+                    # client returns {"error": ...} instead of raising, so without
+                    # the flag a transient failure looked like "no templates" to
+                    # whoever reads this before signing.
                     templates = await _fetch_encounter_templates(client, encounter_id)
-                    if templates is not None:
+                    if templates is None:
+                        encounter_details["attached_templates_unavailable"] = True
+                    else:
                         encounter_details["attached_templates"] = [
                             {
                                 "template_id": t.get("template_id"),
@@ -612,15 +622,22 @@ async def manageEncounter(
                     #   - Each attach's response is checked. client.post returns
                     #     {"error": ...} rather than raising, so an unchecked call
                     #     reported a rejected template as attached.
-                    # If the read fails (non-SOAP chart, or an error) there is
-                    # nothing to dedupe against, so numbering starts at 0 as it did
-                    # before — but responses are still checked.
+                    # If the read fails, nothing is attached. Without knowing
+                    # what's there, any position picked could collide with the
+                    # auto-attached template, which is exactly the bug above. Each
+                    # requested template is reported as failed so the caller retries.
                     templates_attached = []
                     already_attached = []
                     templates_failed = []
                     if template_ids:
                         ids = [t.strip() for t in template_ids.split(",") if t.strip()]
                         existing = await _fetch_encounter_templates(client, encounter_id)
+                        if existing is None:
+                            templates_failed = [
+                                {"template_id": t, "reason": "could not read the templates already on this encounter; retry"}
+                                for t in dict.fromkeys(ids)
+                            ]
+                            ids = []
                         live_ids = {
                             str(t.get("template_id")) for t in (existing or []) if _is_live_template(t)
                         }

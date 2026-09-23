@@ -138,3 +138,37 @@ async def test_visit_types_tolerates_a_build_without_chart_templates(monkeypatch
     assert result["visit_type_count"] == 1
     assert "chart_templates" not in result["visit_types"][0]
     assert "0 of 1 visit type(s)" in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_failed_read_is_an_error_not_zero_configured(monkeypatch) -> None:
+    """The client returns {"error": ...} instead of raising. Read as data, that
+    became a confident "0 of 0 visit type(s) have chart_templates configured"
+    — a caller could skip template checks on the strength of it."""
+    import json
+    from fastmcp.exceptions import ToolError
+
+    fake = _FakeAPIClient(pages=[{"error": "HTTP 403: missing scope"}])
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await core_tools.getPracticeInfo.fn(info_type="visit_types")
+
+    body = json.loads(str(exc_info.value))
+    assert "Could not read visit types" in body["error"]
+    assert "0 of 0" not in json.dumps(body)
+
+
+@pytest.mark.asyncio
+async def test_failure_on_a_later_page_fails_the_whole_read(monkeypatch) -> None:
+    """A partial list presented as complete is the same mistake."""
+    from fastmcp.exceptions import ToolError
+
+    fake = _FakeAPIClient(pages=[
+        _page([_LINKED], has_more=True),
+        {"error": "HTTP 500: Internal Error"},
+    ])
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError):
+        await core_tools.getPracticeInfo.fn(info_type="visit_types")

@@ -128,3 +128,66 @@ async def test_explicit_limits_still_win(monkeypatch) -> None:
     assert len(result["recent_vitals"]) == 5
     enc_call = next(p for e, p in fake.calls if e == "/encounters")
     assert enc_call["per_page"] == 30
+
+
+# ── Ceilings (PR #25 review) ───────────────────────────────────────────
+#
+# The defaults only protected callers that omit the argument. A caller
+# passing encounters_limit=1200 sent per_page=1200 and reproduced the exact
+# context-window failure this change exists to stop. The ceilings match the
+# clamp CharmAnywhere applies at its own chokepoint: 50 encounters, 30 vitals.
+
+
+@pytest.mark.asyncio
+async def test_huge_vitals_limit_is_capped(monkeypatch) -> None:
+    fake = _FakeAPIClient(_responses(n_vitals=1200, n_encounters=5))
+
+    result = await _review(monkeypatch, fake, vitals_limit=1200)
+
+    assert len(result["recent_vitals"]) == 30
+    assert result["recent_vitals_has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_huge_encounters_limit_is_capped_at_the_request(monkeypatch) -> None:
+    fake = _FakeAPIClient(_responses(n_vitals=5, n_encounters=50, has_more_page="true"))
+
+    result = await _review(monkeypatch, fake, encounters_limit=1200)
+
+    enc_call = next(p for e, p in fake.calls if e == "/encounters")
+    assert enc_call["per_page"] == 50
+    assert result["recent_encounters_has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_explicit_none_means_the_ceiling_not_unbounded(monkeypatch) -> None:
+    """None used to mean "return everything"."""
+    fake = _FakeAPIClient(_responses(n_vitals=1200, n_encounters=5))
+
+    result = await _review(monkeypatch, fake, vitals_limit=None, encounters_limit=None)
+
+    assert len(result["recent_vitals"]) == 30
+    enc_call = next(p for e, p in fake.calls if e == "/encounters")
+    assert enc_call["per_page"] == 50
+
+
+@pytest.mark.asyncio
+async def test_small_encounters_limit_declares_the_rows_it_drops(monkeypatch) -> None:
+    """encounters_limit=5 still fetches 10. With 8 encounters the API says
+    there are no more pages, but the slice drops 3 — has_more must say so."""
+    fake = _FakeAPIClient(_responses(n_vitals=5, n_encounters=8, has_more_page="false"))
+
+    result = await _review(monkeypatch, fake, encounters_limit=5)
+
+    assert len(result["recent_encounters"]) == 5
+    assert result["recent_encounters_has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_exact_fit_is_not_marked_truncated(monkeypatch) -> None:
+    fake = _FakeAPIClient(_responses(n_vitals=5, n_encounters=5, has_more_page="false"))
+
+    result = await _review(monkeypatch, fake, encounters_limit=5)
+
+    assert len(result["recent_encounters"]) == 5
+    assert result["recent_encounters_has_more"] is False

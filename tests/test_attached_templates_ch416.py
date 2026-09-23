@@ -45,12 +45,13 @@ def _patch_client(monkeypatch, fake_client) -> None:
     )
 
 
-def _base_responses(soap=None):
+def _base_responses(soap=None, chart_type="SOAP"):
     responses = {
         "/encounters": {"encounters": [{
             "encounter_id": "e1", "date": "2026-09-21",
             "physician_name": "Dr. Jones", "facility_id": "f1",
             "visit_name": "New Patient Visit", "is_approved": "false",
+            "chart_type": chart_type,
         }]},
         "/patients/p1": {"patient": {"first_name": "Amy", "last_name": "Test"}},
     }
@@ -112,20 +113,39 @@ async def test_soap_encounter_with_no_templates_reports_none_attached(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_non_soap_chart_omits_the_key_entirely(monkeypatch) -> None:
-    """/soap/encounters/{id} only exists for SOAP charts. A Quick/Brief chart
-    must not be described as having zero templates — it can't have any."""
-    fake = _FakeAPIClient(
-        get_responses=_base_responses(),
-        errors={"/soap/encounters/e1": RuntimeError("HTTP 404: Invalid URL Passed")},
-    )
+async def test_non_soap_chart_reports_none_without_suggesting_a_soap_template(monkeypatch) -> None:
+    """CharmHealth answers the SOAP read for every chart type — a Brief or
+    Comprehensive chart gets success with an empty list (checked live
+    2026-09-23). So "none attached" is true, but offering to attach a SOAP
+    template to a non-SOAP chart would not be."""
+    fake = _FakeAPIClient(get_responses=_base_responses(
+        soap={"soap_encounter": {"templates": []}}, chart_type="Brief",
+    ))
 
     result = await _review(monkeypatch, fake)
 
-    assert "attached_templates" not in result["encounter_details"]
-    assert "SOAP Templates" not in result["guidance"]
+    assert result["encounter_details"]["attached_templates"] == []
+    assert "none attached (Brief chart)" in result["guidance"]
+    assert "Attach one with" not in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_failed_template_read_is_flagged_not_silent(monkeypatch) -> None:
+    """The client returns {"error": ...} rather than raising, so a transient
+    failure used to look like "no templates" to whoever reviews before
+    signing. It must be distinguishable."""
+    fake = _FakeAPIClient(get_responses=_base_responses(
+        soap={"error": "HTTP 503: Service Unavailable"},
+    ))
+
+    result = await _review(monkeypatch, fake)
+
+    details = result["encounter_details"]
+    assert "attached_templates" not in details
+    assert details["attached_templates_unavailable"] is True
+    assert "could not be read just now" in result["guidance"]
     # The rest of the review still came back.
-    assert result["encounter_details"]["encounter_info"]["encounter_id"] == "e1"
+    assert details["encounter_info"]["encounter_id"] == "e1"
 
 
 @pytest.mark.asyncio
@@ -177,7 +197,7 @@ class _UpdateFakeClient:
             if self._soap_error:
                 raise self._soap_error
             if self._templates is None:
-                return {"error": "HTTP 404: Invalid URL Passed"}
+                return {"error": "HTTP 503: Service Unavailable"}
             return {"soap_encounter": {"templates": self._templates}}
         return {}
 
@@ -324,22 +344,18 @@ async def test_failed_save_keeps_the_attach_results(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unreadable_encounter_numbers_from_zero_but_still_checks(monkeypatch) -> None:
-    """Non-SOAP chart: nothing to dedupe against, so the old numbering holds —
-    but a rejection is still reported rather than hidden."""
-    fake = _UpdateFakeClient(
-        templates=None,
-        attach_responses={"tB": {"error": "HTTP 400: not a SOAP chart"}},
-    )
+async def test_unreadable_encounter_attaches_nothing(monkeypatch) -> None:
+    """If the read of what's attached fails, any position picked could collide
+    with the auto-attached template — so nothing is attached, and every
+    requested template is reported as failed for the caller to retry."""
+    fake = _UpdateFakeClient(templates=None)
 
-    result = await _update(monkeypatch, fake, template_ids="tA,tB")
+    result = await _update(monkeypatch, fake, template_ids="tA,tB,tA")
 
-    assert fake.attach_calls() == [
-        {"template_id": "tA", "position": "0"},
-        {"template_id": "tB", "position": "1"},
-    ]
-    assert result["templates_attached"] == ["tA"]
-    assert result["templates_failed"][0]["template_id"] == "tB"
+    assert fake.attach_calls() == []
+    assert [f["template_id"] for f in result["templates_failed"]] == ["tA", "tB"]
+    assert "retry" in result["templates_failed"][0]["reason"]
+    assert "templates_attached" not in result
 
 
 @pytest.mark.asyncio
