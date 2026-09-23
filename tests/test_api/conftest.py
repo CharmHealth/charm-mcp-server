@@ -17,9 +17,19 @@ tools it exercises have no delete/cleanup action exposed at all, so a run
 leaves permanent junk behind). To stop a bare `pytest` invocation from
 accidentally connecting and creating data, every test in this directory is
 skipped unless you explicitly opt in via CHARM_TEST_CONFIRM=1. When run
-against CHARM_TEST_ENV=production with CHARM_TEST_CONFIRM=1, tests marked
-`@pytest.mark.no_delete_available` are additionally skipped, since there is
-no way to clean up the permanent record they would create in a real chart.
+against CHARM_TEST_ENV=production with CHARM_TEST_CONFIRM=1, two markers
+are additionally skipped:
+
+  - `@pytest.mark.no_delete_available` — creates a permanent record (a
+    referral, task, vital, questionnaire template, ...) that this tool
+    exposes no delete/cleanup action for.
+  - `@pytest.mark.reaches_a_human` — leaves no record at all, but causes an
+    outbound send (SMS, portal share, PHR invite, ...) that a real person on
+    the other end receives. No record means `no_delete_available` doesn't
+    catch it, but it's less reversible than a stray row, not more.
+
+Mark a new probe with whichever bucket its tool's action falls into — most
+mutating actions need one or the other. A few need both.
 
 Start the server first, e.g.:
     uv run python src/mcp_server.py http
@@ -115,11 +125,13 @@ def pytest_collection_modifyitems(config, items):
     http://127.0.0.1:8000/mcp/) or create any real records.
 
     With CHARM_TEST_CONFIRM set and CHARM_TEST_ENV == "production", any item
-    under this directory marked @pytest.mark.no_delete_available is
-    additionally skipped: those tests create a permanent record via a tool
-    with no delete/cleanup action exposed, and known server-side bugs in
-    some of these tools' delete endpoints make real cleanup unsafe to
-    attempt against production data.
+    under this directory marked @pytest.mark.no_delete_available or
+    @pytest.mark.reaches_a_human is additionally skipped: the former create a
+    permanent record via a tool with no delete/cleanup action exposed (and
+    known server-side bugs in some of these tools' delete endpoints make real
+    cleanup unsafe to attempt against production data); the latter cause an
+    outbound send (SMS, portal share, PHR invite) that reaches a real person
+    and leaves no record at all to gate on.
 
     pytest_collection_modifyitems runs once for the whole session and
     receives every collected item, not just this directory's — so every
@@ -150,6 +162,14 @@ def pytest_collection_modifyitems(config, items):
                 "exposed; gated out of production runs."
             )
         )
+        skip_reaches_human = pytest.mark.skip(
+            reason=(
+                "causes an outbound send (SMS, portal share, PHR invite) that reaches "
+                "a real person; gated out of production runs."
+            )
+        )
         for item in this_dir_items:
             if item.get_closest_marker("no_delete_available") is not None:
                 item.add_marker(skip_no_delete)
+            if item.get_closest_marker("reaches_a_human") is not None:
+                item.add_marker(skip_reaches_human)

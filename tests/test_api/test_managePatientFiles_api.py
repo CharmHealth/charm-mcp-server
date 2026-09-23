@@ -7,6 +7,7 @@ Test data: Ahmed Choi — patient_id 100010000000018023.
 import base64
 import tempfile
 
+import pytest
 from conftest import call_tool, TEST_DATA
 
 PATIENT_ID = TEST_DATA["patient_id"]
@@ -25,6 +26,7 @@ def _write_temp_png() -> str:
     return f.name
 
 
+@pytest.mark.reaches_a_human
 async def test_managePatientFiles_send_phr_invite():
     # $ ... managePatientFiles '{"patient_id": "100010000000018023", "action": "send_phr_invite", \
     #       "email": "ahmed.choi.test@example.com"}'
@@ -32,7 +34,8 @@ async def test_managePatientFiles_send_phr_invite():
     # This sandbox rate-limits PHR invites (CharmHealth's own limit: 3 per
     # patient per 24h) -- repeated test runs the same day legitimately hit
     # that limit, so both outcomes are accepted here rather than asserting
-    # unconditional success.
+    # unconditional success. Sends a real email invite to whatever address is
+    # passed -- gated out of production runs via reaches_a_human.
     resp = await call_tool(
         "managePatientFiles",
         {"patient_id": PATIENT_ID, "action": "send_phr_invite", "email": "ahmed.choi.test@example.com"},

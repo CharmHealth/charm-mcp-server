@@ -49,9 +49,14 @@ async def test_manageIntakeForms_create_template():
     assert resp.get("questionnaire_details", {}).get("template_id")
 
 
+@pytest.mark.reaches_a_human
 async def test_manageIntakeForms_share_sms():
     # $ ... manageIntakeForms '{"action": "share_sms", "patient_id": "100010000000018023", \
     #       "facility_id": "100010000000008157", "questionnaire_id": "100010000000127039"}'
+    #
+    # Currently 404s (see below), but once fixed this sends a real SMS to the
+    # patient -- gated out of production runs now rather than after the fix
+    # ships.
     #
     # CONFIRMED LIKELY BUG (same signature/pattern as manageFax and manageMessages'
     # whatsapp channel -- see those test files): HTTP 404 {"code":5,"message":
@@ -73,12 +78,15 @@ async def test_manageIntakeForms_share_sms():
     assert "error" not in resp, f"share_sms still broken (Invalid URL Passed): {resp}"
 
 
+@pytest.mark.reaches_a_human
 async def test_manageIntakeForms_share_portal():
     # $ ... manageIntakeForms '{"action": "share_portal", "patient_id": "100010000000018023", \
     #       "facility_id": "100010000000008157", "questionnaire_id": "100010000000127039"}'
     #
     # Same as test_manageIntakeForms_share_sms above -- identical "Invalid URL
-    # Passed" failure on /questionnaires/share/phr.
+    # Passed" failure on /questionnaires/share/phr. Once fixed this sends a
+    # real portal notification to the patient -- gated out of production runs
+    # for the same reason.
     resp = await call_tool(
         "manageIntakeForms",
         {

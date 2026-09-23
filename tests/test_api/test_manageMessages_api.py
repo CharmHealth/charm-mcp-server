@@ -12,6 +12,7 @@ for this sandbox practice), not bugs. send(whatsapp) is different: it's a
 confirmed likely code bug (wrong endpoint path), asserted as CORRECT
 (should-succeed) behavior so it goes green once fixed.
 """
+import pytest
 from conftest import call_tool, TEST_DATA
 
 PATIENT_ID = TEST_DATA["patient_id"]
@@ -50,12 +51,17 @@ async def test_manageMessages_send_secure_rejected_no_phr_account():
     assert "PHR account is mandatory" in resp["error"]
 
 
+@pytest.mark.reaches_a_human
 async def test_manageMessages_send_sms_rejected_not_enabled():
     # $ ... manageMessages '{"action": "send", "patient_id": "100010000000018023", \
     #       "content": "...", "channel": "sms", "facility_id": "100010000000008157"}'
     #
     # Correct rejection, not a bug: this sandbox practice doesn't have
     # bidirectional SMS enabled (a real practice-level config limitation).
+    # Production DOES have SMS enabled, so this send actually goes out there
+    # (confirmed in docs/api_probe_results_production.md) -- gated out of
+    # production runs via reaches_a_human, since the assertion below is
+    # sandbox-specific and a real message would land either way.
     resp = await call_tool(
         "manageMessages",
         {
@@ -70,9 +76,15 @@ async def test_manageMessages_send_sms_rejected_not_enabled():
     assert "Bidirectional sms is not enabled" in resp["error"]
 
 
+@pytest.mark.reaches_a_human
 async def test_manageMessages_send_whatsapp():
     # $ ... manageMessages '{"action": "send", "patient_id": "100010000000018023", \
     #       "content": "...", "channel": "whatsapp", "facility_id": "100010000000008157"}'
+    #
+    # Currently 404s everywhere (see below), but asserts should-succeed
+    # behavior -- once the endpoint is fixed this will actually send a real
+    # WhatsApp message, so it's gated out of production runs now rather than
+    # after the fix ships.
     #
     # CONFIRMED LIKELY BUG: fails with HTTP 404 {"code":5,"message":"Invalid URL
     # Passed"} -- CharmHealth's own "no such route" error, not a business-rule
