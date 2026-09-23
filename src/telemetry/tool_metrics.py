@@ -6,6 +6,7 @@ from typing import Dict, Any, Callable, Optional
 from fastmcp.exceptions import ToolError
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
+from opentelemetry.propagate import extract
 from .telemetry_config import telemetry
 import contextvars
 
@@ -22,6 +23,39 @@ successful_tool_calls: contextvars.ContextVar[int] = contextvars.ContextVar('suc
 
 # Tracer instance — returns a no-op tracer when no TracerProvider is configured
 tracer = trace.get_tracer("charm-mcp-server")
+
+
+def _inbound_trace_context():
+    """The caller's W3C trace context, or None when there isn't one.
+
+    A tool span is only useful for correlation if it hangs off the span the
+    caller already opened for the user's turn. Without this every span is a
+    root and Grafana shows two unrelated trees for one action.
+
+    Returns None rather than an empty Context on purpose. Passing an empty
+    Context explicitly would still produce a root span, but returning None
+    lets the caller omit the argument entirely and keep OpenTelemetry's own
+    ambient-context behaviour, which is what every caller gets today.
+
+    Never raises. get_http_headers() throws outside an HTTP request (stdio
+    mode, background tasks), a malformed traceparent makes extract() return
+    a context with no valid span, and neither is a reason to fail a clinical
+    tool call — both degrade to an unparented span.
+    """
+    try:
+        from fastmcp.server.dependencies import get_http_headers
+
+        # traceparent/tracestate are not on get_http_headers()'s exclusion
+        # list (authorization, cookie and the proxy headers are), so no
+        # include= is needed here.
+        ctx = extract(dict(get_http_headers()))
+    except Exception:
+        logger.debug("No inbound trace context available", exc_info=True)
+        return None
+
+    if trace.get_current_span(ctx).get_span_context().is_valid:
+        return ctx
+    return None
 
 def with_tool_metrics(tool_name: Optional[str] = None):
     """
@@ -58,10 +92,17 @@ def with_tool_metrics(tool_name: Optional[str] = None):
                 client_id=client_id,
             ).set(1)
 
-            # Create a trace span for this tool call
-            with tracer.start_as_current_span(actual_tool_name) as span:
+            # Create a trace span for this tool call, parented to the caller's
+            # turn span when it sent W3C trace context (see _inbound_trace_context).
+            inbound_ctx = _inbound_trace_context()
+            span_kwargs = {"context": inbound_ctx} if inbound_ctx is not None else {}
+            with tracer.start_as_current_span(actual_tool_name, **span_kwargs) as span:
                 span.set_attribute("tool_name", actual_tool_name)
                 span.set_attribute("client_id", client_id)
+                # "Did the header arrive?" is the first question when spans
+                # aren't nesting in Grafana — answer it from the span itself
+                # rather than by guessing at the client.
+                span.set_attribute("trace_context_propagated", inbound_ctx is not None)
 
                 try:
                     result = await func(*args, **kwargs)
