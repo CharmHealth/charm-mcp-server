@@ -12,7 +12,10 @@ Fakes CharmHealthAPIClient — same pattern as test_procedure_codes_ch790.py.
 
 from __future__ import annotations
 
+import json
+
 import pytest
+from fastmcp.exceptions import ToolError
 
 from tools import encounter_management
 
@@ -136,3 +139,228 @@ async def test_soap_fetch_failure_does_not_break_review(monkeypatch) -> None:
 
     assert result["action"] == "review"
     assert "error" not in result
+
+
+# ── manageEncounter(action="update") template attach ───────────────────
+#
+# CharmHealth attaches a visit type's configured templates itself when an
+# encounter is created with a visit type (confirmed 2026-09-23 on both
+# create paths). So update now often runs against an encounter that already
+# has templates. Three things it used to get wrong:
+#   - numbered each call's templates from 0, colliding with the
+#     auto-attached template at position 0
+#   - reported a template as attached without checking the response;
+#     client.post returns {"error": ...} rather than raising
+#   - re-sent templates already there; CharmHealth dedupes silently but
+#     answers "added successfully", which was passed on as fact
+# And a template-only call POSTed an empty body to save "entries", whose
+# failure reported the whole call as failed.
+
+
+class _UpdateFakeClient:
+    def __init__(self, templates=None, soap_error=None, attach_responses=None,
+                 save_response=None):
+        self._templates = templates
+        self._soap_error = soap_error
+        self._attach = attach_responses or {}
+        self._save = save_response if save_response is not None else {"code": "0"}
+        self.posts: list[tuple[str, dict]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    async def get(self, endpoint, params=None):
+        if endpoint == "/soap/encounters/e1":
+            if self._soap_error:
+                raise self._soap_error
+            if self._templates is None:
+                return {"error": "HTTP 404: Invalid URL Passed"}
+            return {"soap_encounter": {"templates": self._templates}}
+        return {}
+
+    async def post(self, endpoint, data=None, params=None):
+        self.posts.append((endpoint, data))
+        if endpoint == "/soap/encounters/e1/template":
+            return self._attach.get(data["template_id"], {"code": "0", "message": "Soap template added successfully."})
+        return self._save
+
+    def attach_calls(self):
+        return [d for e, d in self.posts if e.endswith("/template")]
+
+    def save_calls(self):
+        return [d for e, d in self.posts if e == "/soap/encounters/e1"]
+
+
+AUTO = {"template_id": "tA", "template_name": "Visit type SOAP", "position": "0", "is_template_deleted": "false"}
+
+
+async def _update(monkeypatch, fake, **kwargs):
+    monkeypatch.setattr(encounter_management, "CharmHealthAPIClient", lambda **kw: fake)
+    return await encounter_management.manageEncounter.fn(
+        action="update", patient_id="p1", encounter_id="e1", **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_template_goes_after_the_auto_attached_one(monkeypatch) -> None:
+    fake = _UpdateFakeClient(templates=[AUTO])
+
+    result = await _update(monkeypatch, fake, template_ids="tB")
+
+    assert fake.attach_calls() == [{"template_id": "tB", "position": "1"}]
+    assert result["templates_attached"] == ["tB"]
+
+
+@pytest.mark.asyncio
+async def test_already_attached_template_is_skipped_and_reported(monkeypatch) -> None:
+    """CharmHealth would answer "added successfully" to the repeat — the
+    tool must not pass that on as a fresh attach."""
+    fake = _UpdateFakeClient(templates=[AUTO])
+
+    result = await _update(monkeypatch, fake, template_ids="tA")
+
+    assert fake.attach_calls() == []
+    assert result["already_attached"] == ["tA"]
+    assert "templates_attached" not in result
+
+
+@pytest.mark.asyncio
+async def test_mixed_call_skips_the_existing_and_numbers_the_new(monkeypatch) -> None:
+    fake = _UpdateFakeClient(templates=[AUTO])
+
+    result = await _update(monkeypatch, fake, template_ids="tA,tB,tC")
+
+    assert fake.attach_calls() == [
+        {"template_id": "tB", "position": "1"},
+        {"template_id": "tC", "position": "2"},
+    ]
+    assert result["already_attached"] == ["tA"]
+    assert result["templates_attached"] == ["tB", "tC"]
+
+
+@pytest.mark.asyncio
+async def test_a_repeat_within_one_call_is_sent_once(monkeypatch) -> None:
+    fake = _UpdateFakeClient(templates=[])
+
+    result = await _update(monkeypatch, fake, template_ids="tB,tB")
+
+    assert fake.attach_calls() == [{"template_id": "tB", "position": "0"}]
+    assert result["templates_attached"] == ["tB"]
+    assert result["already_attached"] == ["tB"]
+
+
+@pytest.mark.asyncio
+async def test_deleted_templates_keep_their_slot(monkeypatch) -> None:
+    """A soft-deleted template doesn't count as attached, but its position
+    isn't reused either."""
+    deleted = {"template_id": "tX", "position": "2", "is_template_deleted": "true"}
+    fake = _UpdateFakeClient(templates=[AUTO, deleted])
+
+    result = await _update(monkeypatch, fake, template_ids="tX")
+
+    assert fake.attach_calls() == [{"template_id": "tX", "position": "3"}]
+    assert result["templates_attached"] == ["tX"]
+
+
+@pytest.mark.asyncio
+async def test_rejected_attach_is_reported_as_failed(monkeypatch) -> None:
+    """The old loop appended every id, because client.post returns an error
+    dict instead of raising."""
+    fake = _UpdateFakeClient(
+        templates=[AUTO],
+        attach_responses={"tB": {"error": "HTTP 400: Invalid template_id"}},
+    )
+
+    result = await _update(monkeypatch, fake, template_ids="tB,tC")
+
+    assert result["templates_attached"] == ["tC"]
+    assert result["templates_failed"] == [
+        {"template_id": "tB", "reason": "HTTP 400: Invalid template_id"},
+    ]
+    assert "could not be attached" in result["guidance"]
+    # The failed one didn't take a slot: tC gets the position tB would have.
+    assert fake.attach_calls()[1] == {"template_id": "tC", "position": "1"}
+
+
+@pytest.mark.asyncio
+async def test_partial_attach_is_not_a_protocol_error(monkeypatch) -> None:
+    """A nested failure reason must not trip the metrics decorator, which
+    raises ToolError on a top-level "error" key."""
+    fake = _UpdateFakeClient(
+        templates=[AUTO],
+        attach_responses={"tB": {"error": "HTTP 400: nope"}},
+    )
+
+    result = await _update(monkeypatch, fake, template_ids="tB")
+
+    assert "error" not in result
+    assert result["templates_failed"][0]["template_id"] == "tB"
+
+
+@pytest.mark.asyncio
+async def test_template_only_update_sends_no_empty_save(monkeypatch) -> None:
+    fake = _UpdateFakeClient(templates=[AUTO], save_response={"code": "1", "message": "empty body"})
+
+    result = await _update(monkeypatch, fake, template_ids="tB")
+
+    assert fake.save_calls() == []
+    assert result["templates_attached"] == ["tB"]
+
+
+@pytest.mark.asyncio
+async def test_failed_save_keeps_the_attach_results(monkeypatch) -> None:
+    fake = _UpdateFakeClient(templates=[AUTO], save_response={"code": "1"})
+
+    with pytest.raises(ToolError) as exc_info:
+        await _update(monkeypatch, fake, template_ids="tB", chief_complaint="cough")
+
+    body = json.loads(str(exc_info.value))
+    assert body["error"] == "Failed to update encounter"
+    assert body["templates_attached"] == ["tB"]
+    assert "don't re-attach" in body["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_unreadable_encounter_numbers_from_zero_but_still_checks(monkeypatch) -> None:
+    """Non-SOAP chart: nothing to dedupe against, so the old numbering holds —
+    but a rejection is still reported rather than hidden."""
+    fake = _UpdateFakeClient(
+        templates=None,
+        attach_responses={"tB": {"error": "HTTP 400: not a SOAP chart"}},
+    )
+
+    result = await _update(monkeypatch, fake, template_ids="tA,tB")
+
+    assert fake.attach_calls() == [
+        {"template_id": "tA", "position": "0"},
+        {"template_id": "tB", "position": "1"},
+    ]
+    assert result["templates_attached"] == ["tA"]
+    assert result["templates_failed"][0]["template_id"] == "tB"
+
+
+@pytest.mark.asyncio
+async def test_notes_only_update_still_saves(monkeypatch) -> None:
+    fake = _UpdateFakeClient(templates=[AUTO])
+
+    result = await _update(monkeypatch, fake, chief_complaint="cough")
+
+    assert fake.attach_calls() == []
+    assert fake.save_calls() == [{"chief_complaints": "cough"}]
+    assert result["updated"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_no_op_update_says_so_without_reading_as_failure(monkeypatch) -> None:
+    """Nothing changed, so don't claim an update — but keep "success" in the
+    message, which CharmAnywhere's current decoder reads to decide success."""
+    fake = _UpdateFakeClient(templates=[AUTO])
+
+    result = await _update(monkeypatch, fake, template_ids="tA")
+
+    assert result["updated"] is False
+    assert "no changes were needed" in result["message"]
+    assert "success" in result["message"]
