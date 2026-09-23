@@ -7,8 +7,8 @@ from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
 import json
 import logging
-import mimetypes
 import os
+import tempfile
 from telemetry import telemetry, with_tool_metrics
 
 logger = logging.getLogger(__name__)
@@ -33,15 +33,51 @@ def _parse_order_tests(value: Optional[Union[str, List[Dict[str, Any]]]]) -> Opt
 
 
 
-def _read_file_for_upload(path: str) -> tuple:
+# photo_file/id_file are caller-supplied paths coming from an MCP tool call —
+# potentially a remote/untrusted model, not a trusted operator — so they must
+# not be able to name an arbitrary file on the server's filesystem. Reads are
+# restricted to a configured directory (falls back to the system temp dir,
+# since that's where a well-behaved caller stages content before upload).
+_UPLOAD_DIR = os.path.realpath(os.getenv("CHARMHEALTH_UPLOAD_DIR", tempfile.gettempdir()))
+_MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024  # 10MB is generous for a photo or ID scan
+
+_CONTENT_TYPE_BY_EXTENSION = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".pdf": "application/pdf",
+}
+
+
+def _read_file_for_upload(path: str, allowed_extensions: tuple) -> tuple:
     """Read a local file into the (filename, bytes, content_type) shape
-    CharmHealthAPIClient.post_multipart expects. Raises FileNotFoundError /
-    OSError on a bad path — callers turn that into a clean {"error": ...}."""
-    with open(path, "rb") as f:
+    CharmHealthAPIClient.post_multipart expects.
+
+    Rejects anything outside `_UPLOAD_DIR` (resolved via realpath, so neither
+    a `..` traversal nor a symlink can point outside it), any extension not
+    in `allowed_extensions`, and anything over `_MAX_UPLOAD_SIZE_BYTES`.
+    Raises OSError / ValueError on a bad path — callers turn that into a
+    clean {"error": ...}."""
+    if os.path.islink(path):
+        raise ValueError("symlinks are not allowed")
+
+    real_path = os.path.realpath(path)
+    if os.path.commonpath([real_path, _UPLOAD_DIR]) != _UPLOAD_DIR:
+        raise ValueError(f"path must be inside the configured upload directory ({_UPLOAD_DIR})")
+
+    ext = os.path.splitext(real_path)[1].lower()
+    if ext not in allowed_extensions:
+        raise ValueError(f"file extension must be one of {sorted(allowed_extensions)}")
+
+    size = os.path.getsize(real_path)
+    if size > _MAX_UPLOAD_SIZE_BYTES:
+        raise ValueError(f"file is {size} bytes, exceeds the {_MAX_UPLOAD_SIZE_BYTES}-byte upload limit")
+
+    with open(real_path, "rb") as f:
         content = f.read()
-    filename = os.path.basename(path)
-    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    return (filename, content, content_type)
+    filename = os.path.basename(real_path)
+    return (filename, content, _CONTENT_TYPE_BY_EXTENSION[ext])
 
 @clinical_support_mcp.tool
 @with_tool_metrics()
@@ -478,7 +514,9 @@ async def managePatientFiles(
     - "send_phr_invite": Send PHR portal invitation (requires email)
     
     ID Qualifiers: military_id, state_issued_id, drivers_license_id, passport_id, social_security_number, etc.
-    File paths should be absolute paths to image/PDF files on the system.
+    photo_file/id_file must be paths to JPG/PNG/GIF (or, for id_file, PDF) files inside the server's
+    configured upload directory (CHARMHEALTH_UPLOAD_DIR, or the system temp dir if unset) — paths
+    elsewhere on the filesystem are rejected.
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -535,11 +573,11 @@ async def managePatientFiles(
                     # any network call. Also, photo_file is a caller-supplied PATH
                     # string, not file content — has to be read from disk first.
                     try:
-                        file_tuple = _read_file_for_upload(photo_file)
-                    except OSError as e:
+                        file_tuple = _read_file_for_upload(photo_file, allowed_extensions=(".png", ".jpg", ".jpeg", ".gif"))
+                    except (OSError, ValueError) as e:
                         return {
                             "error": f"Could not read photo_file: {e}",
-                            "guidance": "Verify photo_file is a valid, readable absolute path on the server's filesystem."
+                            "guidance": f"photo_file must be a JPG/PNG/GIF path inside {_UPLOAD_DIR} (the server's configured upload directory)."
                         }
 
                     files = {"file": file_tuple}
@@ -593,11 +631,11 @@ async def managePatientFiles(
                     # CharmHealthAPIClient.post() parameter, and id_file is a path,
                     # not file content.
                     try:
-                        file_tuple = _read_file_for_upload(id_file)
-                    except OSError as e:
+                        file_tuple = _read_file_for_upload(id_file, allowed_extensions=(".png", ".jpg", ".jpeg", ".gif", ".pdf"))
+                    except (OSError, ValueError) as e:
                         return {
                             "error": f"Could not read id_file: {e}",
-                            "guidance": "Verify id_file is a valid, readable absolute path on the server's filesystem."
+                            "guidance": f"id_file must be a JPG/PNG/GIF/PDF path inside {_UPLOAD_DIR} (the server's configured upload directory)."
                         }
 
                     files = {"file": file_tuple}
