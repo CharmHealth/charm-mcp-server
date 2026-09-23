@@ -102,3 +102,113 @@ async def test_stdio_mode_has_no_headers_and_must_not_raise(monkeypatch, spans) 
     span = spans.get_finished_spans()[0]
     assert span.parent is None
     assert span.attributes["trace_context_propagated"] is False
+
+
+# ── Correlation ids (X-Turn-Id / X-Thread-Id) ──────────────────────────
+#
+# Contract agreed with CharmAnywhere: headers X-Turn-Id and X-Thread-Id,
+# span attributes turn_id and thread_id. Bare snake_case, matching the ~16
+# attributes CharmAnywhere already emits from SpanAttr in
+# TelemetryConstants.swift. turn_id is a UUID per user turn; thread_id is
+# the chat thread's UUID, stable across every turn in one conversation.
+
+TURN_ID = "3f1b9c42-0a77-4f0e-9b1a-6f3c2d5e8a90"
+THREAD_ID = "9c2e7a15-4b83-4d6f-8e21-77a0b4c1d3e5"
+
+
+@pytest.mark.asyncio
+async def test_turn_and_thread_ids_land_on_the_span(monkeypatch, spans) -> None:
+    _patch_headers(monkeypatch, {"x-turn-id": TURN_ID, "x-thread-id": THREAD_ID})
+
+    await _probe()
+
+    span = spans.get_finished_spans()[0]
+    assert span.attributes["turn_id"] == TURN_ID
+    assert span.attributes["thread_id"] == THREAD_ID
+
+
+@pytest.mark.asyncio
+async def test_header_casing_does_not_matter(monkeypatch, spans) -> None:
+    """Starlette lowercases, but nothing in the contract promises that."""
+    _patch_headers(monkeypatch, {"X-Turn-Id": TURN_ID, "X-Thread-Id": THREAD_ID})
+
+    await _probe()
+
+    span = spans.get_finished_spans()[0]
+    assert span.attributes["turn_id"] == TURN_ID
+    assert span.attributes["thread_id"] == THREAD_ID
+
+
+@pytest.mark.asyncio
+async def test_absent_ids_are_omitted_not_empty(monkeypatch, spans) -> None:
+    """The client's connection handshake runs before any turn exists, and
+    cortex/Copilot may never send these. An empty attribute would match a
+    Grafana query for turn_id; an absent one correctly won't."""
+    _patch_headers(monkeypatch, {"x-user-access-token": "irrelevant"})
+
+    result = await _probe()
+
+    assert result == {"ok": True}
+    span = spans.get_finished_spans()[0]
+    assert "turn_id" not in span.attributes
+    assert "thread_id" not in span.attributes
+
+
+@pytest.mark.asyncio
+async def test_empty_header_value_is_treated_as_absent(monkeypatch, spans) -> None:
+    _patch_headers(monkeypatch, {"x-turn-id": "", "x-thread-id": THREAD_ID})
+
+    await _probe()
+
+    span = spans.get_finished_spans()[0]
+    assert "turn_id" not in span.attributes
+    assert span.attributes["thread_id"] == THREAD_ID
+
+
+@pytest.mark.asyncio
+async def test_one_id_without_the_other_still_lands(monkeypatch, spans) -> None:
+    _patch_headers(monkeypatch, {"x-thread-id": THREAD_ID})
+
+    await _probe()
+
+    span = spans.get_finished_spans()[0]
+    assert span.attributes["thread_id"] == THREAD_ID
+    assert "turn_id" not in span.attributes
+
+
+@pytest.mark.asyncio
+async def test_absurd_id_is_capped_not_forwarded(monkeypatch, spans) -> None:
+    """Attributes are exported on every call; a broken client shouldn't be
+    able to put a megabyte on each one."""
+    _patch_headers(monkeypatch, {"x-turn-id": "x" * 5000})
+
+    await _probe()
+
+    span = spans.get_finished_spans()[0]
+    assert len(span.attributes["turn_id"]) == 200
+
+
+@pytest.mark.asyncio
+async def test_correlation_ids_work_alongside_traceparent(monkeypatch, spans) -> None:
+    """The two mechanisms are independent — either, both, or neither."""
+    _patch_headers(monkeypatch, {
+        "traceparent": TRACEPARENT, "x-turn-id": TURN_ID, "x-thread-id": THREAD_ID,
+    })
+
+    await _probe()
+
+    span = spans.get_finished_spans()[0]
+    assert format(span.parent.span_id, "016x") == PARENT_SPAN_ID
+    assert span.attributes["turn_id"] == TURN_ID
+    assert span.attributes["trace_context_propagated"] is True
+
+
+@pytest.mark.asyncio
+async def test_stdio_mode_omits_correlation_ids_without_raising(monkeypatch, spans) -> None:
+    _patch_headers(monkeypatch, None)
+
+    result = await _probe()
+
+    assert result == {"ok": True}
+    span = spans.get_finished_spans()[0]
+    assert "turn_id" not in span.attributes

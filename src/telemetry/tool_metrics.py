@@ -25,7 +25,55 @@ successful_tool_calls: contextvars.ContextVar[int] = contextvars.ContextVar('suc
 tracer = trace.get_tracer("charm-mcp-server")
 
 
-def _inbound_trace_context():
+# Correlation ids the caller sends so server work can be tied back to the
+# client turn that caused it. Header -> span attribute. Bare snake_case
+# attribute names, matching the ~16 CharmAnywhere already emits from
+# SpanAttr in TelemetryConstants.swift — OTel convention would prefer
+# dotted, but half-dotted is worse than either consistent choice.
+_CORRELATION_HEADERS = {
+    "x-turn-id": "turn_id",      # UUID per user turn — joins to the client turn span
+    "x-thread-id": "thread_id",  # UUID per chat thread — stable across turns
+}
+
+# A correlation id is a UUID. Anything much longer is a broken or hostile
+# client, and span attributes are exported on every call, so cap rather
+# than forward it.
+_MAX_CORRELATION_VALUE = 200
+
+
+def _inbound_headers() -> dict:
+    """Request headers, or {} when there is no HTTP request to read.
+
+    get_http_headers() raises outside a request (stdio mode under Claude
+    Desktop or Cursor, background tasks). Telemetry must never fail a
+    clinical tool call, so this swallows and degrades to no correlation.
+    """
+    try:
+        from fastmcp.server.dependencies import get_http_headers
+
+        return dict(get_http_headers())
+    except Exception:
+        logger.debug("No inbound HTTP headers available", exc_info=True)
+        return {}
+
+
+def _set_correlation_attributes(span, headers: dict) -> None:
+    """Stamp the caller's turn/thread ids onto the span.
+
+    Absent is normal, not an error: the client's initial connection
+    handshake runs before any turn exists, and cortex/Copilot may never
+    send these. A missing id omits the attribute rather than setting an
+    empty one, so a Grafana query for turn_id matches only spans that
+    actually carry a turn.
+    """
+    for header, attribute in _CORRELATION_HEADERS.items():
+        value = headers.get(header) or headers.get(header.title())
+        if not value:
+            continue
+        span.set_attribute(attribute, str(value)[:_MAX_CORRELATION_VALUE])
+
+
+def _inbound_trace_context(headers: dict):
     """The caller's W3C trace context, or None when there isn't one.
 
     A tool span is only useful for correlation if it hangs off the span the
@@ -42,15 +90,13 @@ def _inbound_trace_context():
     a context with no valid span, and neither is a reason to fail a clinical
     tool call — both degrade to an unparented span.
     """
+    # traceparent/tracestate are not on get_http_headers()'s exclusion list
+    # (authorization, cookie and the proxy headers are), so they arrive
+    # without an explicit include=.
     try:
-        from fastmcp.server.dependencies import get_http_headers
-
-        # traceparent/tracestate are not on get_http_headers()'s exclusion
-        # list (authorization, cookie and the proxy headers are), so no
-        # include= is needed here.
-        ctx = extract(dict(get_http_headers()))
+        ctx = extract(headers)
     except Exception:
-        logger.debug("No inbound trace context available", exc_info=True)
+        logger.debug("Could not extract inbound trace context", exc_info=True)
         return None
 
     if trace.get_current_span(ctx).get_span_context().is_valid:
@@ -94,7 +140,8 @@ def with_tool_metrics(tool_name: Optional[str] = None):
 
             # Create a trace span for this tool call, parented to the caller's
             # turn span when it sent W3C trace context (see _inbound_trace_context).
-            inbound_ctx = _inbound_trace_context()
+            inbound_headers = _inbound_headers()
+            inbound_ctx = _inbound_trace_context(inbound_headers)
             span_kwargs = {"context": inbound_ctx} if inbound_ctx is not None else {}
             with tracer.start_as_current_span(actual_tool_name, **span_kwargs) as span:
                 span.set_attribute("tool_name", actual_tool_name)
@@ -103,6 +150,7 @@ def with_tool_metrics(tool_name: Optional[str] = None):
                 # aren't nesting in Grafana — answer it from the span itself
                 # rather than by guessing at the client.
                 span.set_attribute("trace_context_propagated", inbound_ctx is not None)
+                _set_correlation_attributes(span, inbound_headers)
 
                 try:
                     result = await func(*args, **kwargs)
