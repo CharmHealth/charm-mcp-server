@@ -18,7 +18,7 @@ directly above, production line active:
 
 **⚠️ Real side effects from this run — not reversible:**
 - `manageMessages send (channel=sms)` actually sent a real SMS ("MCP API probe test message - sms
-  channel") to Amy Test patient's mobile (`8558786789`) — sandbox correctly rejects this (SMS not
+  channel") to Amy Test patient's mobile on file — sandbox correctly rejects this (SMS not
   enabled there), production has it enabled.
 - `manageIntakeForms share_sms` and `share_portal` both succeeded — a real SMS and a real patient
   portal share of an intake form were sent to the same patient. Both 404 in sandbox.
