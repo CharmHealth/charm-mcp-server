@@ -128,9 +128,15 @@ async def test_turn_and_thread_ids_land_on_the_span(monkeypatch, spans) -> None:
 
 
 @pytest.mark.asyncio
-async def test_header_casing_does_not_matter(monkeypatch, spans) -> None:
-    """Starlette lowercases, but nothing in the contract promises that."""
-    _patch_headers(monkeypatch, {"X-Turn-Id": TURN_ID, "X-Thread-Id": THREAD_ID})
+@pytest.mark.parametrize("turn_key,thread_key", [
+    ("X-Turn-Id", "X-Thread-Id"),
+    ("X-TURN-ID", "X-THREAD-ID"),
+    ("x-TuRn-Id", "X-tHrEaD-iD"),
+])
+async def test_header_casing_does_not_matter(monkeypatch, spans, turn_key, thread_key) -> None:
+    """Starlette lowercases, but nothing in the contract promises that. The
+    earlier lookup matched only lowercase or Title-Case, not any casing."""
+    _patch_headers(monkeypatch, {turn_key: TURN_ID, thread_key: THREAD_ID})
 
     await _probe()
 
@@ -177,15 +183,41 @@ async def test_one_id_without_the_other_still_lands(monkeypatch, spans) -> None:
 
 
 @pytest.mark.asyncio
-async def test_absurd_id_is_capped_not_forwarded(monkeypatch, spans) -> None:
-    """Attributes are exported on every call; a broken client shouldn't be
-    able to put a megabyte on each one."""
+async def test_a_non_uuid_is_dropped_not_exported(monkeypatch, spans) -> None:
+    """Span attributes leave the process on every call. Without a format check
+    any caller could put arbitrary text — a patient's name, say — into
+    exported telemetry."""
+    _patch_headers(monkeypatch, {"x-turn-id": "Jane Smith DOB 1980-01-01", "x-thread-id": THREAD_ID})
+
+    result = await _probe()
+
+    assert result == {"ok": True}
+    span = spans.get_finished_spans()[0]
+    assert "turn_id" not in span.attributes
+    assert span.attributes["thread_id"] == THREAD_ID
+
+
+@pytest.mark.asyncio
+async def test_an_oversized_value_is_dropped(monkeypatch, spans) -> None:
     _patch_headers(monkeypatch, {"x-turn-id": "x" * 5000})
 
     await _probe()
 
     span = spans.get_finished_spans()[0]
-    assert len(span.attributes["turn_id"]) == 200
+    assert "turn_id" not in span.attributes
+
+
+@pytest.mark.asyncio
+async def test_uppercase_uuid_is_forwarded_exactly(monkeypatch, spans) -> None:
+    """Swift's uuidString is uppercase. Normalizing would break the Grafana
+    join against the client's own spans."""
+    upper = TURN_ID.upper()
+    _patch_headers(monkeypatch, {"x-turn-id": upper})
+
+    await _probe()
+
+    span = spans.get_finished_spans()[0]
+    assert span.attributes["turn_id"] == upper
 
 
 @pytest.mark.asyncio

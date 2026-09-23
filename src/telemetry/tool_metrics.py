@@ -9,6 +9,7 @@ from opentelemetry.trace import StatusCode
 from opentelemetry.propagate import extract
 from .telemetry_config import telemetry
 import contextvars
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +36,12 @@ _CORRELATION_HEADERS = {
     "x-thread-id": "thread_id",  # UUID per chat thread — stable across turns
 }
 
-# A correlation id is a UUID. Anything much longer is a broken or hostile
-# client, and span attributes are exported on every call, so cap rather
-# than forward it.
-_MAX_CORRELATION_VALUE = 200
+# A correlation id is a UUID — UUID().uuidString on the client. Anything that
+# doesn't parse as one is dropped rather than exported. Span attributes leave
+# the process on every call, and without a format check any caller could put
+# arbitrary text, patient details included, into telemetry. A valid value is
+# forwarded exactly as sent, not normalized, so it matches the client's own
+# spans character for character (Swift's uuidString is uppercase).
 
 
 def _inbound_headers() -> dict:
@@ -66,11 +69,20 @@ def _set_correlation_attributes(span, headers: dict) -> None:
     empty one, so a Grafana query for turn_id matches only spans that
     actually carry a turn.
     """
+    # HTTP header names are case-insensitive. Starlette lowercases them, but
+    # nothing in the contract promises that, so compare on lowercase.
+    lowered = {str(k).lower(): v for k, v in headers.items()}
     for header, attribute in _CORRELATION_HEADERS.items():
-        value = headers.get(header) or headers.get(header.title())
+        value = lowered.get(header)
         if not value:
             continue
-        span.set_attribute(attribute, str(value)[:_MAX_CORRELATION_VALUE])
+        value = str(value).strip()
+        try:
+            uuid.UUID(value)
+        except ValueError:
+            logger.debug(f"Ignoring {header}: not a UUID")
+            continue
+        span.set_attribute(attribute, value)
 
 
 def _inbound_trace_context(headers: dict):
