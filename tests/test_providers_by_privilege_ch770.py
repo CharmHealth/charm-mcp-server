@@ -54,9 +54,12 @@ async def test_providers_by_privilege_happy_path(monkeypatch) -> None:
     assert result["provider_count"] == 1
     assert result["providers"][0]["member_id"] == "m1"
     assert result["providers"][0]["provider_name"] == "Dr. Jane Prescriber"
+    assert result["list_truncated"] is False
+    # trimmed to identity fields only — no email/phone/address/NPI etc.
+    assert set(result["providers"][0].keys()) <= {"member_id", "full_name", "provider_name"}
     endpoint, params = fake.get_calls[0]
     assert endpoint == "/members"
-    assert params == {"privilege": "add_medications"}
+    assert params == {"privilege": "add_medications", "per_page": 100}
 
 
 @pytest.mark.asyncio
@@ -98,3 +101,34 @@ async def test_providers_by_privilege_missing_privilege_returns_clean_error(monk
 
     assert json.loads(str(exc_info.value))["error"] == "privilege required for providers_by_privilege"
     assert fake.get_calls == []
+
+
+@pytest.mark.asyncio
+async def test_providers_by_privilege_unrecognized_token_returns_clean_error(monkeypatch) -> None:
+    """Unconfirmed privilege tokens must be rejected loudly, not silently passed
+    through — the backend's behavior for an unrecognized token is undocumented,
+    and this list feeds a hard authorization gate downstream."""
+    fake = _FakeAPIClient()
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await core_tools.getPracticeInfo.fn(info_type="providers_by_privilege", privilege="some_made_up_privilege")
+
+    assert "Unrecognized privilege token" in json.loads(str(exc_info.value))["error"]
+    assert fake.get_calls == []
+
+
+@pytest.mark.asyncio
+async def test_providers_by_privilege_truncated_list_is_flagged(monkeypatch) -> None:
+    fake = _FakeAPIClient(get_responses={
+        "/members": {
+            "members": [{"member_id": "m1", "full_name": "Dr. Jane Prescriber"}],
+            "page_context": {"has_more_page": True},
+        },
+    })
+    _patch_client(monkeypatch, fake)
+
+    result = await core_tools.getPracticeInfo.fn(info_type="providers_by_privilege", privilege="add_medications")
+
+    assert result["list_truncated"] is True
+    assert "truncated" in result["guidance"].lower()
