@@ -81,6 +81,51 @@ async def test_get_practice_info_procedure_codes_empty_catalog(monkeypatch) -> N
     assert result["procedure_code_count"] == 0
 
 
+@pytest.mark.asyncio
+async def test_get_practice_info_procedure_codes_defaults_to_procedure_type_only(monkeypatch) -> None:
+    """Unfiltered, this previously fetched the entire fee schedule including lab
+    codes on every call. code_type should always be pinned to PROCEDURE_CODE so
+    LAB_CODE rows aren't mixed in with nothing marking which is which (PR #22
+    review)."""
+    captured = {}
+
+    class _CapturingClient(_FakeAPIClient):
+        async def get(self, endpoint, params=None):
+            captured["endpoint"] = endpoint
+            captured["params"] = params
+            return self._get[endpoint]
+
+    fake = _CapturingClient(get_responses={"/billing/procedures": {"procedures": []}})
+    _patch_client(monkeypatch, core_tools, fake)
+
+    await core_tools.getPracticeInfo.fn(info_type="procedure_codes")
+
+    assert captured["params"] == {"code_type": "PROCEDURE_CODE"}
+
+
+@pytest.mark.asyncio
+async def test_get_practice_info_procedure_codes_filters_by_code_number(monkeypatch) -> None:
+    """The real endpoint documents code_id/code_name/code_number as lookup
+    filters — passing one should scope the request instead of always pulling
+    the whole catalog (PR #22 review)."""
+    captured = {}
+
+    class _CapturingClient(_FakeAPIClient):
+        async def get(self, endpoint, params=None):
+            captured["params"] = params
+            return self._get[endpoint]
+
+    fake = _CapturingClient(get_responses={
+        "/billing/procedures": {"procedures": [{"code_id": "c1", "code_number": "99214"}]},
+    })
+    _patch_client(monkeypatch, core_tools, fake)
+
+    result = await core_tools.getPracticeInfo.fn(info_type="procedure_codes", code_number="99214")
+
+    assert captured["params"] == {"code_type": "PROCEDURE_CODE", "code_number": "99214"}
+    assert result["procedure_code_count"] == 1
+
+
 # ── manageEncounterProcedures: list ────────────────────────────────────────
 
 
@@ -264,7 +309,10 @@ async def test_add_procedure_accepts_json_encoded_array_for_diagnosis_links(monk
 async def test_add_procedure_invoice_already_generated_error_is_explained(monkeypatch) -> None:
     """addOrUpdateProcedure throws FinanceException.INVOICE_GENERATED when an
     invoice already exists for the encounter and skip_invoice_check wasn't set —
-    the tool should surface this as an actionable guidance, not a raw error."""
+    the tool should surface this as an actionable guidance, not a raw error.
+    The guidance must NOT coach the model to retry with skip_invoice_check=True —
+    that's a billing-safety override and belongs to a human decision, not the
+    agent that just got told the magic flag (PR #22 review)."""
     fake = _FakeAPIClient(post_responses={
         "/patients/p1/encounters/e1/procedures": {
             "error": "Invoice already generated for the encounter specified with ID 123",
@@ -278,7 +326,8 @@ async def test_add_procedure_invoice_already_generated_error_is_explained(monkey
         )
 
     guidance = json.loads(str(exc_info.value))["guidance"]
-    assert "skip_invoice_check" in guidance
+    assert "skip_invoice_check" not in guidance
+    assert "surface this to the user" in guidance
 
 
 # ── manageEncounterProcedures: update ──────────────────────────────────────
@@ -297,8 +346,53 @@ async def test_update_procedure_includes_consultation_cpt_map_id_in_body(monkeyp
     )
 
     _, sent_data = fake.post_calls[0]
-    assert sent_data["procedures"][0]["consultation_cpt_map_id"] == "cpt1"
-    assert sent_data["procedures"][0]["item_charge"] == 200.0
+    procedure_item = sent_data["procedures"][0]
+    assert procedure_item["item_charge"] == 200.0
+    assert procedure_item["consultation_cpt_map_id"] == "cpt1"
+
+
+@pytest.mark.asyncio
+async def test_update_procedure_does_not_overwrite_unspecified_fields(monkeypatch) -> None:
+    """Before this fix, item_quantity and place_of_service were unconditionally
+    sent using their parameter defaults (1 / "11"), so an update that only meant
+    to change item_charge silently reset quantity and place of service on the
+    real bill too — both are claim-adjudication-relevant fields (PR #22 review,
+    critical finding)."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/encounters/e1/procedures": {"procedures": [{"consultation_cpt_map_id": "cpt1"}]},
+    })
+    _patch_client(monkeypatch, billing, fake)
+
+    await billing.manageEncounterProcedures.fn(
+        action="update", patient_id="p1", encounter_id="e1",
+        consultation_cpt_map_id="cpt1", item_charge=200.0,
+    )
+
+    _, sent_data = fake.post_calls[0]
+    procedure_item = sent_data["procedures"][0]
+    assert "item_quantity" not in procedure_item
+    assert "place_of_service" not in procedure_item
+
+
+@pytest.mark.asyncio
+async def test_update_procedure_applies_explicitly_supplied_fields(monkeypatch) -> None:
+    """When the caller does supply item_quantity/place_of_service on an update,
+    those values must still go through — the fix only skips fields the caller
+    left unset, it doesn't drop them entirely."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/encounters/e1/procedures": {"procedures": [{"consultation_cpt_map_id": "cpt1"}]},
+    })
+    _patch_client(monkeypatch, billing, fake)
+
+    await billing.manageEncounterProcedures.fn(
+        action="update", patient_id="p1", encounter_id="e1",
+        consultation_cpt_map_id="cpt1", item_quantity=3, place_of_service="02",
+    )
+
+    _, sent_data = fake.post_calls[0]
+    procedure_item = sent_data["procedures"][0]
+    assert procedure_item["item_quantity"] == 3
+    assert procedure_item["place_of_service"] == "02"
 
 
 @pytest.mark.asyncio

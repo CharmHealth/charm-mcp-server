@@ -319,6 +319,9 @@ async def findPatients(
 async def getPracticeInfo(
     info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details", "procedure_codes"] = "overview",
     template_ids: Optional[str] = None,  # comma-separated, required for template_details
+    code_id: Optional[str] = None,  # procedure_codes only — fetch a single code's details
+    code_name: Optional[str] = None,  # procedure_codes only — filter by procedure/CPT description
+    code_number: Optional[str] = None,  # procedure_codes only — filter by CPT/HCPCS number, e.g. "99214"
     ctx: Context = None
 ) -> Dict[str, Any]:
     """
@@ -336,9 +339,11 @@ async def getPracticeInfo(
     - "overview": Summary of practice setup with key counts and recent activity
     - "templates": List all available SOAP templates (id, name, type) for the practice
     - "template_details": Full template schema (widgets + entries) for given template_ids (comma-separated)
-    - "procedure_codes": The practice's procedure/CPT code catalog (fee schedule) — code_id, code_number
-      (e.g. "99214"), code_name, default charge, modifiers. Use code_id values from this list with
-      manageEncounterProcedures(action="add") to attach a procedure to an encounter.
+    - "procedure_codes": The practice's procedure/CPT code catalog — code_id, code_number
+      (e.g. "99214"), code_name, charge, modifiers. Lab codes are excluded. Returns the full
+      catalog by default; pass code_id, code_name, or code_number to look up/filter to a
+      specific procedure instead of fetching the whole fee schedule. Use code_id values from
+      this list with manageEncounterProcedures(action="add") to attach a procedure to an encounter.
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
@@ -454,12 +459,22 @@ async def getPracticeInfo(
                 case "procedure_codes":
                     # GET /billing/procedures (InvoicesAPI.fetchProcedureCodes) — confirmed
                     # against webapps/ehr/WEB-INF/conf/api/rest/v1/APIRequestByGet.xml.
-                    # Unfiltered call returns the practice's full catalog, same shape as
-                    # "facilities"/"providers" above.
-                    procedures_response = await client.get("/billing/procedures")
+                    # code_id/code_name/code_number are documented filters — "same API can be
+                    # used to fetch details of a procedure by sending code_id or code_name or
+                    # code_number" (Billing/Procedure API/Procedure API.txt). code_type is
+                    # pinned to PROCEDURE_CODE so LAB_CODE rows don't come back mixed in
+                    # (PR #22 review).
+                    params: Dict[str, str] = {"code_type": "PROCEDURE_CODE"}
+                    if code_id:
+                        params["code_id"] = code_id
+                    if code_name:
+                        params["code_name"] = code_name
+                    if code_number:
+                        params["code_number"] = code_number
+                    procedures_response = await client.get("/billing/procedures", params=params)
                     result["procedure_codes"] = procedures_response.get("procedures") or []
                     result["procedure_code_count"] = len(result["procedure_codes"])
-                    result["guidance"] = "Use code_id values from this list with manageEncounterProcedures(action='add') to attach a procedure to an encounter. code_number is the CPT/HCPCS code (e.g. '99214'); code_name is its description."
+                    result["guidance"] = "Use code_id values from this list with manageEncounterProcedures(action='add') to attach a procedure to an encounter. code_number is the CPT/HCPCS code (e.g. '99214'); code_name is its description. Pass code_id, code_name, or code_number to look up a specific procedure instead of scanning the full catalog."
 
             logger.info(f"getPracticeInfo completed for {info_type}")
             return strip_empty_values(result)

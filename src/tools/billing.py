@@ -313,12 +313,12 @@ async def manageEncounterProcedures(
     # add/update fields
     code_id: Optional[str] = None,  # from getPracticeInfo(info_type="procedure_codes")
     item_charge: Optional[float] = None,
-    item_quantity: Optional[int] = 1,
+    item_quantity: Optional[int] = None,  # defaults to 1 on add; on update, omitted means "leave unchanged"
     modifier_1: Optional[str] = None,
     modifier_2: Optional[str] = None,
     modifier_3: Optional[str] = None,
     modifier_4: Optional[str] = None,
-    place_of_service: Optional[str] = "11",  # default Office, per CH-489 acceptance criteria
+    place_of_service: Optional[str] = None,  # defaults to "11" (Office) on add; on update, omitted means "leave unchanged"
     related_diagnosis_ids: Optional[Union[str, List[str]]] = None,  # diagnosis IDs from the encounter — comma-separated string or a native array
     claim_comments: Optional[str] = None,
     skip_invoice_check: Optional[bool] = False,
@@ -347,7 +347,8 @@ async def manageEncounterProcedures(
       is optional.
     - "update": Modify an already-attached procedure (requires patient_id, encounter_id,
       consultation_cpt_map_id — the ID returned by "list"/"add" — plus whichever fields are
-      changing).
+      changing). Only the fields you pass are changed; item_quantity and place_of_service
+      are left as-is on the existing procedure unless you explicitly supply new values.
     - "delete": Remove a procedure from the encounter (requires patient_id, encounter_id,
       consultation_cpt_map_id).
 
@@ -444,8 +445,8 @@ async def manageEncounterProcedures(
                             "error": "consultation_cpt_map_id required for update",
                             "guidance": "Use action='list' first to find the consultation_cpt_map_id of the procedure to update."
                         }
-                    pos = place_of_service or "11"
-                    if pos not in _VALID_PLACE_OF_SERVICE:
+                    pos = place_of_service if place_of_service is not None else ("11" if action == "add" else None)
+                    if pos is not None and pos not in _VALID_PLACE_OF_SERVICE:
                         return {
                             "error": f"Invalid place_of_service: {pos}",
                             "guidance": "place_of_service must be one of \"01\"-\"62\", \"65\", \"71\", \"72\", \"81\", \"99\"."
@@ -471,10 +472,18 @@ async def manageEncounterProcedures(
                             "guidance": "Pass related_diagnosis_ids as e.g. [\"d1\", \"d2\"] or \"d1,d2\"."
                         }
 
-                    procedure_item: Dict[str, Any] = {
-                        "item_quantity": item_quantity or 1,
-                        "place_of_service": pos,
-                    }
+                    # On "add", missing item_quantity/place_of_service take their real
+                    # defaults (1 / "11"). On "update", a field the caller didn't pass is
+                    # left out of the body entirely rather than reverting to those
+                    # defaults — sending them unconditionally used to silently overwrite
+                    # values the caller never touched (PR #22 review).
+                    procedure_item: Dict[str, Any] = {}
+                    if item_quantity is not None:
+                        procedure_item["item_quantity"] = item_quantity
+                    elif action == "add":
+                        procedure_item["item_quantity"] = 1
+                    if pos is not None:
+                        procedure_item["place_of_service"] = pos
                     if code_id:
                         procedure_item["code_id"] = code_id
                     if item_charge is not None:
@@ -512,7 +521,7 @@ async def manageEncounterProcedures(
                         error_msg = str(response["error"])
                         guidance = f"Failed to {action} the procedure. Verify code_id and consultation_cpt_map_id (if updating) are correct."
                         if "invoice" in error_msg.lower():
-                            guidance = "An invoice already exists for this encounter, so procedures can't be modified without an explicit override. Retry with skip_invoice_check=True only if that's actually intended."
+                            guidance = "An invoice has already been generated for this encounter, so its procedures are locked. Modifying billed charges after invoicing needs an explicit decision from the practice — surface this to the user rather than retrying on your own."
                         return {"error": error_msg, "guidance": guidance}
 
                     procedures = response.get("procedures") if isinstance(response, dict) else None
