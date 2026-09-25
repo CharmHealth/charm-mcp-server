@@ -614,8 +614,21 @@ async def manageReferrals(
                     # actually merges anything — this was the real cause of "update
                     # requires undocumented fields", not a stale server as first assumed.
                     existing = _unwrap_get_response(existing_raw, direction)
-                    if not isinstance(existing, dict):
-                        existing = {}
+                    # _unwrap_get_response always returns a dict now, but that dict can
+                    # still be the WRONG shape if the response didn't match the expected
+                    # referral_out/referral_in wrapper — its own fallback then returns
+                    # whatever it got unchanged. A dict with none of the real referral
+                    # fields is functionally the same failure as the notes-fetch case
+                    # above: silently proceeding fills nothing on every merge below and
+                    # the update blanks fields the caller never touched. Checked for the
+                    # one field every real "get" response has always had in testing
+                    # (ref_id for "out", ref_in_id for "in") rather than assuming shape.
+                    existing_id_key = "ref_id" if direction == "out" else "ref_in_id"
+                    if not existing.get(existing_id_key):
+                        return {
+                            "error": "Could not read the existing referral in a recognized shape before updating",
+                            "guidance": "Fetching the referral to merge before update returned an unexpected response shape — proceeding would risk silently clearing fields this call didn't intend to touch. Retry, or verify referral_id/direction are correct."
+                        }
 
                     # CONFIRMED LIVE (2026-08-25): diagnoses/insurance round-trip through
                     # "get" as JSON-encoded strings — reuse the same parser create/respond
@@ -636,14 +649,32 @@ async def manageReferrals(
                     # CONFIRMED LIVE (2026-08-25): referral_notes isn't in "get" at all, but
                     # has its own read endpoint — fetched only when the caller didn't already
                     # supply a value, so an explicit referral_notes on this call always wins.
-                    # Best-effort: a failure here shouldn't block the rest of the update.
+                    # CONFIRMED LIVE (2026-09-02): a referral that has never had notes
+                    # returns a clean success with content="" — NOT an error, NOT a 404 —
+                    # so "no notes" and "the fetch failed" are genuinely distinguishable,
+                    # not forced to collapse into the same None. Fail closed on a real
+                    # failure (error response or an unrecognized shape) instead of silently
+                    # treating it as "no notes": unlike encounter_id, a wrongly-cleared
+                    # referral_notes orphans the file with nothing left pointing at it —
+                    # no undo, so guessing wrong here is worse than refusing the update.
                     if referral_notes is None:
                         notes_response = await client.get(f"{base_path}/{referral_id}/notes")
-                        if isinstance(notes_response, dict) and not notes_response.get("error"):
-                            notes_key = "referrals_out_notes" if direction == "out" else "referrals_in_notes"
-                            notes_wrapper = notes_response.get(notes_key)
-                            if isinstance(notes_wrapper, dict) and notes_wrapper.get("content"):
-                                referral_notes = notes_wrapper["content"]
+                        notes_key = "referrals_out_notes" if direction == "out" else "referrals_in_notes"
+                        notes_wrapper = notes_response.get(notes_key) if isinstance(notes_response, dict) else None
+                        if isinstance(notes_response, dict) and not notes_response.get("error") and isinstance(notes_wrapper, dict):
+                            # Expected shape, clean response — "" is a real, safe answer.
+                            referral_notes = notes_wrapper.get("content") or None
+                        else:
+                            return {
+                                "error": "Could not verify this referral's current notes before updating",
+                                "guidance": (
+                                    "referral_notes couldn't be read from the notes endpoint before "
+                                    "this update, and proceeding anyway would clear it — the backend "
+                                    "does a full row overwrite, and this field has no undo once "
+                                    "cleared. Retry, or pass referral_notes explicitly with this call "
+                                    "to bypass the fetch."
+                                )
+                            }
 
                     # related_encounter_id is in neither "get" nor the notes endpoint —
                     # genuinely unrecoverable. Warn rather than silently clear it.
