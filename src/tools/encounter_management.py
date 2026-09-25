@@ -11,6 +11,79 @@ logger = logging.getLogger(__name__)
 
 encounter_management_mcp = FastMCP(name="CharmHealth Encounter Management MCP Server")
 
+def _describe_attached_templates(encounter_details: dict) -> str:
+    """One line for the review guidance about this encounter's SOAP templates."""
+    if encounter_details.get("attached_templates_unavailable"):
+        return (
+            "SOAP Templates: could not be read just now. Don't assume none are "
+            "attached — retry the review before attaching or populating templates."
+        )
+    templates = encounter_details.get("attached_templates")
+    if templates is None:
+        return ""
+    if not templates:
+        chart_type = str(encounter_details.get("encounter_info", {}).get("chart_type") or "")
+        if chart_type and chart_type.upper() != "SOAP":
+            # CharmHealth answers the SOAP read for every chart type, with an
+            # empty list for a non-SOAP one — so "none attached" is true here,
+            # but suggesting a SOAP template would not be.
+            return f"SOAP Templates: none attached ({chart_type} chart)."
+        return (
+            "SOAP Templates: none attached. Attach one with "
+            "manageEncounter(action='update', template_ids='...'); "
+            "getPracticeInfo(info_type='templates') lists what the practice has."
+        )
+    names = ", ".join(
+        f"{t.get('template_name') or 'unnamed'} (template_id {t.get('template_id')})"
+        for t in templates
+    )
+    return (
+        f"SOAP Templates attached: {names}. Use getPracticeInfo("
+        "info_type='template_details') with these template_ids to get the "
+        "entry_ids before populating entries via manageEncounter(action='update')."
+    )
+
+
+async def _fetch_encounter_templates(client, encounter_id):
+    """Every template record on an encounter, soft-deleted ones included.
+
+    Returns None only when the read failed. CharmHealth answers
+    /soap/encounters/{id} with success for every chart type — Comprehensive,
+    Brief and untyped charts get an empty template list, and so does an
+    encounter id that doesn't exist (checked live 2026-09-23). So a genuine
+    answer is always a list, possibly empty, and None always means "unknown".
+    Callers must never read None as "no templates".
+    """
+    try:
+        response = await client.get(f"/soap/encounters/{encounter_id}")
+    except Exception as e:
+        logger.warning(f"Could not fetch attached SOAP templates: {e}")
+        return None
+    soap_encounter = response.get("soap_encounter") if isinstance(response, dict) else None
+    if not isinstance(soap_encounter, dict):
+        return None
+    return [t for t in (soap_encounter.get("templates") or []) if isinstance(t, dict)]
+
+
+def _is_live_template(template: dict) -> bool:
+    return str(template.get("is_template_deleted", "")).lower() != "true"
+
+
+def _next_template_position(templates) -> int:
+    """The first position after every existing template, deleted ones included.
+
+    Deleted templates count so a slot is never reused. Unparseable positions
+    are ignored rather than guessed at.
+    """
+    positions = []
+    for t in templates or []:
+        try:
+            positions.append(int(str(t.get("position")).strip()))
+        except (TypeError, ValueError):
+            continue
+    return max(positions) + 1 if positions else 0
+
+
 @encounter_management_mcp.tool
 @with_tool_metrics()
 async def manageEncounter(
@@ -197,7 +270,8 @@ async def manageEncounter(
                         "facility": found_encounter.get("facility_id"),  # Note: This is ID not name
                         "encounter_mode": found_encounter.get("appointment_mode"),  # Changed from encounter_mode
                         "visit_type": found_encounter.get("visit_name"),  # Changed from visit_type
-                        "status": "signed" if found_encounter.get("is_approved") == "true" else "unsigned"  # Changed
+                        "status": "signed" if found_encounter.get("is_approved") == "true" else "unsigned",  # Changed
+                        "chart_type": found_encounter.get("chart_type"),
                     }
                     
                     # Get patient demographics for context
@@ -211,6 +285,31 @@ async def manageEncounter(
                             "record_id": patient.get("record_id")
                         }
                     
+                    # SOAP templates already attached to this encounter. They reach
+                    # an encounter two ways — the practice's visit-type configuration
+                    # (attached by CharmHealth at creation) or an explicit
+                    # manageEncounter(action="update", template_ids=...) — and this
+                    # read doesn't distinguish them, because a caller populating
+                    # entries only needs to know what is attached now.
+                    #
+                    # A failed read is flagged rather than silently omitted. The
+                    # client returns {"error": ...} instead of raising, so without
+                    # the flag a transient failure looked like "no templates" to
+                    # whoever reads this before signing.
+                    templates = await _fetch_encounter_templates(client, encounter_id)
+                    if templates is None:
+                        encounter_details["attached_templates_unavailable"] = True
+                    else:
+                        encounter_details["attached_templates"] = [
+                            {
+                                "template_id": t.get("template_id"),
+                                "template_name": t.get("template_name"),
+                                "position": t.get("position"),
+                            }
+                            for t in templates
+                            if _is_live_template(t)
+                        ]
+
                     # Get vitals for this encounter
                     try:
                         vitals_response = await client.get(f"/patients/{patient_id}/vitals")
@@ -335,6 +434,8 @@ async def manageEncounter(
 
                 Documentation Summary:
                 {chr(10).join(summary_items) if summary_items else 'WARNING: No clinical documentation found'}
+
+                {_describe_attached_templates(encounter_details)}
 
                 {'SIGNED: This encounter is already signed.' if is_signed else f'''
                 IMPORTANT: Review all details above carefully. Once signed, this encounter becomes legally binding and cannot be modified.
@@ -508,18 +609,63 @@ async def manageEncounter(
 
                     # Step 1: Attach templates (must happen before saving entries,
                     # since entries reference entry_ids that belong to attached templates)
+                    # Templates may already be here: CharmHealth attaches a visit
+                    # type's configured templates itself when an encounter is
+                    # created with a visit type (confirmed 2026-09-23, both create
+                    # paths). So read what's attached before adding to it.
+                    #   - Already attached: skipped and reported as such. CharmHealth
+                    #     silently dedupes a repeat but still answers "added
+                    #     successfully", which would otherwise be passed on.
+                    #   - New: placed after every existing template. Numbering from
+                    #     0 per call collided with the auto-attached template, which
+                    #     sits at position 0.
+                    #   - Each attach's response is checked. client.post returns
+                    #     {"error": ...} rather than raising, so an unchecked call
+                    #     reported a rejected template as attached.
+                    # If the read fails, nothing is attached. Without knowing
+                    # what's there, any position picked could collide with the
+                    # auto-attached template, which is exactly the bug above. Each
+                    # requested template is reported as failed so the caller retries.
                     templates_attached = []
+                    already_attached = []
+                    templates_failed = []
                     if template_ids:
                         ids = [t.strip() for t in template_ids.split(",") if t.strip()]
-                        for position, template_id in enumerate(ids):
+                        existing = await _fetch_encounter_templates(client, encounter_id)
+                        if existing is None:
+                            templates_failed = [
+                                {"template_id": t, "reason": "could not read the templates already on this encounter; retry"}
+                                for t in dict.fromkeys(ids)
+                            ]
+                            ids = []
+                        live_ids = {
+                            str(t.get("template_id")) for t in (existing or []) if _is_live_template(t)
+                        }
+                        position = _next_template_position(existing)
+                        for template_id in ids:
+                            if template_id in live_ids:
+                                already_attached.append(template_id)
+                                continue
                             try:
-                                await client.post(
+                                attach_response = await client.post(
                                     f"/soap/encounters/{encounter_id}/template",
                                     data={"template_id": template_id, "position": str(position)}
                                 )
-                                templates_attached.append(template_id)
                             except Exception as e:
-                                logger.warning(f"Failed to attach template {template_id}: {e}")
+                                attach_response = {"error": str(e)}
+                            if isinstance(attach_response, dict) and attach_response.get("error"):
+                                # "reason", not "error": the metrics decorator turns a
+                                # top-level "error" into a protocol failure, and a
+                                # partial attach isn't one.
+                                templates_failed.append({
+                                    "template_id": template_id,
+                                    "reason": str(attach_response["error"])[:200],
+                                })
+                                logger.warning(f"Failed to attach template {template_id} to encounter {encounter_id}")
+                                continue
+                            templates_attached.append(template_id)
+                            live_ids.add(template_id)  # a repeat later in the same call is skipped too
+                            position += 1
 
                     # Step 2: Save chief_complaints narrative + template entries together
                     update_data = {}
@@ -528,21 +674,49 @@ async def manageEncounter(
                     if entries:
                         update_data["entries"] = entries
 
-                    update_response = await client.post(f"/soap/encounters/{encounter_id}", data=update_data)
-                    if update_response.get("code") == "0":
-                        return strip_empty_values({
-                            "action": "update",
-                            "encounter_id": encounter_id,
-                            "updated": True,
-                            "templates_attached": templates_attached,
-                            "message": "Encounter updated successfully",
-                            "guidance": "Encounter updated successfully with narrative and template data."
-                        })
-                    else:
-                        return {
-                            "error": "Failed to update encounter",
-                            "guidance": "Check that patient_id and encounter_id are correct. If templates were attached, entries must use valid entry_ids from those templates."
-                        }
+                    attach_results = {}
+                    if templates_attached:
+                        attach_results["templates_attached"] = templates_attached
+                    if already_attached:
+                        attach_results["already_attached"] = already_attached
+                    if templates_failed:
+                        attach_results["templates_failed"] = templates_failed
+
+                    # A template-only call has nothing to save here. It used to
+                    # POST an empty body anyway, and a non-"0" answer to that
+                    # reported the whole call as failed — discarding templates that
+                    # had in fact attached.
+                    if update_data:
+                        update_response = await client.post(f"/soap/encounters/{encounter_id}", data=update_data)
+                        if update_response.get("code") != "0":
+                            return {
+                                "error": "Failed to update encounter",
+                                **attach_results,
+                                "guidance": "Saving the note content failed. Check that patient_id and encounter_id are correct and that entries use valid entry_ids from templates on this encounter. Templates listed in templates_attached did attach — don't re-attach them."
+                            }
+
+                    guidance_parts = []
+                    if templates_attached:
+                        guidance_parts.append(f"Attached {len(templates_attached)} template(s).")
+                    if already_attached:
+                        guidance_parts.append(f"{len(already_attached)} template(s) were already on the encounter and were left as they are.")
+                    if templates_failed:
+                        guidance_parts.append(f"{len(templates_failed)} template(s) could not be attached — see templates_failed. Do not report them as attached.")
+                    if update_data:
+                        guidance_parts.append("Note content saved.")
+                    changed = bool(templates_attached or update_data)
+                    return strip_empty_values({
+                        "action": "update",
+                        "encounter_id": encounter_id,
+                        "updated": changed,
+                        **attach_results,
+                        # Keeps "success" in both wordings on purpose: CharmAnywhere's
+                        # decoder currently infers success from `message`, and a
+                        # no-op must not render as a failure.
+                        "message": "Encounter updated successfully" if changed
+                                   else "Update completed successfully; no changes were needed",
+                        "guidance": " ".join(guidance_parts) or "Nothing to change — every requested template was already attached.",
+                    })
             
         except Exception as e:
             logger.error(f"Error in manageEncounter: {e}")
