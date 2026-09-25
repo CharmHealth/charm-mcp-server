@@ -11,6 +11,14 @@ logger = logging.getLogger(__name__)
 
 core_tools_mcp = FastMCP(name="CharmHealth Core Tools MCP Server")
 
+# RBAC privilege tokens confirmed against the real /members?privilege= filter.
+# "sign_encounter" is the pre-existing hardcoded filter used by "providers"/"overview".
+# "add_medications" is CH-770's scope-of-practice gate token (see cortex's policy.py).
+# The backend's behavior for an unrecognized token isn't documented/confirmed — until
+# a new token is verified with the backend team, keep this list exhaustive rather than
+# accepting anything the caller passes.
+_CONFIRMED_PRIVILEGE_TOKENS = {"sign_encounter", "add_medications"}
+
 @core_tools_mcp.tool
 @with_tool_metrics()
 async def findPatients(
@@ -317,8 +325,9 @@ async def findPatients(
 @core_tools_mcp.tool
 @with_tool_metrics()
 async def getPracticeInfo(
-    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details", "visit_types"] = "overview",
+    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details", "providers_by_privilege", "visit_types"] = "overview",
     template_ids: Optional[str] = None,  # comma-separated, required for template_details
+    privilege: Optional[str] = None,  # RBAC privilege token, required for providers_by_privilege
     ctx: Context = None
 ) -> Dict[str, Any]:
     """
@@ -336,6 +345,14 @@ async def getPracticeInfo(
     - "overview": Summary of practice setup with key counts and recent activity
     - "templates": List all available SOAP templates (id, name, type) for the practice
     - "template_details": Full template schema (widgets + entries) for given template_ids (comma-separated)
+    - "providers_by_privilege": List providers holding a specific RBAC privilege token. Only confirmed tokens are
+      accepted (currently "sign_encounter", "add_medications" — the latter per CH-770's scope-of-practice gate,
+      see cortex's policy.py privilege map; other tokens are rejected until confirmed against the backend, since
+      an unrecognized token's server-side behavior is not yet verified). Requires `privilege`. Use to check
+      scope-of-practice/role authorization before allowing a role-gated action, by checking whether a given
+      member_id appears in the returned list. The response is trimmed to identity fields (member_id, full_name,
+      provider_name) since this mode only needs to answer a membership question. If `list_truncated` is true,
+      the list is paginated and incomplete — do not treat a missing member_id as "unauthorized" in that case.
     - "visit_types": The practice's visit types (visit_type_id, visit_type, duration, appointment_mode) with
       the SOAP templates configured against each one in `chart_templates`. Use a visit type's chart_templates
       to decide which template_ids to attach with manageEncounter(action="update"), instead of guessing from
@@ -397,6 +414,16 @@ async def getPracticeInfo(
                         provider.setdefault("provider_name", provider["full_name"])
                 return providers
 
+            def _trim_to_identity_fields(providers: list) -> list:
+                # providers_by_privilege only answers a membership question (is this
+                # member_id in the set) — don't hand a security-gate consumer the full
+                # staff directory (email, phone, address, NPI, licensed states) it never asked for.
+                identity_fields = ("member_id", "full_name", "provider_name")
+                return [
+                    {k: p[k] for k in identity_fields if k in p}
+                    for p in providers if isinstance(p, dict)
+                ]
+
             # Use match for single-purpose info types, handle overview separately
             match info_type:
                 case "facilities":
@@ -452,6 +479,35 @@ async def getPracticeInfo(
                     soap_response = await client.get("/soap/templates", params={"template_ids": template_ids})
                     result["soap_templates"] = soap_response.get("soap_templates") or []
                     result["guidance"] = "Each soap_template contains soap_templates_inner (widget placements) → soap_widgets → soap_widget_entries. Use entry_id values when populating entries in manageEncounter(action='update'). Entry types: 'Simple Question'/'Text Box'/'Radio' → free text; 'Yes/No Question' → 'Yes' or 'No'; 'Header' → skip (display only)."
+
+                case "providers_by_privilege":
+                    if not privilege:
+                        return {
+                            "error": "privilege required for providers_by_privilege",
+                            "guidance": f"Provide the RBAC privilege token to filter by. Confirmed tokens: {sorted(_CONFIRMED_PRIVILEGE_TOKENS)}."
+                        }
+                    if privilege not in _CONFIRMED_PRIVILEGE_TOKENS:
+                        return {
+                            "error": f"Unrecognized privilege token '{privilege}'",
+                            "guidance": f"'{privilege}' has not been confirmed against the backend's /members?privilege= filter — an unrecognized token's behavior there is undocumented and may silently return every member instead of erroring. Confirmed tokens: {sorted(_CONFIRMED_PRIVILEGE_TOKENS)}. Get a new token confirmed with the backend team before adding it here."
+                        }
+                    # Same /members?privilege= filter the "providers"/"overview" cases already use
+                    # with privilege="sign_encounter" — generalized to accept any confirmed privilege token.
+                    # per_page raised from the API's default (50) since this result feeds an authorization
+                    # decision: a provider on page 2 must not silently read as "lacks the privilege".
+                    providers_response = await client.get("/members", params={"privilege": privilege, "per_page": 100})
+                    page_context = providers_response.get("page_context") or {}
+                    has_more_page = page_context.get("has_more_page", False)
+                    if isinstance(has_more_page, str):
+                        has_more_page = has_more_page.strip().lower() == "true"
+                    result["privilege"] = privilege
+                    result["providers"] = _trim_to_identity_fields(_add_provider_name(providers_response.get("members") or []))
+                    result["provider_count"] = len(result["providers"])
+                    result["list_truncated"] = bool(has_more_page)
+                    if result["list_truncated"]:
+                        result["guidance"] = f"Providers holding the '{privilege}' privilege — WARNING: this list is truncated (more pages exist). Do not treat a missing member_id as unauthorized; the practice has more than 100 members and pagination isn't fully implemented here yet."
+                    else:
+                        result["guidance"] = f"Providers holding the '{privilege}' privilege. Check whether a specific provider_id/member_id appears in this list to determine scope-of-practice authorization for actions gated on this privilege."
 
                 case "visit_types":
                     # GET /settings/visittypes — the practice's visit types, each
