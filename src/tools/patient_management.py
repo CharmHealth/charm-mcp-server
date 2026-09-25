@@ -678,6 +678,25 @@ async def managePatient(
                 "guidance": f"Operation '{action}' failed. Check your parameters and try again. For creation, ensure all required fields are provided."
             }
 
+# Hard ceilings on the two sections that grow with visit count. A caller may
+# ask for fewer, never more: the default only protects callers that omit the
+# argument, and a caller passing encounters_limit=1200 reproduced the exact
+# context-window failure the defaults were added to stop. These match the
+# clamp CharmAnywhere already applies at its own tool-call chokepoint, so the
+# two agree.
+_MAX_VITALS = 30
+_MAX_ENCOUNTERS = 50
+
+
+def _bounded_limit(requested, ceiling: int) -> int:
+    """requested, clamped to [1, ceiling]. None or junk means the ceiling."""
+    try:
+        value = int(requested)
+    except (TypeError, ValueError):
+        return ceiling
+    return max(1, min(value, ceiling))
+
+
 @patient_management_mcp.tool
 @with_tool_metrics()
 async def reviewPatientHistory(
@@ -693,8 +712,22 @@ async def reviewPatientHistory(
     diagnosis_status_filter: Optional[str] = None,
     medication_status_filter: Optional[str] = None,
     supplement_status_filter: Optional[str] = None,
-    vitals_limit: Optional[int] = None,
-    encounters_limit: Optional[int] = None,
+    # Defaults are a payload ceiling, not a clinical opinion. reviewPatientHistory
+    # is the one tool whose response scales with a patient's visit count, and a
+    # demo patient with ~1200 encounters serialised past a 200K context window,
+    # killing the whole turn with Bedrock's "Input is too long for requested
+    # model" (2026-09-22). Every other section is bounded by concept count —
+    # medications, diagnoses, allergies, supplements — and keeps returning in
+    # full, because a discontinued medication carries its stop reason and a
+    # resolved diagnosis is permanent risk stratification.
+    #
+    # CharmAnywhere sends both explicitly at its own tool-call chokepoint (20
+    # and 10, clamped at 50/30) because it knows its own context budget, so
+    # these defaults never apply to it. They are the floor for cortex, Copilot
+    # and anything built later. Don't change them expecting the iOS app to pick
+    # the new value up.
+    vitals_limit: Optional[int] = 20,
+    encounters_limit: Optional[int] = 10,
 
     response_format: Optional[Literal["concise", "detailed"]] = None,  # reserved for cortex; no behavior change yet (J13/CH-695)
 
@@ -717,8 +750,14 @@ async def reviewPatientHistory(
     - diagnosis_status_filter: filter diagnoses by status (e.g., diagnosis_status_filter="Active")
     - medication_status_filter: filter medications by status (e.g., medication_status_filter="active")
     - supplement_status_filter: filter supplements by status (e.g., supplement_status_filter="active")
-    - vitals_limit: limit number of vital entries returned (e.g., vitals_limit=10)
-    - encounters_limit: limit number of encounters returned (e.g., encounters_limit=5)
+    - vitals_limit: how many vital entries to return, newest first (default 20, maximum 30). Pass a larger
+      value only when a trend over many visits is actually needed — a patient with years of
+      visits has thousands of entries.
+    - encounters_limit: how many encounters to return, newest first (default 10, maximum 50).
+    Both responses carry recent_vitals_has_more / recent_encounters_has_more. When either is
+    true the patient has more history than is shown here, so do not describe the returned set
+    as the patient's complete record — say it is the most recent N and offer to fetch further
+    back with a larger limit.
 
     For each filtered section, the response includes `<section>_total_count` and `<section>_filtered_count`.
 
@@ -835,8 +874,15 @@ async def reviewPatientHistory(
             if "vitals" in include_sections:
                 vitals_response = await client.get(f"/patients/{patient_id}/vitals")
                 vitals = vitals_response.get("vital_entries", []) or vitals_response.get("vitals", []) or []
+                # Unlike /encounters, the vitals endpoint takes no page/per_page
+                # (documented params are encounter_id and vital_entry_id only),
+                # so everything is fetched and the limit slices client-side.
+                # Entries arrive newest-first — confirmed against a live practice
+                # 2026-09-22 — so the slice really is the recent ones.
+                vitals_limit = _bounded_limit(vitals_limit, _MAX_VITALS)
                 patient_summary["recent_vitals_total_count"] = len(vitals)
-                limited = filter_items(vitals, filters=None, limit=vitals_limit) if vitals_limit is not None else {"items": vitals, "filtered_count": len(vitals)}
+                patient_summary["recent_vitals_has_more"] = len(vitals) > vitals_limit
+                limited = filter_items(vitals, filters=None, limit=vitals_limit)
                 patient_summary["recent_vitals"] = limited["items"]
                 patient_summary["recent_vitals_filtered_count"] = limited.get("filtered_count", len(vitals))
             
@@ -863,20 +909,33 @@ async def reviewPatientHistory(
             
             # Get recent encounters (last 10)
             if "encounters" in include_sections:
-                per_page = 10
-                if encounters_limit is not None:
-                    try:
-                        per_page = max(10, int(encounters_limit))
-                    except (TypeError, ValueError):
-                        per_page = 10
+                encounters_limit = _bounded_limit(encounters_limit, _MAX_ENCOUNTERS)
+                # Never fetch fewer than 10: a small limit still gets a full first
+                # page, and the slice below trims it. The ceiling keeps this at 50.
+                per_page = max(10, encounters_limit)
                 encounters_response = await client.get("/encounters", params={
                     "patient_id": patient_id,
                     "per_page": per_page,
                     "sort_order": "D"
                 })
                 enc = encounters_response.get("encounters", []) or []
+                # NB: this is the number returned, not the patient's total —
+                # /encounters is a paginated read and its page_context carries
+                # has_more_page but no grand total. The name predates the
+                # pagination and is kept for wire compatibility; the flag below
+                # is what a caller should branch on.
                 patient_summary["recent_encounters_total_count"] = len(enc)
-                limited = filter_items(enc, filters=None, limit=encounters_limit) if encounters_limit is not None else {"items": enc, "filtered_count": len(enc)}
+                _enc_page = encounters_response.get("page_context") or {}
+                # Two ways rows can be hidden, and either one counts: the API has
+                # further pages, or the fetch returned more than the caller's limit
+                # and the slice below drops the rest. The API flag alone missed the
+                # second — encounters_limit=5 still fetches 10, and a patient with
+                # 8 encounters came back "has_more": false with 3 of them dropped.
+                patient_summary["recent_encounters_has_more"] = (
+                    str(_enc_page.get("has_more_page", "")).lower() == "true"
+                    or len(enc) > encounters_limit
+                )
+                limited = filter_items(enc, filters=None, limit=encounters_limit)
                 patient_summary["recent_encounters"] = limited["items"]
                 patient_summary["recent_encounters_filtered_count"] = limited.get("filtered_count", len(enc))
             
