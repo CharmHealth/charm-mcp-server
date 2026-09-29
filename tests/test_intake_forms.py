@@ -289,11 +289,13 @@ async def test_get_patient_forms_then_get_responses_uses_ques_map_id_not_questio
     successful one, so this fails loudly if the wrong id is threaded."""
     fake = _FakeAPIClient(get_responses={
         "/patients/p1/questionnaires": {"patient_questionnaires": [
-            # is_submitted's type here isn't independently confirmed against
-            # a live get_patient_forms call — only the get_responses wrapper
-            # shape below was. Kept as a bool to match that confirmed shape
-            # rather than disagree with it for no reason.
-            {"ques_map_id": "555", "questionnaire_id": "999", "is_submitted": True},
+            # is_submitted is a string here, not a bool — confirmed live
+            # (23 forms on the Ink Inc. test practice all came back 'true'/
+            # 'false'). get_responses below returns it as an actual bool
+            # (confirmed live separately, 2026-09-07). The two endpoints
+            # genuinely disagree on this field's type; don't "fix" one to
+            # match the other.
+            {"ques_map_id": "555", "questionnaire_id": "999", "is_submitted": "true"},
         ]},
         "/questionnaire/answer/555": {"questionnaire_with_answers": {
             "questionnaire_type": "Pre-screening Form",
