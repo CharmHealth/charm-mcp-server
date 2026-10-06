@@ -12,12 +12,35 @@ inputStream.optJSONArray("procedures").
 
 from __future__ import annotations
 
+import asyncio
 import json
 
+import jsonschema
 import pytest
 from fastmcp.exceptions import ToolError
 
+import mcp_server
 from tools import core_tools, billing
+
+
+# getPracticeInfo's info_type Literal is a straight list of string constants,
+# duplicated nowhere else that the test suite checks — a rebase can silently
+# drop an entry from it (or from the match statement) while every existing
+# test still passes, since tests call `.fn(...)` directly and bypass the
+# generated JSON schema entirely. This validates against the actual schema
+# FastMCP generates and the MCP SDK checks before a tool ever runs, the same
+# way tests/test_response_format_param.py does for response_format (PR #22
+# review, Vibhu, 2026-10-05 — a rebase dropped "providers_by_privilege" and
+# "visit_types" from the Literal and never added "procedure_codes", so all
+# three failed schema validation despite their match-case branches existing).
+@pytest.mark.parametrize(
+    "info_type", ["procedure_codes", "providers_by_privilege", "visit_types"],
+)
+def test_get_practice_info_info_type_passes_schema_validation(info_type: str) -> None:
+    tools = asyncio.run(mcp_server.mcp_composite_server.get_tools())
+    tool = tools["getPracticeInfo"]
+
+    jsonschema.validate(instance={"info_type": info_type}, schema=tool.parameters)
 
 
 class _FakeAPIClient:
@@ -432,3 +455,69 @@ async def test_delete_procedure_missing_map_id_returns_clean_error(monkeypatch) 
 
     assert "consultation_cpt_map_id" in json.loads(str(exc_info.value))["error"]
     assert fake.delete_calls == []
+
+
+# ── manageEncounterProcedures: top-level consultation_cpt_map_id ──────────
+#
+# cortex's Undo (extract_server_entity_id in receipts.py) reads
+# consultation_cpt_map_id out of the add/update response to build the
+# inverse delete call. Before this, it had to pull it out of the nested
+# `procedures` list positionally (`procedures[0]`), which is only correct
+# if the API echoes back a single new row rather than the encounter's full
+# list — undocumented either way (PR #22 review, Vibhu, 2026-10-05).
+
+
+@pytest.mark.asyncio
+async def test_update_response_includes_top_level_consultation_cpt_map_id(monkeypatch) -> None:
+    """On update the id is already known from the caller's own argument, so
+    there's no response-shape ambiguity to resolve."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/encounters/e1/procedures": {"procedures": [{"consultation_cpt_map_id": "cpt1"}]},
+    })
+    _patch_client(monkeypatch, billing, fake)
+
+    result = await billing.manageEncounterProcedures.fn(
+        action="update", patient_id="p1", encounter_id="e1",
+        consultation_cpt_map_id="cpt1", item_charge=200.0,
+    )
+
+    assert result["consultation_cpt_map_id"] == "cpt1"
+
+
+@pytest.mark.asyncio
+async def test_add_response_includes_top_level_consultation_cpt_map_id_when_unambiguous(monkeypatch) -> None:
+    """A single-element `procedures` list in the response can only be the
+    new row, so it's safe to surface at the top level."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/encounters/e1/procedures": {"procedures": [
+            {"consultation_cpt_map_id": "cpt-new", "code_id": "c1"},
+        ]},
+    })
+    _patch_client(monkeypatch, billing, fake)
+
+    result = await billing.manageEncounterProcedures.fn(
+        action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
+    )
+
+    assert result["consultation_cpt_map_id"] == "cpt-new"
+
+
+@pytest.mark.asyncio
+async def test_add_response_omits_top_level_id_when_response_shape_is_ambiguous(monkeypatch) -> None:
+    """If the API instead returns the encounter's full procedure list (more
+    than one row), there's no reliable way to tell which one is new —
+    guessing procedures[0] could point a caller's Undo at the wrong billing
+    line, so the field must be left out rather than guessed."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/encounters/e1/procedures": {"procedures": [
+            {"consultation_cpt_map_id": "cpt-old-1", "code_id": "c9"},
+            {"consultation_cpt_map_id": "cpt-old-2", "code_id": "c1"},
+        ]},
+    })
+    _patch_client(monkeypatch, billing, fake)
+
+    result = await billing.manageEncounterProcedures.fn(
+        action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
+    )
+
+    assert "consultation_cpt_map_id" not in result

@@ -526,6 +526,24 @@ async def manageEncounterProcedures(
 
                     procedures = response.get("procedures") if isinstance(response, dict) else None
                     result = {"procedures": procedures or []}
+
+                    # Surface the affected row's consultation_cpt_map_id as its own
+                    # top-level field rather than leaving the caller to pull it out of
+                    # `procedures` by position. On update it's already known — the
+                    # caller supplied it, no response-shape guessing involved. On add
+                    # it's only safe to report when the API echoed back a single new
+                    # row; if it instead returns the encounter's full procedure list
+                    # (undocumented either way), procedures[0] isn't reliably the new
+                    # one, so the field is left out rather than risk a caller (e.g.
+                    # cortex's add→delete Undo) silently targeting the wrong billing
+                    # line (PR #22 review, Vibhu, 2026-10-05).
+                    if action == "update":
+                        result["consultation_cpt_map_id"] = consultation_cpt_map_id
+                    elif isinstance(procedures, list) and len(procedures) == 1 and isinstance(procedures[0], dict):
+                        new_id = procedures[0].get("consultation_cpt_map_id")
+                        if isinstance(new_id, str) and new_id.strip():
+                            result["consultation_cpt_map_id"] = new_id
+
                     result["guidance"] = f"Procedure {'added to' if action == 'add' else 'updated on'} the encounter. Use action='list' to see the full current set, or action='delete' with consultation_cpt_map_id to remove one."
                     return strip_empty_values(result)
 

@@ -325,7 +325,7 @@ async def findPatients(
 @core_tools_mcp.tool
 @with_tool_metrics()
 async def getPracticeInfo(
-    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details"] = "overview",
+    info_type: Literal["facilities", "providers", "vitals", "overview", "templates", "template_details", "procedure_codes", "providers_by_privilege", "visit_types"] = "overview",
     template_ids: Optional[str] = None,  # comma-separated, required for template_details
     code_id: Optional[str] = None,  # procedure_codes only — fetch a single code's details
     code_name: Optional[str] = None,  # procedure_codes only — filter by procedure/CPT description
@@ -353,9 +353,6 @@ async def getPracticeInfo(
       catalog by default; pass code_id, code_name, or code_number to look up/filter to a
       specific procedure instead of fetching the whole fee schedule. Use code_id values from
       this list with manageEncounterProcedures(action="add") to attach a procedure to an encounter.
-    - "procedure_codes": The practice's procedure/CPT code catalog (fee schedule) — code_id, code_number
-      (e.g. "99214"), code_name, default charge, modifiers. Use code_id values from this list with
-      manageEncounterProcedures(action="add") to attach a procedure to an encounter.
     - "providers_by_privilege": List providers holding a specific RBAC privilege token. Only confirmed tokens are
       accepted (currently "sign_encounter", "add_medications" — the latter per CH-770's scope-of-practice gate,
       see cortex's policy.py privilege map; other tokens are rejected until confirmed against the backend, since
