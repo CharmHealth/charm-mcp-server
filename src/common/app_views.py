@@ -653,8 +653,12 @@ def _record_block(title: str, status: str, detail: str, meta: str,
     through to `_first`'s placeholder and every other field was looked up under
     the wrong name — a card that asserts a record exists while showing none of it.
 
-    `ident` is the id the record's own mutations require — `record_id` for a
-    drug or allergy, `task_id` for a task. It renders on the metadata line
+    `ident` is the id the record's own mutations require — the value a tool's
+    `record_id` parameter takes for a drug or allergy, `task_id` for a task. The
+    wire field is rarely called `record_id`: a medication's is
+    `patient_medication_id`, an allergy's `patient_allergy_id`, a note's
+    `quick_notes_id` (CharmHealth's API reference). Looking it up under the
+    parameter's name found nothing for five lists. It renders on the metadata line
     because a view is read by the model as well as by a person: a list that
     shows a medication but not its record_id cannot answer "discontinue the
     lisinopril", even though the JSON alongside it carries the value. Same
@@ -820,7 +824,7 @@ def medication_list_view(data: Dict[str, Any]) -> Column:
             _joined(m, "strength_description", "doseform_description", "route_description")
             or _first(m, "directions", "sig", default=""),
             _joined({"d": _first(m, "directions", "sig", default=""), "m": meta}, "d", "m"),
-            ident=_first(m, "record_id", "id", default=""),
+            ident=_first(m, "patient_medication_id", "record_id", "id", default=""),
         )
     return _records_view(_items(data, "current_medications", "medications"), build,
                          "No medications on the chart.")
@@ -836,7 +840,7 @@ def supplement_list_view(data: Dict[str, Any]) -> Column:
                      "freq": _first(sp, "frequency", "intake_type", default=""),
                      "dates": _date_range(sp, ("start_date",), ("end_date",))},
                     "dose", "freq", "dates"),
-            ident=_first(sp, "record_id", "id", default=""),
+            ident=_first(sp, "patient_supplement_id", "supplement_id", "record_id", "id", default=""),
         )
     return _records_view(_items(data, "current_supplements", "supplements"), build,
                          "No supplements on the chart.")
@@ -861,7 +865,7 @@ def allergy_list_view(data: Dict[str, Any]) -> Column:
                      # something when it is not already what the badge says.
                      "status": status if status.lower() != severity.lower() else ""},
                     "type", "observed", "status"),
-            ident=_first(a, "record_id", "allergy_id", "id", default=""),
+            ident=_first(a, "patient_allergy_id", "record_id", "allergy_id", "id", default=""),
         )
     return _records_view(_items(data, "allergies", "patient_allergies"), build,
                          "No known allergies recorded.")
@@ -877,7 +881,7 @@ def diagnosis_list_view(data: Dict[str, Any]) -> Column:
             _joined({"onset": _date_range(d, ("from_date", "onset_date", "date"), ("to_date",)),
                      "comments": _first(d, "comments", default="")},
                     "onset", "comments"),
-            ident=_first(d, "record_id", "diagnosis_id", "id", default=""),
+            ident=_first(d, "patient_diagnosis_id", "record_id", "id", default=""),
         )
     return _records_view(_items(data, "diagnoses", "patient_diagnoses"), build,
                          "No diagnoses on the problem list.")
@@ -981,7 +985,7 @@ def note_list_view(data: Dict[str, Any]) -> Column:
                      "who": _first(n, "member_name", "provider_name", "created_by",
                                    default="")},
                     "when", "who"),
-            ident=_first(n, "record_id", "note_id", "id", default=""),
+            ident=_first(n, "quick_notes_id", "record_id", "note_id", "id", default=""),
         )
     return _records_view(_items(data, "quick_notes", "notes"), build, "No notes.")
 

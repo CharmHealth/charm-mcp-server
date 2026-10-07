@@ -517,13 +517,27 @@ def test_directory_lists_carry_their_identifiers() -> None:
     assert '"Provider ID": "1995529000000021021"' in providers
 
 
-def test_clinical_lists_do_not_show_identifiers() -> None:
-    """Nobody chains off an allergy's record id, and a clinician does not read
-    it. Identifiers belong on the directory lists only."""
-    blob = json.dumps(app_result(
-        {"allergies": [{"patient_allergy_id": "a1", "allergen": "Penicillin",
-                        "severity": "Severe"}]},
-        "allergy_list").structured_content, ensure_ascii=False)
+# The id field each list's record carries on the wire, per CharmHealth's API
+# reference — the value the owning tool's record_id (or task_id, ...) takes.
+_WIRE_IDS = [
+    ("medication_list", {"medications": [{"trade_name": "Zoloft", "patient_medication_id": "m1"}]}),
+    ("supplement_list", {"supplements": [{"supplement_name": "Vitamin D3", "patient_supplement_id": "s1"}]}),
+    ("allergy_list", {"allergies": [{"allergen": "Penicillin", "patient_allergy_id": "a1"}]}),
+    ("diagnosis_list", {"diagnoses": [{"diagnosis_name": "Hypertension", "patient_diagnosis_id": "d1"}]}),
+    ("note_list", {"quick_notes": [{"notes": "Call back Tuesday", "quick_notes_id": "n1"}]}),
+    ("recall_list", {"recall": [{"recall_type": "Office Visit", "patient_recall_id": "r1"}]}),
+]
 
-    assert "Penicillin" in blob
-    assert "patient_allergy_id" not in blob and '"a1"' not in blob
+
+@pytest.mark.parametrize("widget_type, payload", _WIRE_IDS, ids=[w for w, _ in _WIRE_IDS])
+def test_clinical_lists_show_the_id_their_mutations_take(widget_type: str, payload: dict) -> None:
+    """A model reading the view, not the JSON, needs the id to act on a row.
+    These views once looked the id up as "record_id" — the tool parameter's
+    name, which no response uses — so five lists rendered no id at all and
+    "discontinue the lisinopril" had only a guess to go on."""
+    record = next(iter(payload.values()))[0]
+    wire_id = next(v for k, v in record.items() if k.endswith("_id"))
+
+    blob = json.dumps(app_result(payload, widget_type).structured_content, ensure_ascii=False)
+
+    assert f"ID {wire_id}" in blob
