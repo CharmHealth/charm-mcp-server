@@ -332,3 +332,18 @@ async def test_search_tests_flags_a_range_stored_backwards(monkeypatch) -> None:
     assert r["inverted_ranges"] == [{"lab_name": "General", "test_name": "TSH", "lab_record_id": "R3",
                                      "measure": "TSH", "reference_range": "5.5-0.35"}]
     assert "see inverted_ranges" in r["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_list_orders_reports_whether_the_lab_has_it(monkeypatch) -> None:
+    fake = _FakeAPIClient(get_responses={"/labs/orders": {"lab_orders": [
+        {"lab_order_id": "O1", "order_date": "Oct 07, 2026", "lab_name": "General", "test_names": ["TSH"],
+         "eORDER_STATUS": "ERROR", "order_status": 0},
+    ]}})
+    _patch_client(monkeypatch, fake)
+
+    r = await clinical_support.managePatientLabs(action="list_orders", patient_id="P1")
+
+    assert r["lab_orders"][0]["e_order_status"] == "ERROR"
+    assert r["lab_orders"][0]["test_names"] == ["TSH"]
+    assert fake.get_calls == [("/labs/orders", {"patient_id": "P1"})]
