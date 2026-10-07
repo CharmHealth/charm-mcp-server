@@ -181,10 +181,11 @@ docker run --rm -i \
   -e CHARMHEALTH_CLIENT_SECRET='your_client_secret_here' \
   -e CHARMHEALTH_REDIRECT_URI='your_redirect_uri_here' \
   -e CHARMHEALTH_TOKEN_URL='your_token_url_here' \
-  -e CHARMHEALTH_ALLOW_SERVER_CREDENTIALS='1' \
   -p 8080:8080 \
   charm-mcp-server
 ```
+
+This example deliberately leaves out `CHARMHEALTH_ALLOW_SERVER_CREDENTIALS`. Over HTTP, each request should carry its own user's token. With the flag set, a request that carries no token is answered with the server's own account, so anyone who can reach the port reads that practice's patients. Set it only for stdio, or for an HTTP server that never leaves your machine.
 
 **Note**: For HTTP mode, you'll need to modify `mcp_server.py` to use HTTP transport:
 ```python

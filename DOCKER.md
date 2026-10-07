@@ -150,12 +150,15 @@ services:
       - CHARMHEALTH_CLIENT_SECRET=<client_secret>
       - CHARMHEALTH_REDIRECT_URI=https://sandbox3.charmtracker.com/ehr/physician/mySpace.do?ACTION=SHOW_OAUTH_JSON
       - CHARMHEALTH_TOKEN_URL=https://accounts106.charmtracker.com/oauth/v2/token
+      # stdio only. Remove this line if you enable HTTP below: over HTTP, a
+      # request with no per-user token would be answered as this practice.
       - CHARMHEALTH_ALLOW_SERVER_CREDENTIALS=1
       - ENV=prod
     stdin_open: true   # required for stdio transport
     tty: true
     # ports:
-    #   - "8080:8080"  # only if you enable HTTP transport in the app
+    #   - "8080:8080"  # only if you enable HTTP transport in the app,
+    #                  # and then without CHARMHEALTH_ALLOW_SERVER_CREDENTIALS
 ```
 
 ## Notes
