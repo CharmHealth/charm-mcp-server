@@ -29,7 +29,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from prefab_ui.components import (
     Badge,
@@ -89,32 +89,38 @@ def _first(source: Dict[str, Any], *keys: str, default: str = "—") -> str:
     return default
 
 
-def _time_of_day(appt: Dict[str, Any]) -> str:
-    """Appointment time, which is not a field of its own.
+def _clock(appt: Dict[str, Any]) -> Optional[tuple]:
+    """(hour, minute) of an appointment, or None when no time is recorded.
 
     The API returns `appointment_date` as "2026-09-10 09:00:00" and the time is
     the part after the space — NoEHR's `AppointmentItem.displayTime` reads it the
     same way, falling back to `appointment_start_time_utc` in epoch
-    milliseconds. Looking for a `start_time` key finds nothing, which is why this
-    column rendered as a dash for every row.
+    milliseconds. Display and sort both read this, so a row cannot show one time
+    and sort by another.
     """
     raw = str(_first(appt, "appointment_date", "date", default="")).strip()
-    if " " in raw:
-        clock = raw.split(" ", 1)[1]
-        m = re.match(r"^(\d{1,2}):(\d{2})", clock)
-        if m:
-            hour, minute = int(m.group(1)), m.group(2)
-            suffix = "am" if hour < 12 else "pm"
-            return f"{hour % 12 or 12}:{minute}{suffix}"
+    m = re.match(r"^\S+[ T](\d{1,2}):(\d{2})", raw)
+    if m:
+        return int(m.group(1)), int(m.group(2))
 
     utc = str(_first(appt, "appointment_start_time_utc", default="")).strip()
     if utc.isdigit() and 12 <= len(utc) <= 14:
         try:
             stamp = datetime.fromtimestamp(int(utc) / 1000, tz=timezone.utc)
-            return f"{stamp.hour % 12 or 12}:{stamp.minute:02d}{'am' if stamp.hour < 12 else 'pm'}"
+            return stamp.hour, stamp.minute
         except (ValueError, OSError, OverflowError):
             pass
+    return None
 
+
+def _time_of_day(appt: Dict[str, Any]) -> str:
+    """Appointment time, which is not a field of its own. Looking for a
+    `start_time` key finds nothing, which is why this column once rendered as a
+    dash for every row."""
+    clock = _clock(appt)
+    if clock:
+        hour, minute = clock
+        return f"{hour % 12 or 12}:{minute:02d}{'am' if hour < 12 else 'pm'}"
     # Some responses carry a bare clock field instead.
     return _first(appt, "start_time", "appointment_time", "from_time", default="")
 
@@ -154,13 +160,10 @@ def _day_heading(iso_day: str) -> str:
 
 
 def _appt_sort_key(appt: Dict[str, Any]) -> tuple:
-    """Chronological within a day. Sorts on the raw 24-hour clock, never on the
-    rendered string — "9:30am" sorts after "2:00pm" as text."""
-    raw = str(_first(appt, "appointment_date", "date", default="")).strip()
-    m = re.match(r"^\d{4}-\d{2}-\d{2}[ T](\d{1,2}):(\d{2})", raw)
-    if m:
-        return (int(m.group(1)), int(m.group(2)))
-    return (99, 99)
+    """Chronological within a day. Sorts on the 24-hour clock, never on the
+    rendered string — "9:30am" sorts after "2:00pm" as text. A row with no
+    readable time goes last."""
+    return _clock(appt) or (99, 99)
 
 
 def _appt_row(appt: Dict[str, Any]) -> Dict[str, str]:

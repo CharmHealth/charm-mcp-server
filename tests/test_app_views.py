@@ -497,6 +497,18 @@ def test_time_of_day_parsing(appt: dict, expected: str) -> None:
     assert app_views._time_of_day(appt) == expected
 
 
+def test_epoch_only_appointments_sort_by_the_time_they_display() -> None:
+    """A row known only by appointment_start_time_utc displayed its time but
+    sorted after every row with an appointment_date, so 7:00am could follow
+    5:00pm within a day."""
+    seven_am = {"appointment_start_time_utc": "1789023600000"}  # 7:00am UTC
+    five_pm = {"appointment_date": "2026-09-10 17:00:00"}
+
+    ordered = sorted([five_pm, seven_am], key=app_views._appt_sort_key)
+
+    assert [app_views._time_of_day(a) for a in ordered] == ["7:00am", "5:00pm"]
+
+
 def test_directory_lists_carry_their_identifiers() -> None:
     """getPracticeInfo's guidance says "use facility IDs from this list" and
     "use provider IDs (member_id) from this list". A rendered list that omits
