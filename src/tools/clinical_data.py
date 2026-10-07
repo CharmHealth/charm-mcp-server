@@ -534,8 +534,11 @@ async def managePatientDrugs(
                                 f" ({len(active_supps)} active in returned list). Use action='add' to document new supplements."
                             )
                     
-                    payload = strip_empty_values(response)
-                    return app_result(payload, "supplement_list" if payload.get("supplements") else "medication_list")
+                    # From substance_type, not the payload: strip_empty_values
+                    # drops an empty supplements list, so a patient with none
+                    # would otherwise be shown "No medications on the chart."
+                    widget_type = "medication_list" if substance_type == "medication" else "supplement_list"
+                    return app_result(strip_empty_values(response), widget_type)
 
                 case "add" | "prescribe":
                     if substance_type == "medication":

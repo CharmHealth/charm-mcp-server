@@ -20,6 +20,13 @@ core_tools_mcp = FastMCP(name="CharmHealth Core Tools MCP Server")
 # accepting anything the caller passes.
 _CONFIRMED_PRIVILEGE_TOKENS = {"sign_encounter", "add_medications"}
 
+# The App view for each info_type, chosen from the case that ran. The payload's
+# keys cannot decide it: providers_by_privilege also returns "providers", and
+# overview returns facilities and providers together. Only info_types whose
+# widget exists in cortex and NoEHR get a view; the rest return plain JSON,
+# which still carries every id the model needs.
+_PRACTICE_INFO_VIEWS = {"facilities": "facility_list", "providers": "provider_list"}
+
 @core_tools_mcp.tool(app=True)
 @with_tool_metrics()
 async def findPatients(
@@ -482,7 +489,8 @@ async def getPracticeInfo(
             
             logger.info(f"getPracticeInfo completed for {info_type}")
             payload = strip_empty_values(result)
-            return app_result(payload, "facility_list" if payload.get("facilities") else "provider_list")
+            widget_type = _PRACTICE_INFO_VIEWS.get(info_type)
+            return app_result(payload, widget_type) if widget_type else payload
             
         except Exception as e:
             logger.error(f"Error in getPracticeInfo: {e}")
