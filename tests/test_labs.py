@@ -66,7 +66,7 @@ async def test_order_missing_patient_id_returns_clean_error(monkeypatch) -> None
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await clinical_support.managePatientLabs.fn(action="order", encounter_id="e1", order_tests=[_VALID_TEST])
+        await clinical_support.managePatientLabs(action="order", encounter_id="e1", order_tests=[_VALID_TEST])
 
     assert json.loads(str(exc_info.value))["error"] == "patient_id required for order"
     assert fake.post_calls == []
@@ -78,7 +78,7 @@ async def test_order_requires_encounter_or_member_and_facility(monkeypatch) -> N
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await clinical_support.managePatientLabs.fn(
+        await clinical_support.managePatientLabs(
             action="order", patient_id="p1", order_tests=[_VALID_TEST],
         )
 
@@ -92,7 +92,7 @@ async def test_order_requires_non_empty_order_tests(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await clinical_support.managePatientLabs.fn(
+        await clinical_support.managePatientLabs(
             action="order", patient_id="p1", encounter_id="e1",
         )
 
@@ -108,7 +108,7 @@ async def test_order_rejects_test_missing_required_fields(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await clinical_support.managePatientLabs.fn(
+        await clinical_support.managePatientLabs(
             action="order", patient_id="p1", encounter_id="e1",
             order_tests=[{"lab_id": "1", "lab_name": "LabCorp"}],  # missing medical_record_id/lab_record_id
         )
@@ -125,7 +125,7 @@ async def test_order_happy_path_with_encounter_id(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await clinical_support.managePatientLabs.fn(
+    result = await clinical_support.managePatientLabs(
         action="order", patient_id="p1", encounter_id="e1", order_tests=[_VALID_TEST],
     )
 
@@ -143,7 +143,7 @@ async def test_order_happy_path_with_member_and_facility(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await clinical_support.managePatientLabs.fn(
+    result = await clinical_support.managePatientLabs(
         action="order", patient_id="p1", member_id="m1", facility_id="f1",
         ordered_date=datetime.date(2026, 8, 7), order_tests=[_VALID_TEST],
     )
@@ -161,7 +161,7 @@ async def test_order_accepts_stringified_order_tests(monkeypatch) -> None:
     fake = _FakeAPIClient(post_responses={"/patients/p1/labs/order": {"lab_orders_list": ["9001"]}})
     _patch_client(monkeypatch, fake)
 
-    await clinical_support.managePatientLabs.fn(
+    await clinical_support.managePatientLabs(
         action="order", patient_id="p1", encounter_id="e1",
         order_tests=json.dumps([_VALID_TEST]),
     )
@@ -176,7 +176,7 @@ async def test_order_rejects_malformed_order_tests_json_string(monkeypatch) -> N
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await clinical_support.managePatientLabs.fn(
+        await clinical_support.managePatientLabs(
             action="order", patient_id="p1", encounter_id="e1",
             order_tests="not valid json{",
         )
@@ -196,7 +196,7 @@ async def test_order_rejects_order_tests_with_non_dict_elements(monkeypatch) -> 
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await clinical_support.managePatientLabs.fn(
+        await clinical_support.managePatientLabs(
             action="order", patient_id="p1", encounter_id="e1",
             order_tests='["12345"]',
         )

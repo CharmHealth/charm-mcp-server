@@ -1,5 +1,5 @@
 from fastmcp import FastMCP, Context
-from fastmcp.server.dependencies import get_http_headers
+from common.auth import resolve_auth
 from typing import Optional, List, Dict, Any, Literal
 from datetime import date, timedelta
 from api import CharmHealthAPIClient
@@ -60,42 +60,9 @@ async def managePatientBilling(
     rather than proceeding with defaults or auto-generated values.
     </instructions>
     """
-    access_token = None
-    refresh_token = None
-    base_url = None
-    token_url = None
-    client_secret = None
-    accounts_server = None
+    auth = resolve_auth("managePatientBilling")
 
-    try:
-        headers = get_http_headers()
-        access_token = headers.get('x-user-access-token')
-        refresh_token = headers.get('x-user-refresh-token')
-        base_url = headers.get('x-charmhealth-base-url')
-        token_url = headers.get('x-charmhealth-token-url')
-        client_secret = headers.get('x-charmhealth-client-secret')
-        accounts_server = headers.get('x-charmhealth-accounts-server')
-
-        if accounts_server:
-            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
-
-        if base_url and not base_url.endswith('/api/ehr/v1'):
-            base_url = base_url.rstrip('/') + '/api/ehr/v1'
-
-        if access_token:
-            logger.info("managePatientBilling using user credentials")
-        else:
-            logger.info("managePatientBilling using environment variable credentials")
-    except Exception as e:
-        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
-
-    async with CharmHealthAPIClient(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        base_url=base_url,
-        token_url=token_url,
-        client_secret=client_secret
-    ) as client:
+    async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             match action:
 

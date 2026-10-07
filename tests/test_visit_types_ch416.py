@@ -71,7 +71,7 @@ async def test_visit_types_passes_chart_templates_through_untouched(monkeypatch)
     fake = _FakeAPIClient(pages=[_page([_LINKED, _UNLINKED])])
     _patch_client(monkeypatch, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="visit_types")
+    result = await core_tools.getPracticeInfo(info_type="visit_types")
 
     assert result["visit_type_count"] == 2
     linked = result["visit_types"][0]
@@ -92,7 +92,7 @@ async def test_visit_type_with_no_linked_template_keeps_an_empty_list(monkeypatc
     fake = _FakeAPIClient(pages=[_page([_UNLINKED])])
     _patch_client(monkeypatch, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="visit_types")
+    result = await core_tools.getPracticeInfo(info_type="visit_types")
 
     assert result["visit_types"][0]["chart_templates"] == []
     assert "0 of 1 visit type(s) have chart_templates configured" in result["guidance"]
@@ -108,7 +108,7 @@ async def test_visit_types_follows_has_more_page(monkeypatch) -> None:
     ])
     _patch_client(monkeypatch, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="visit_types")
+    result = await core_tools.getPracticeInfo(info_type="visit_types")
 
     assert result["visit_type_count"] == 2
     assert [p[1]["page"] for p in fake.get_calls] == [1, 2]
@@ -119,7 +119,7 @@ async def test_visit_types_empty_practice(monkeypatch) -> None:
     fake = _FakeAPIClient(pages=[_page([])])
     _patch_client(monkeypatch, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="visit_types")
+    result = await core_tools.getPracticeInfo(info_type="visit_types")
 
     assert result["visit_type_count"] == 0
     assert result["visit_types"] == []
@@ -133,7 +133,7 @@ async def test_visit_types_tolerates_a_build_without_chart_templates(monkeypatch
     fake = _FakeAPIClient(pages=[_page([older_build])])
     _patch_client(monkeypatch, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="visit_types")
+    result = await core_tools.getPracticeInfo(info_type="visit_types")
 
     assert result["visit_type_count"] == 1
     assert "chart_templates" not in result["visit_types"][0]
@@ -152,7 +152,7 @@ async def test_failed_read_is_an_error_not_zero_configured(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await core_tools.getPracticeInfo.fn(info_type="visit_types")
+        await core_tools.getPracticeInfo(info_type="visit_types")
 
     body = json.loads(str(exc_info.value))
     assert "Could not read visit types" in body["error"]
@@ -171,4 +171,4 @@ async def test_failure_on_a_later_page_fails_the_whole_read(monkeypatch) -> None
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError):
-        await core_tools.getPracticeInfo.fn(info_type="visit_types")
+        await core_tools.getPracticeInfo(info_type="visit_types")

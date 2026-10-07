@@ -1,5 +1,6 @@
 from fastmcp import FastMCP, Context
-from fastmcp.server.dependencies import get_http_headers
+from common.auth import resolve_auth
+from common.app_views import app_result
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
@@ -84,10 +85,10 @@ def _next_template_position(templates) -> int:
     return max(positions) + 1 if positions else 0
 
 
-@encounter_management_mcp.tool
+@encounter_management_mcp.tool(app=True)
 @with_tool_metrics()
 async def manageEncounter(
-    patient_id: str,
+    patient_id: Optional[str] = None,
     action: Literal["create", "review", "sign", "unlock", "update", "list"] = "create",
     provider_id: Optional[str] = None,
     facility_id: Optional[str] = None,
@@ -122,7 +123,7 @@ async def manageEncounter(
     
     <instructions>
     Actions:
-    - "list": List encounters for a patient (requires patient_id; optionally filter by filter_by, start_date, end_date, per_page, page)
+    - "list": List encounters (patient_id optional — omit it to list across the practice, e.g. filter_by="Status.Unsigned" for every unsigned note; optionally filter by start_date, end_date, per_page, page)
     - "create": Create new encounter and document clinical findings (default)
     - "review": Display complete encounter details for review before signing
     - "sign": Electronically sign encounter after review and confirmation
@@ -163,47 +164,32 @@ async def manageEncounter(
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
     """
-    # Extract user tokens and environment from HTTP headers (proper FastMCP way)
-    access_token = None
-    refresh_token = None
-    base_url = None
-    token_url = None
-    
-    try:
-        headers = get_http_headers()
-        access_token = headers.get('x-user-access-token')
-        refresh_token = headers.get('x-user-refresh-token')
-        base_url = headers.get('x-charmhealth-base-url')
-        token_url = headers.get('x-charmhealth-token-url')
-        client_secret = headers.get('x-charmhealth-client-secret')
-        accounts_server = headers.get('x-charmhealth-accounts-server')
-        
-        # If accounts_server is provided, use it for token URL (mobile flow)
-        if accounts_server:
-            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
-        
-        # Normalize base URL to include API path
-        if base_url and not base_url.endswith('/api/ehr/v1'):
-            base_url = base_url.rstrip('/') + '/api/ehr/v1'
-        
-        if access_token:
-            logger.info(f"manageEncounter using user credentials")
-        else:
-            logger.info("manageEncounter using environment variable credentials")
-    except Exception as e:
-        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
-    
-    async with CharmHealthAPIClient(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        base_url=base_url,
-        token_url=token_url,
-        client_secret=client_secret
-    ) as client:
+    auth = resolve_auth("manageEncounter")
+
+    # Only "list" works without a patient. Every other action builds a path of
+    # the form /patients/{patient_id}/..., so a missing id there would request
+    # /patients/None/... and fail as something unrelated — a 404 about an
+    # encounter rather than a message about the argument that was left out.
+    if action != "list" and not patient_id:
+        return {
+            "error": f"patient_id is required for action='{action}'",
+            "guidance": "Only action='list' can omit patient_id. Pass the patient_id you are acting on.",
+        }
+
+    async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             match action:
                 case "list":
-                    params: Dict[str, Any] = {"patient_id": int(patient_id)}
+                    # Omitting patient_id lists across the practice. The EHR's
+                    # GET /encounters treats it as optional — verified against
+                    # the live API, which returns the practice-wide list rather
+                    # than an error. Combined with filter_by="Status.Unsigned"
+                    # that makes "every unsigned note" one call, where a caller
+                    # previously had to fan out per patient and so could only
+                    # see the patients it already knew to ask about.
+                    params: Dict[str, Any] = {}
+                    if patient_id:
+                        params["patient_id"] = int(patient_id)
                     if filter_by:
                         params["filter_by"] = filter_by
                     if facility_id:
@@ -223,13 +209,14 @@ async def manageEncounter(
                     encounters = response.get("encounters") or []
                     response["total_count"] = len(encounters)
                     if encounters:
+                        scope = "for this patient" if patient_id else "across the practice"
                         response["guidance"] = (
-                            f"Found {len(encounters)} encounters for this patient."
+                            f"Found {len(encounters)} encounters {scope}."
                             " Use action='review' with an encounter_id to see full details."
                         )
                     else:
                         response["guidance"] = "No encounters found matching the filters."
-                    return strip_empty_values(response)
+                    return app_result(strip_empty_values(response), "encounter_list")
 
                 case "review":
                     if not encounter_id:

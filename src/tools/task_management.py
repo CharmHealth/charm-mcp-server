@@ -1,5 +1,6 @@
 from fastmcp import FastMCP, Context
-from fastmcp.server.dependencies import get_http_headers
+from common.auth import resolve_auth
+from common.app_views import app_result
 from typing import Optional, Dict, Any, Literal, List
 from datetime import date
 import logging
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 task_management_mcp = FastMCP(name="CharmHealth Task Management MCP Server")
 
 
-@task_management_mcp.tool
+@task_management_mcp.tool(app=True)
 @with_tool_metrics()
 async def manageTasks(
     action: Literal["add", "update", "list", "change_status"],
@@ -78,39 +79,9 @@ async def manageTasks(
     - manageTasks(action="list", view="All", priority_filter="High", owner_filter="12345")
     </instructions>
     """
-    # Extract user tokens and environment from HTTP headers
-    access_token = None
-    refresh_token = None
-    base_url = None
-    token_url = None
-    try:
-        headers = get_http_headers()
-        access_token = headers.get('x-user-access-token')
-        refresh_token = headers.get('x-user-refresh-token')
-        base_url = headers.get('x-charmhealth-base-url')
-        token_url = headers.get('x-charmhealth-token-url')
-        client_secret = headers.get('x-charmhealth-client-secret')
-        accounts_server = headers.get('x-charmhealth-accounts-server')
-        
-        # If accounts_server is provided, use it for token URL (mobile flow)
-        if accounts_server:
-            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
-        if base_url and not base_url.endswith('/api/ehr/v1'):
-            base_url = base_url.rstrip('/') + '/api/ehr/v1'
-        if access_token:
-            logger.info(f"manageTasks using user credentials")
-        else:
-            logger.info("manageTasks using environment variable credentials")
-    except Exception as e:
-        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
+    auth = resolve_auth("manageTasks")
     
-    async with CharmHealthAPIClient(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        base_url=base_url,
-        token_url=token_url,
-        client_secret=client_secret
-    ) as client:
+    async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             match action:
                 case "add":
@@ -256,7 +227,7 @@ async def manageTasks(
                             f"Found {total_count} tasks; {filtered['filtered_count']} match the provided filters."
                             " Use action='add' to create new tasks, action='update' to modify existing tasks, or action='change_status' to update task status."
                         )
-                    return strip_empty_values(response)
+                    return app_result(strip_empty_values(response), "task_list")
 
                 case "change_status":
                     if not task_id or not status:

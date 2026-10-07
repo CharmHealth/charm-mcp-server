@@ -212,3 +212,6 @@ __marimo__/
 # vscode
 .vscode/
 /docs/
+
+# Local project instructions — not for the public repo
+CLAUDE.md

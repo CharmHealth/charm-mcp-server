@@ -72,7 +72,7 @@ async def test_list_templates_happy_path(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await intake_forms.manageIntakeForms.fn(action="list_templates")
+    result = await intake_forms.manageIntakeForms(action="list_templates")
 
     assert result["total_count"] == 1
     assert "1 questionnaire template(s)" in result["guidance"]
@@ -88,7 +88,7 @@ async def test_list_templates_error_response_reports_failure_not_empty(monkeypat
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(action="list_templates")
+        await intake_forms.manageIntakeForms(action="list_templates")
 
     assert "Failed to list questionnaire templates" in _tool_error_body(exc_info)["guidance"]
 
@@ -105,7 +105,7 @@ async def test_get_patient_forms_filters_by_appointment(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await intake_forms.manageIntakeForms.fn(
+    result = await intake_forms.manageIntakeForms(
         action="get_patient_forms", patient_id="p1", appointment_id="a1",
     )
 
@@ -123,7 +123,7 @@ async def test_get_patient_forms_error_response_reports_failure_not_empty(monkey
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(action="get_patient_forms", patient_id="p1")
+        await intake_forms.manageIntakeForms(action="get_patient_forms", patient_id="p1")
 
     assert "Failed to retrieve forms for this patient" in _tool_error_body(exc_info)["guidance"]
 
@@ -134,7 +134,7 @@ async def test_get_patient_forms_missing_patient_id_raises_tool_error(monkeypatc
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(action="get_patient_forms")
+        await intake_forms.manageIntakeForms(action="get_patient_forms")
 
     assert _tool_error_body(exc_info)["error"] == "patient_id required for get_patient_forms"
 
@@ -155,7 +155,7 @@ async def test_share_sms_happy_path(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await intake_forms.manageIntakeForms.fn(
+    result = await intake_forms.manageIntakeForms(
         action="share_sms", patient_id="123", facility_id="9", questionnaire_id="456",
     )
 
@@ -175,7 +175,7 @@ async def test_share_sms_non_numeric_ids_return_clean_error_no_api_call(monkeypa
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="share_sms", patient_id="not-a-number", facility_id="9", questionnaire_id="456",
         )
 
@@ -189,7 +189,7 @@ async def test_share_sms_missing_ids_raises_tool_error(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(action="share_sms", patient_id="123")
+        await intake_forms.manageIntakeForms(action="share_sms", patient_id="123")
 
     assert _tool_error_body(exc_info)["error"] == "patient_id, facility_id, and questionnaire_id required for share_sms"
 
@@ -203,7 +203,7 @@ async def test_share_portal_happy_path(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await intake_forms.manageIntakeForms.fn(
+    result = await intake_forms.manageIntakeForms(
         action="share_portal", patient_id="123", facility_id="9", questionnaire_id="456",
     )
 
@@ -220,7 +220,7 @@ async def test_share_portal_non_numeric_ids_return_clean_error_no_api_call(monke
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="share_portal", patient_id="123", facility_id="9", questionnaire_id="not-a-number",
         )
 
@@ -237,7 +237,7 @@ async def test_share_portal_missing_facility_id_raises_tool_error(monkeypatch) -
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="share_portal", patient_id="123", questionnaire_id="456",
         )
 
@@ -270,7 +270,7 @@ async def test_get_responses_happy_path(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await intake_forms.manageIntakeForms.fn(action="get_responses", answer_id="a1")
+    result = await intake_forms.manageIntakeForms(action="get_responses", answer_id="a1")
 
     assert "Responses retrieved" in result["guidance"]
     questions = result["questionnaire_with_answers"]["questions"]
@@ -327,7 +327,7 @@ async def test_get_responses_missing_answer_id_raises_tool_error(monkeypatch) ->
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(action="get_responses")
+        await intake_forms.manageIntakeForms(action="get_responses")
 
     assert _tool_error_body(exc_info)["error"] == "answer_id required for get_responses"
 
@@ -339,7 +339,7 @@ async def test_get_responses_pdf_happy_path(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await intake_forms.manageIntakeForms.fn(action="get_responses_pdf", answer_id="a1")
+    result = await intake_forms.manageIntakeForms(action="get_responses_pdf", answer_id="a1")
 
     assert "PDF retrieved" in result["guidance"]
 
@@ -353,7 +353,7 @@ async def test_create_template_accepts_questions_as_json_string(monkeypatch) -> 
     _patch_client(monkeypatch, fake)
 
     questions_str = json.dumps([_valid_question()])
-    result = await intake_forms.manageIntakeForms.fn(
+    result = await intake_forms.manageIntakeForms(
         action="create_template", questionnaire_name="Intake Form",
         questionnaire_type="General Questionnaire", comments="notes",
         questions=questions_str,
@@ -370,7 +370,7 @@ async def test_create_template_rejects_invalid_json_string_for_questions(monkeyp
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="create_template", questionnaire_name="Intake Form",
             questionnaire_type="General Questionnaire", comments="notes",
             questions="not-json{",
@@ -386,7 +386,7 @@ async def test_create_template_missing_required_fields_raises_tool_error(monkeyp
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(action="create_template")
+        await intake_forms.manageIntakeForms(action="create_template")
 
     assert "required for create_template" in _tool_error_body(exc_info)["error"]
 
@@ -397,7 +397,7 @@ async def test_create_template_questionnaire_name_too_short(monkeypatch) -> None
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="create_template", questionnaire_name="ab",
             questionnaire_type="General Questionnaire", comments="notes",
             questions=[_valid_question()],
@@ -413,7 +413,7 @@ async def test_create_template_invalid_questionnaire_type(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="create_template", questionnaire_name="Intake Form",
             questionnaire_type="New Patient Form",  # a real type, but fixed/practice-level — not creatable via this action
             comments="notes", questions=[_valid_question()],
@@ -429,7 +429,7 @@ async def test_create_template_notes_type_illegal_for_questionnaire_type(monkeyp
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="create_template", questionnaire_name="Screening Form",
             questionnaire_type="Pre-screening Form", comments="notes",
             # "Rating" is legal for Feedback Form, not Pre-screening Form.
@@ -452,7 +452,7 @@ async def test_create_template_forces_is_mandatory_false_for_widget_types(monkey
     fake = _FakeAPIClient(post_responses={"/questionnaire": {"questionnaire_id": 1}})
     _patch_client(monkeypatch, fake)
 
-    await intake_forms.manageIntakeForms.fn(
+    await intake_forms.manageIntakeForms(
         action="create_template", questionnaire_name="Intake Form",
         questionnaire_type="General Questionnaire", comments="notes",
         questions=[{"notes_type": "Allergies", "notes": "List allergies", "is_mandatory": True}],
@@ -467,7 +467,7 @@ async def test_create_template_does_not_force_is_mandatory_for_normal_questions(
     fake = _FakeAPIClient(post_responses={"/questionnaire": {"questionnaire_id": 1}})
     _patch_client(monkeypatch, fake)
 
-    await intake_forms.manageIntakeForms.fn(
+    await intake_forms.manageIntakeForms(
         action="create_template", questionnaire_name="Intake Form",
         questionnaire_type="General Questionnaire", comments="notes",
         questions=[_valid_question(is_mandatory=True)],
@@ -485,7 +485,7 @@ async def test_create_template_defaults_label_style_when_omitted(monkeypatch) ->
     fake = _FakeAPIClient(post_responses={"/questionnaire": {"questionnaire_id": 1}})
     _patch_client(monkeypatch, fake)
 
-    await intake_forms.manageIntakeForms.fn(
+    await intake_forms.manageIntakeForms(
         action="create_template", questionnaire_name="Intake Form",
         questionnaire_type="General Questionnaire", comments="notes",
         questions=[_valid_label()],
@@ -503,7 +503,7 @@ async def test_create_template_coerces_stringified_font_size(monkeypatch) -> Non
     fake = _FakeAPIClient(post_responses={"/questionnaire": {"questionnaire_id": 1}})
     _patch_client(monkeypatch, fake)
 
-    await intake_forms.manageIntakeForms.fn(
+    await intake_forms.manageIntakeForms(
         action="create_template", questionnaire_name="Intake Form",
         questionnaire_type="General Questionnaire", comments="notes",
         questions=[_valid_label(label_style={"font_size": "16"})],
@@ -519,7 +519,7 @@ async def test_create_template_rejects_invalid_label_style_enum(monkeypatch) -> 
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="create_template", questionnaire_name="Intake Form",
             questionnaire_type="General Questionnaire", comments="notes",
             questions=[_valid_label(label_style={"font_weight": "extra-bold"})],
@@ -538,7 +538,7 @@ async def test_create_template_question_with_options_missing_options(monkeypatch
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="create_template", questionnaire_name="Intake Form",
             questionnaire_type="General Questionnaire", comments="notes",
             questions=[{"notes_type": "Question with Options", "notes": "Pick one"}],
@@ -553,7 +553,7 @@ async def test_create_template_question_with_options_happy_path(monkeypatch) -> 
     fake = _FakeAPIClient(post_responses={"/questionnaire": {"questionnaire_id": 1}})
     _patch_client(monkeypatch, fake)
 
-    result = await intake_forms.manageIntakeForms.fn(
+    result = await intake_forms.manageIntakeForms(
         action="create_template", questionnaire_name="Intake Form",
         questionnaire_type="General Questionnaire", comments="notes",
         questions=[{
@@ -573,7 +573,7 @@ async def test_create_template_allergies_valid_options(monkeypatch) -> None:
     fake = _FakeAPIClient(post_responses={"/questionnaire": {"questionnaire_id": 1}})
     _patch_client(monkeypatch, fake)
 
-    result = await intake_forms.manageIntakeForms.fn(
+    result = await intake_forms.manageIntakeForms(
         action="create_template", questionnaire_name="Intake Form",
         questionnaire_type="General Questionnaire", comments="notes",
         questions=[{
@@ -594,7 +594,7 @@ async def test_create_template_allergies_rejects_value_outside_allow_list(monkey
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="create_template", questionnaire_name="Intake Form",
             questionnaire_type="General Questionnaire", comments="notes",
             questions=[{
@@ -615,7 +615,7 @@ async def test_create_template_rating_scale_valid(monkeypatch) -> None:
     fake = _FakeAPIClient(post_responses={"/questionnaire": {"questionnaire_id": 1}})
     _patch_client(monkeypatch, fake)
 
-    result = await intake_forms.manageIntakeForms.fn(
+    result = await intake_forms.manageIntakeForms(
         action="create_template", questionnaire_name="Intake Form",
         questionnaire_type="General Questionnaire", comments="notes",
         questions=[{"notes_type": "Rating Scale", "notes": "Rate your pain", "from_scale": 1, "to_scale": 5}],
@@ -630,7 +630,7 @@ async def test_create_template_rating_scale_range_too_wide(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="create_template", questionnaire_name="Intake Form",
             questionnaire_type="General Questionnaire", comments="notes",
             questions=[{"notes_type": "Rating Scale", "notes": "Rate your pain", "from_scale": 1, "to_scale": 20}],
@@ -646,7 +646,7 @@ async def test_create_template_rating_missing_description(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="create_template", questionnaire_name="Feedback Form",
             questionnaire_type="Feedback Form", comments="notes",
             questions=[{"notes_type": "Rating", "notes": "Rate your visit"}],
@@ -665,7 +665,7 @@ async def test_create_template_rejects_duplicate_widget_type(monkeypatch) -> Non
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="create_template", questionnaire_name="Intake Form",
             questionnaire_type="General Questionnaire", comments="notes",
             questions=[
@@ -683,7 +683,7 @@ async def test_create_template_full_happy_path(monkeypatch) -> None:
     fake = _FakeAPIClient(post_responses={"/questionnaire": {"questionnaire_id": 42}})
     _patch_client(monkeypatch, fake)
 
-    result = await intake_forms.manageIntakeForms.fn(
+    result = await intake_forms.manageIntakeForms(
         action="create_template", questionnaire_name="New Patient Intake",
         questionnaire_type="General Questionnaire", comments="Standard intake",
         questions=[_valid_label(), _valid_question()],
@@ -709,7 +709,7 @@ async def test_create_template_api_error_response(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await intake_forms.manageIntakeForms.fn(
+        await intake_forms.manageIntakeForms(
             action="create_template", questionnaire_name="Intake Form",
             questionnaire_type="General Questionnaire", comments="notes",
             questions=[_valid_question()],

@@ -13,6 +13,8 @@ record.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tools import patient_management
@@ -61,7 +63,10 @@ def _responses(n_vitals: int, n_encounters: int, has_more_page: str = "false"):
 
 async def _review(monkeypatch, fake, **kwargs):
     _patch(monkeypatch, fake)
-    return await patient_management.reviewPatientHistory.fn(patient_id="p1", **kwargs)
+    result = await patient_management.reviewPatientHistory(patient_id="p1", **kwargs)
+    # reviewPatientHistory carries an MCP App view, so its data is the JSON in
+    # the first text content block — the block cortex and NoEHR read.
+    return json.loads(result.content[0].text)
 
 
 @pytest.mark.asyncio

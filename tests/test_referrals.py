@@ -168,7 +168,7 @@ async def test_create_out_trusts_verify_get_over_mutation_echo(monkeypatch) -> N
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="create", direction="out",
         facility_id="f1", referral_date=datetime.date(2026, 8, 6),
         from_member="117", to_internal_member="2", patient_id="p1",
@@ -187,7 +187,7 @@ async def test_create_falls_back_to_mutation_response_if_verify_get_fails(monkey
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="create", direction="out",
         facility_id="f1", referral_date=datetime.date(2026, 8, 6),
         from_member="1", to_internal_member="2",
@@ -211,7 +211,7 @@ async def test_create_survives_non_dict_mutation_response(monkeypatch) -> None:
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="create", direction="out",
         facility_id="f1", referral_date=datetime.date(2026, 8, 6),
         from_member="1", to_internal_member="2",
@@ -227,7 +227,7 @@ async def test_create_out_missing_facility_or_date_returns_clean_error(monkeypat
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="create", direction="out", from_member="1", to_internal_member="2",
         )
 
@@ -241,7 +241,7 @@ async def test_create_out_missing_from_member_returns_clean_error(monkeypatch) -
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="create", direction="out",
             facility_id="f1", referral_date=datetime.date(2026, 8, 6), to_internal_member="2",
         )
@@ -257,7 +257,7 @@ async def test_create_out_requires_a_receiving_party(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="create", direction="out",
             facility_id="f1", referral_date=datetime.date(2026, 8, 6), from_member="1",
         )
@@ -272,7 +272,7 @@ async def test_create_in_requires_to_member_and_a_sending_party(monkeypatch) -> 
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="create", direction="in",
             facility_id="f1", referral_date=datetime.date(2026, 8, 6),
         )
@@ -297,7 +297,7 @@ async def test_create_response_masks_raw_notes_pointer_on_verify_fallback(monkey
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="create", direction="out",
         facility_id="f1", referral_date=datetime.date(2026, 8, 6),
         from_member="1", to_internal_member="2",
@@ -318,7 +318,7 @@ async def test_create_diagnoses_accepts_stringified_json(monkeypatch) -> None:
     )
     _patch_client(monkeypatch, fake)
 
-    await referrals.manageReferrals.fn(
+    await referrals.manageReferrals(
         action="create", direction="out",
         facility_id="f1", referral_date=datetime.date(2026, 8, 6),
         from_member="1", to_internal_member="2",
@@ -335,7 +335,7 @@ async def test_create_diagnoses_rejects_malformed_json_string(monkeypatch) -> No
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="create", direction="out",
             facility_id="f1", referral_date=datetime.date(2026, 8, 6),
             from_member="1", to_internal_member="2",
@@ -356,7 +356,7 @@ async def test_create_diagnoses_rejects_non_dict_list_elements(monkeypatch) -> N
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="create", direction="out",
             facility_id="f1", referral_date=datetime.date(2026, 8, 6),
             from_member="1", to_internal_member="2",
@@ -375,7 +375,7 @@ async def test_create_out_rejects_to_be_reviewed(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="create", direction="out",
             facility_id="f1", referral_date=datetime.date(2026, 8, 6),
             from_member="1", to_internal_member="2",
@@ -399,7 +399,7 @@ async def test_list_out_reads_the_real_wrapper_key(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(action="list", direction="out")
+    result = await referrals.manageReferrals(action="list", direction="out")
 
     assert result["total_count"] == 2
     assert "2 referral(s)" in result["guidance"]
@@ -412,7 +412,7 @@ async def test_list_in_reads_the_real_wrapper_key(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(action="list", direction="in")
+    result = await referrals.manageReferrals(action="list", direction="in")
 
     assert result["total_count"] == 1
 
@@ -430,7 +430,7 @@ async def test_list_masks_raw_notes_pointer_per_item(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(action="list", direction="out")
+    result = await referrals.manageReferrals(action="list", direction="out")
 
     assert result["referrals"][0].get("referral_notes") is None
     assert "_notes_fields_note" in result["referrals"][0]
@@ -442,7 +442,7 @@ async def test_list_no_results_reports_correctly(monkeypatch) -> None:
     fake = _FakeAPIClient(get_responses={"/referrals/out": {"referralout": []}})
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(action="list", direction="out")
+    result = await referrals.manageReferrals(action="list", direction="out")
 
     assert result["total_count"] == 0
     assert "No referrals found" in result["guidance"]
@@ -458,7 +458,7 @@ async def test_list_survives_wrapper_key_present_but_null(monkeypatch) -> None:
     fake = _FakeAPIClient(get_responses={"/referrals/out": {"referralout": None}})
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(action="list", direction="out")
+    result = await referrals.manageReferrals(action="list", direction="out")
 
     assert result["total_count"] == 0
     assert result["referrals"] == []
@@ -472,7 +472,7 @@ async def test_list_out_filter_params_use_confirmed_names(monkeypatch) -> None:
     fake = _FakeAPIClient(get_responses={"/referrals/out": {"referralout": []}})
     _patch_client(monkeypatch, fake)
 
-    await referrals.manageReferrals.fn(
+    await referrals.manageReferrals(
         action="list", direction="out",
         from_member="1", to_internal_member="2", to_external_member="3",
         patient_id="p1", facility_id="f1", response_status="Pending",
@@ -492,7 +492,7 @@ async def test_list_sends_explicit_page_and_per_page_zero(monkeypatch) -> None:
     fake = _FakeAPIClient(get_responses={"/referrals/out": {"referralout": []}})
     _patch_client(monkeypatch, fake)
 
-    await referrals.manageReferrals.fn(action="list", direction="out", page=0, per_page=0)
+    await referrals.manageReferrals(action="list", direction="out", page=0, per_page=0)
 
     _, sent_params = fake.get_calls[0]
     assert sent_params["page"] == 0
@@ -504,7 +504,7 @@ async def test_list_in_filter_params_use_confirmed_names(monkeypatch) -> None:
     fake = _FakeAPIClient(get_responses={"/referrals/in": {"referralin": []}})
     _patch_client(monkeypatch, fake)
 
-    await referrals.manageReferrals.fn(
+    await referrals.manageReferrals(
         action="list", direction="in",
         to_member="1", from_internal_member="2", from_external_member="3",
     )
@@ -525,7 +525,7 @@ async def test_list_rejects_response_status_invalid_for_this_direction(monkeypat
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="list", direction="out", response_status="Completed",
         )
 
@@ -545,7 +545,7 @@ async def test_get_out_unwraps_nested_fields(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(action="get", direction="out", referral_id="999")
+    result = await referrals.manageReferrals(action="get", direction="out", referral_id="999")
 
     assert result["ref_id"] == "999"
     assert result["patient_id"] == "p1"
@@ -566,7 +566,7 @@ async def test_get_masks_raw_notes_pointer(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(action="get", direction="out", referral_id="999")
+    result = await referrals.manageReferrals(action="get", direction="out", referral_id="999")
 
     assert result.get("referral_notes") is None
     assert "_notes_fields_note" in result
@@ -581,7 +581,7 @@ async def test_get_survives_non_dict_response(monkeypatch) -> None:
     fake = _FakeAPIClient(get_responses={"/referrals/out/999": "unexpected-response-shape"})
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(action="get", direction="out", referral_id="999")
+    result = await referrals.manageReferrals(action="get", direction="out", referral_id="999")
 
     assert "error" not in result
     assert result["raw_response"] == "unexpected-response-shape"
@@ -594,7 +594,7 @@ async def test_get_in_unwraps_nested_fields(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(action="get", direction="in", referral_id="500")
+    result = await referrals.manageReferrals(action="get", direction="in", referral_id="500")
 
     assert result["ref_in_id"] == "500"
 
@@ -605,7 +605,7 @@ async def test_get_missing_referral_id_returns_clean_error(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(action="get", direction="out")
+        await referrals.manageReferrals(action="get", direction="out")
 
     assert json.loads(str(exc_info.value))["error"] == "referral_id required for get"
 
@@ -637,7 +637,7 @@ async def test_update_out_merges_omitted_fields_from_existing_record(monkeypatch
 
     # Caller only wants to change priority — everything else should be
     # pulled from the existing record, not sent as null/omitted.
-    await referrals.manageReferrals.fn(
+    await referrals.manageReferrals(
         action="update", direction="out", referral_id="999", priority="Urgent",
     )
 
@@ -669,7 +669,7 @@ async def test_update_merges_diagnoses_and_insurance_from_existing_record(monkey
     )
     _patch_client(monkeypatch, fake)
 
-    await referrals.manageReferrals.fn(
+    await referrals.manageReferrals(
         action="update", direction="out", referral_id="999", priority="Urgent",
     )
 
@@ -692,7 +692,7 @@ async def test_update_explicit_diagnoses_wins_over_merged(monkeypatch) -> None:
     )
     _patch_client(monkeypatch, fake)
 
-    await referrals.manageReferrals.fn(
+    await referrals.manageReferrals(
         action="update", direction="out", referral_id="999", priority="Urgent",
         diagnoses=[{"name": "Diabetes", "code": "E11"}],
     )
@@ -722,7 +722,7 @@ async def test_update_fetches_referral_notes_from_notes_endpoint(monkeypatch) ->
     )
     _patch_client(monkeypatch, fake)
 
-    await referrals.manageReferrals.fn(
+    await referrals.manageReferrals(
         action="update", direction="out", referral_id="999", priority="Urgent",
     )
 
@@ -743,7 +743,7 @@ async def test_update_explicit_referral_notes_skips_notes_fetch(monkeypatch) -> 
     )
     _patch_client(monkeypatch, fake)
 
-    await referrals.manageReferrals.fn(
+    await referrals.manageReferrals(
         action="update", direction="out", referral_id="999", priority="Urgent",
         referral_notes="New note text.",
     )
@@ -770,7 +770,7 @@ async def test_update_warns_when_encounter_id_will_be_cleared(monkeypatch) -> No
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="update", direction="out", referral_id="999", priority="Urgent",
     )
 
@@ -792,7 +792,7 @@ async def test_update_no_encounter_warning_when_explicit_or_absent(monkeypatch) 
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="update", direction="out", referral_id="999", priority="Urgent",
         encounter_id="enc1",
     )
@@ -820,7 +820,7 @@ async def test_update_survives_non_dict_verify_and_mutation_response(monkeypatch
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="update", direction="out", referral_id="999", priority="Urgent",
     )
 
@@ -856,7 +856,7 @@ async def test_update_out_fails_when_merged_response_status_invalid_for_update(m
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="update", direction="out", referral_id="999", priority="Urgent",
         )
 
@@ -886,7 +886,7 @@ async def test_update_out_to_be_reviewed_guidance_names_cascade_and_restore_path
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="update", direction="out", referral_id="999", priority="Urgent",
         )
 
@@ -916,7 +916,7 @@ async def test_update_out_empty_string_status_does_not_trigger_fail_closed(monke
     )
     _patch_client(monkeypatch, fake)
 
-    await referrals.manageReferrals.fn(
+    await referrals.manageReferrals(
         action="update", direction="out", referral_id="999", priority="Urgent",
     )
 
@@ -943,7 +943,7 @@ async def test_update_in_drops_response_status_invalid_for_update_from_merge(mon
     )
     _patch_client(monkeypatch, fake)
 
-    await referrals.manageReferrals.fn(
+    await referrals.manageReferrals(
         action="update", direction="in", referral_id="999", priority="Urgent",
     )
 
@@ -961,7 +961,7 @@ async def test_update_out_fails_cleanly_if_required_fields_absent_everywhere(mon
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(action="update", direction="out", referral_id="999")
+        await referrals.manageReferrals(action="update", direction="out", referral_id="999")
 
     assert "facility_id, from_member, and patient_id" in json.loads(str(exc_info.value))["error"]
     assert fake.put_calls == []
@@ -979,7 +979,7 @@ async def test_update_fails_cleanly_if_referral_date_absent_everywhere(monkeypat
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(action="update", direction="out", referral_id="999")
+        await referrals.manageReferrals(action="update", direction="out", referral_id="999")
 
     assert "referral_date" in json.loads(str(exc_info.value))["error"]
     assert fake.put_calls == []
@@ -995,7 +995,7 @@ async def test_update_in_fails_cleanly_if_facility_id_absent_everywhere(monkeypa
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(action="update", direction="in", referral_id="500")
+        await referrals.manageReferrals(action="update", direction="in", referral_id="500")
 
     assert "facility_id" in json.loads(str(exc_info.value))["error"]
     assert fake.put_calls == []
@@ -1017,7 +1017,7 @@ async def test_update_in_ignores_facility_id_value_but_still_requires_it_present
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="update", direction="in", referral_id="500", priority="Urgent",
     )
 
@@ -1037,7 +1037,7 @@ async def test_update_fails_if_fetching_existing_record_errors(monkeypatch) -> N
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="update", direction="out", referral_id="999",
             facility_id="f1", from_member="1", patient_id="p1",
         )
@@ -1071,7 +1071,7 @@ async def test_update_trusts_verify_get_over_put_response_echo(monkeypatch) -> N
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="update", direction="out", referral_id="999", priority="Urgent",
     )
 
@@ -1096,7 +1096,7 @@ async def test_update_success_path_does_not_surface_notes_fields_at_all(monkeypa
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="update", direction="out", referral_id="999", priority="Urgent",
     )
 
@@ -1130,7 +1130,7 @@ async def test_update_response_masks_raw_notes_pointer_on_verify_fallback(monkey
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="update", direction="out", referral_id="999", priority="Urgent",
     )
 
@@ -1144,7 +1144,7 @@ async def test_update_missing_referral_id_returns_clean_error(monkeypatch) -> No
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(action="update", direction="out")
+        await referrals.manageReferrals(action="update", direction="out")
 
     assert json.loads(str(exc_info.value))["error"] == "referral_id required for update"
     assert fake.get_calls == []
@@ -1159,7 +1159,7 @@ async def test_update_in_rejects_completed(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="update", direction="in", referral_id="500", response_status="Completed",
         )
 
@@ -1198,7 +1198,7 @@ async def test_respond_out_trusts_verify_get_and_sends_correct_body(monkeypatch)
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="respond", direction="out", referral_id="999", facility_id="f1",
         patient_id="p1",
         response_date=datetime.date(2026, 8, 7),
@@ -1230,7 +1230,7 @@ async def test_respond_missing_patient_id_returns_clean_error(monkeypatch) -> No
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="respond", direction="out", referral_id="999", facility_id="f1",
             response_status="Reviewed",
         )
@@ -1250,7 +1250,7 @@ async def test_respond_survives_non_dict_verify_and_mutation_response(monkeypatc
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="respond", direction="out", referral_id="999", facility_id="f1",
         patient_id="p1",
         response_status="Reviewed",
@@ -1267,7 +1267,7 @@ async def test_respond_missing_facility_id_returns_clean_error(monkeypatch) -> N
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="respond", direction="out", referral_id="999", response_status="Reviewed",
         )
 
@@ -1290,7 +1290,7 @@ async def test_respond_out_does_not_send_diagnoses(monkeypatch) -> None:
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="respond", direction="out", referral_id="999", facility_id="f1",
         patient_id="p1",
         response_status="Reviewed",
@@ -1313,7 +1313,7 @@ async def test_respond_out_without_diagnoses_has_no_warning(monkeypatch) -> None
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="respond", direction="out", referral_id="999", facility_id="f1",
         patient_id="p1",
         response_status="Reviewed",
@@ -1335,7 +1335,7 @@ async def test_respond_out_drops_growth_ids_and_image_ids(monkeypatch) -> None:
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="respond", direction="out", referral_id="999", facility_id="f1",
         patient_id="p1", response_status="Reviewed",
         growth_ids="1,2", image_ids="3,4",
@@ -1358,7 +1358,7 @@ async def test_respond_in_sends_image_ids_but_not_growth_ids(monkeypatch) -> Non
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="respond", direction="in", referral_id="500", facility_id="f1",
         patient_id="p1", response_status="Completed",
         growth_ids="1,2", image_ids="3,4",
@@ -1379,7 +1379,7 @@ async def test_respond_in_sends_diagnoses_and_notes_cascade_quirk(monkeypatch) -
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="respond", direction="in", referral_id="500", facility_id="f1",
         patient_id="p1",
         response_status="Completed",
@@ -1401,7 +1401,7 @@ async def test_respond_missing_referral_id_returns_clean_error(monkeypatch) -> N
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(action="respond", direction="out")
+        await referrals.manageReferrals(action="respond", direction="out")
 
     assert json.loads(str(exc_info.value))["error"] == "referral_id required for respond"
     assert fake.post_calls == []
@@ -1414,7 +1414,7 @@ async def test_respond_no_content_returns_clean_error(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="respond", direction="out", referral_id="999", facility_id="f1",
             patient_id="p1",
         )
@@ -1439,7 +1439,7 @@ async def test_respond_response_masks_raw_notes_pointer_on_verify_fallback(monke
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="respond", direction="out", referral_id="999", facility_id="f1",
         patient_id="p1",
         response_notes="Patient seen, cleared for surgery.",
@@ -1464,7 +1464,7 @@ async def test_respond_out_rejects_received_lists_valid_values(monkeypatch) -> N
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="respond", direction="out", referral_id="999", facility_id="f1",
             response_status="Received",
         )
@@ -1483,7 +1483,7 @@ async def test_respond_out_accepts_to_be_reviewed(monkeypatch) -> None:
     )
     _patch_client(monkeypatch, fake)
 
-    result = await referrals.manageReferrals.fn(
+    result = await referrals.manageReferrals(
         action="respond", direction="out", referral_id="999", facility_id="f1",
         patient_id="p1",
         response_status="To Be Reviewed",
@@ -1499,7 +1499,7 @@ async def test_respond_in_rejects_reviewed(monkeypatch) -> None:
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await referrals.manageReferrals.fn(
+        await referrals.manageReferrals(
             action="respond", direction="in", referral_id="500", facility_id="f1",
             response_status="Reviewed",
         )

@@ -62,7 +62,7 @@ def _base_responses(soap=None, chart_type="SOAP"):
 
 async def _review(monkeypatch, fake):
     _patch_client(monkeypatch, fake)
-    return await encounter_management.manageEncounter.fn(
+    return await encounter_management.manageEncounter(
         action="review", patient_id="p1", encounter_id="e1",
     )
 
@@ -219,7 +219,7 @@ AUTO = {"template_id": "tA", "template_name": "Visit type SOAP", "position": "0"
 
 async def _update(monkeypatch, fake, **kwargs):
     monkeypatch.setattr(encounter_management, "CharmHealthAPIClient", lambda **kw: fake)
-    return await encounter_management.manageEncounter.fn(
+    return await encounter_management.manageEncounter(
         action="update", patient_id="p1", encounter_id="e1", **kwargs,
     )
 
