@@ -602,7 +602,7 @@ def _scope_error(e: Exception) -> bool:
 @clinical_support_mcp.tool(app=True)
 @with_tool_metrics()
 async def managePatientLabs(
-    action: Literal["list", "get_details", "order", "list_labs", "search_tests", "test_questions"],
+    action: Literal["list", "get_details", "order", "list_orders", "list_labs", "search_tests", "test_questions"],
     # Common fields
     patient_id: Optional[str] = None,
     group_id: Optional[str] = None,
@@ -667,6 +667,12 @@ async def managePatientLabs(
       (defaults to today, ignored if encounter_id is set), lab_order_id (add these
       tests to an existing open order instead of creating a new one), lab_notes,
       intra_office_notes, specimen_collection_date, specimen_additional_comments.
+    - "list_orders": Lab orders placed for a patient (requires patient_id), with
+      whether each reached the lab. e_order_status is the lab's side:
+      QUEUED (sent, not yet pulled by the lab), SUCCESS (the lab has it),
+      EXCEPTION (sending failed at Charm), ERROR (the lab rejected it). The lab
+      does not say why it rejected an order. order_status is the results side:
+      0 pending, 1 partial, 2 completed.
     - "list_labs": The labs this practice orders from (lab_id, lab_name).
     - "search_tests": Find a test in the practice's lab catalog (requires
       test_name; optional lab_name, page). Each match comes back ready to
@@ -838,6 +844,28 @@ async def managePatientLabs(
                     order_ids = response if isinstance(response, list) else (response or {}).get("lab_orders_list") or []
                     result = {"lab_order_ids": order_ids, "guidance": "Lab order placed." if order_ids else "Lab order call succeeded but returned no order IDs — verify against action='list'."}
                     return strip_empty_values(result)
+
+                case "list_orders":
+                    if not patient_id:
+                        return {"error": "patient_id required for list_orders",
+                                "guidance": "Give the patient whose orders to list."}
+                    response = await client.get("/labs/orders", params={"patient_id": patient_id})
+                    orders = [{
+                        "lab_order_id": o.get("lab_order_id"),
+                        "order_date": o.get("order_date"),
+                        "lab_name": o.get("lab_name"),
+                        "test_names": o.get("test_names") or [],
+                        # Renamed: the API spells it eORDER_STATUS, the one
+                        # upper-case key in an otherwise snake_case payload.
+                        "e_order_status": o.get("eORDER_STATUS") or None,
+                        "order_status": o.get("order_status"),
+                        "order_ref_number": o.get("order_ref_number"),
+                    } for o in (response or {}).get("lab_orders") or []]
+                    return strip_empty_values({
+                        "lab_orders": orders,
+                        "guidance": (f"{len(orders)} lab order(s). e_order_status SUCCESS means the lab has it; "
+                                     "ERROR means the lab rejected it." if orders else "No lab orders for this patient."),
+                    })
 
                 case "list_labs":
                     response = await client.get("/labs/search", params={"per_page": 200})
