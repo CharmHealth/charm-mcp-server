@@ -206,7 +206,12 @@ async def manageAppointments(
                             appt_response = await client.get(f"/appointment/{appointment_id}")
                             appt = appt_response.get("output_string") or appt_response.get("appointment") or {}
                             if appt:
-                                patient_id = patient_id or str(appt.get("practice_patient_id", ""))
+                                # CONFIRMED LIVE (CH probe, 2026-09-02): GET /appointment/{id}'s
+                                # response uses "patient_id", not "practice_patient_id" — that
+                                # field name only exists on the RESCHEDULE POST response, not
+                                # this GET. patient_id silently stayed empty on every auto-fill
+                                # attempt as a result.
+                                patient_id = patient_id or str(appt.get("patient_id", ""))
                                 facility_id = facility_id or str(appt.get("facility_id", ""))
                                 provider_id = provider_id or str(appt.get("member_id", ""))
                                 if not visit_type_id and appt.get("visit_type_id"):

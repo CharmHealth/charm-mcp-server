@@ -458,7 +458,7 @@ async def managePatientDrugs(
     <instructions>
     Actions:
     - "add": Log a drug (medication/supplement/vitamin) the patient takes — no encounter tie required. Requires drug_name, directions for medications; drug_name, dosage for supplements.
-    - "prescribe": Same as "add" but for medication only, and REQUIRES encounter_id — this is what actually marks it as a prescription written during a visit rather than a medication-history log entry. Use this, not "add", when a clinician is writing a new prescription during an encounter. There is no lookup action here to discover real catalog values (drug_details_id, generic_drug_id, etc.) — the practice's drug-catalog lookup endpoint (GET /drug/search) requires an OAuth scope this app's credentials don't carry, confirmed via live testing, not fixable from this tool. drug_name is plain free text; a bad/unmatched name may be rejected by the real API as a catalog mismatch — that's expected, not a bug here.
+    - "prescribe": Same as "add" but for medication only, and REQUIRES encounter_id — this is what actually marks it as a prescription written during a visit rather than a medication-history log entry. CONFIRMED against the real backend's PatientMedications write path (internal API reference notes, not the published docs, which don't cover this): "the only behavioral fork is encounter_id — if present, the backend sets ADDED_AS = 'Prescription' and writes a timeline entry; if absent, ADDED_AS = 'Medication'. Same table, same params otherwise." Use this, not "add", when a clinician is writing a new prescription during an encounter. There is no lookup action here to discover real catalog values (drug_details_id, generic_drug_id, etc.) — the practice's drug-catalog lookup endpoint (GET /drug/search) requires an OAuth scope this app's credentials don't carry, confirmed via live testing, not fixable from this tool. drug_name is plain free text; a bad/unmatched name may be rejected by the real API as a catalog mismatch — that's expected, not a bug here.
     - "update": Modify existing prescription (requires record_id + fields to change). IMPORTANT: drug name and strength CANNOT be changed via update — use discontinue + add instead. Updatable fields: directions, dispense, refills, status.
     - "discontinue": Stop drug (requires record_id)
     - "list": Show all patient drugs by type (filter by substance_type, optionally filter by status)
@@ -727,7 +727,19 @@ async def managePatientDrugs(
                         if intake_type:
                             supplement_data[0]["intake_type"] = intake_type
                         if refills:
-                            supplement_data[0]["refills"] = int(refills) if isinstance(refills, str) else refills
+                            # CONFIRMED against security-api-charts.xml: addSupplementJSON's
+                            # refills is type="int" — unlike medications' drugRefills regex,
+                            # there's no "PRN"/"-1" string form here at all. int(refills) on
+                            # a caller-supplied "PRN" (documented valid for medications, not
+                            # supplements) used to fall through to the generic outer handler
+                            # instead of this tool's own {"error", "guidance"} convention.
+                            try:
+                                supplement_data[0]["refills"] = int(refills) if isinstance(refills, str) else refills
+                            except (ValueError, TypeError):
+                                return {
+                                    "error": f"refills='{refills}' is not valid for a supplement",
+                                    "guidance": "For supplements, refills must be a plain integer (e.g. refills=3) — unlike medications, 'PRN'/'-1' aren't accepted here."
+                                }
                         if route:
                             supplement_data[0]["route"] = route
                         if dose_form:
@@ -801,6 +813,16 @@ async def managePatientDrugs(
                         if directions:
                             update_data["directions"] = directions
                         if refills:
+                            # CONFIRMED against security-api-charts.xml: editMedicationJSON's
+                            # refills uses the identical drugRefills regex as
+                            # addEHRMedicationJSON — same value accepted going in via add
+                            # shouldn't be refused going in via update. Was unchecked here,
+                            # so an invalid refills failed at the API instead of cleanly.
+                            if not re.fullmatch(r"[0-9]{1,2}|PRN|-1", str(refills)):
+                                return {
+                                    "error": f"refills='{refills}' is not valid",
+                                    "guidance": "refills must be a 1-2 digit number (e.g. '3'), 'PRN', or '-1' (unlimited), per CharmHealth's documented pattern."
+                                }
                             update_data["refills"] = refills
                         if status:
                             update_data["is_active"] = status == "active"

@@ -72,10 +72,17 @@ class _FakeAPIClient:
 
     async def get(self, endpoint, params=None):
         self.get_calls.append((endpoint, params or {}))
-        # Defaults to {} for an unconfigured endpoint (e.g. update's notes
-        # sub-resource fetch, made on every update unless referral_notes was
-        # already supplied) rather than KeyError — tests that don't care
-        # about that call don't need to configure a response for it.
+        # Defaults to {} for an unconfigured endpoint rather than KeyError —
+        # tests that don't care about a given GET don't need to configure a
+        # response for it. The notes sub-resource is special-cased to the
+        # real "no notes" shape (CONFIRMED LIVE 2026-09-02: a clean success
+        # with content="", not an error/404) rather than a bare {} — update
+        # now fails closed on an unrecognized notes response, so tests that
+        # don't care about notes still need a shape update's merge logic
+        # actually recognizes as "no notes" rather than "fetch failed".
+        if endpoint not in self._get and endpoint.endswith("/notes"):
+            notes_key = "referrals_out_notes" if "/out/" in endpoint else "referrals_in_notes"
+            return {"code": "0", "message": "success", notes_key: {"content": ""}}
         responses = self._get.get(endpoint, {})
         if isinstance(responses, list):
             idx = min(self._get_counts.get(endpoint, 0), len(responses) - 1)
@@ -754,6 +761,88 @@ async def test_update_explicit_referral_notes_skips_notes_fetch(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
+async def test_update_proceeds_when_notes_endpoint_confirms_no_notes(monkeypatch) -> None:
+    """CONFIRMED LIVE (2026-09-02): a referral that's never had notes
+    returns a clean success with content="" — a real, safe "no notes"
+    answer, not a failure. Must not be confused with a fetch failure."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": _get_out({
+                "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "from_member_id": "1", "referral_date": "2026-08-06",
+            }),
+            "/referrals/out/999/notes": {
+                "code": "0", "message": "success",
+                "referrals_out_notes": {"content": ""},
+            },
+        },
+        put_responses={"/referrals/out/999": _mutation({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    result = await referrals.manageReferrals.fn(
+        action="update", direction="out", referral_id="999", priority="Urgent",
+    )
+
+    assert "error" not in result
+    _, sent_body = fake.put_calls[0]
+    assert "referral_notes" not in sent_body
+
+
+@pytest.mark.asyncio
+async def test_update_fails_closed_when_notes_fetch_errors(monkeypatch) -> None:
+    """A failed notes fetch must NOT be silently treated as "no notes" —
+    updateReferralOut nulls referral_notes unconditionally if it's absent
+    from the request, orphaning the file with no undo. Fail the update
+    instead of guessing it's safe to proceed."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": _get_out({
+                "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "from_member_id": "1", "referral_date": "2026-08-06",
+            }),
+            "/referrals/out/999/notes": {"error": "HTTP 500: Internal Error"},
+        },
+        put_responses={"/referrals/out/999": _mutation({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await referrals.manageReferrals.fn(
+            action="update", direction="out", referral_id="999", priority="Urgent",
+        )
+
+    assert "notes" in json.loads(str(exc_info.value))["error"].lower()
+    assert fake.put_calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_fails_closed_when_notes_response_shape_unrecognized(monkeypatch) -> None:
+    """Same as a fetch error — an unrecognized shape (missing the expected
+    wrapper key) is not distinguishable from "no notes" and must not be
+    treated as safe to proceed."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": _get_out({
+                "ref_id": "999", "patient_id": "p1", "facility_id": "f1",
+                "from_member_id": "1", "referral_date": "2026-08-06",
+            }),
+            "/referrals/out/999/notes": {"code": "0", "message": "success"},
+        },
+        put_responses={"/referrals/out/999": _mutation({"ref_id": "999"})},
+    )
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await referrals.manageReferrals.fn(
+            action="update", direction="out", referral_id="999", priority="Urgent",
+        )
+
+    assert "notes" in json.loads(str(exc_info.value))["error"].lower()
+    assert fake.put_calls == []
+
+
+@pytest.mark.asyncio
 async def test_update_warns_when_encounter_id_will_be_cleared(monkeypatch) -> None:
     """related_encounter_id has no recovery path (not in "get", no
     sub-resource) — genuinely wiped if omitted. Must warn instead of
@@ -798,6 +887,31 @@ async def test_update_no_encounter_warning_when_explicit_or_absent(monkeypatch) 
     )
 
     assert "WARNING" not in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_update_fails_closed_on_unrecognized_get_shape(monkeypatch) -> None:
+    """_unwrap_get_response always returns a dict, but that dict can still
+    be the wrong shape if the response didn't match the expected wrapper —
+    its fallback returns whatever it got unchanged. A dict with none of
+    the real referral fields must not silently become an empty merge
+    base, which would blank every field the caller didn't explicitly
+    resend. Checked via the one field every real "get" has always had:
+    ref_id for "out"."""
+    fake = _FakeAPIClient(
+        get_responses={
+            "/referrals/out/999": {"code": "0", "message": "success"},  # no referral_out, no ref_id
+        },
+    )
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await referrals.manageReferrals.fn(
+            action="update", direction="out", referral_id="999", priority="Urgent",
+        )
+
+    assert "unexpected" in json.loads(str(exc_info.value))["guidance"].lower()
+    assert fake.put_calls == []
 
 
 @pytest.mark.asyncio
