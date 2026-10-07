@@ -160,3 +160,18 @@ async def test_resolved_token_reaches_the_api_client(monkeypatch) -> None:
     await billing.managePatientBilling(action="get_balance", patient_id="p1")
 
     assert captured["access_token"] == "end-to-end-token"
+
+
+def test_no_tool_reads_request_headers_itself() -> None:
+    """Credentials resolve in one place, resolve_auth, which is also where the
+    CHARMHEALTH_ALLOW_SERVER_CREDENTIALS gate lives. A tool that calls
+    get_http_headers() itself skips that gate, so on a hosted server a tokenless
+    request is answered with the server's own account. It also drops bearer
+    tokens. manageReferrals arrived from main that way, in a new file that merged
+    without a conflict, so nothing short of a check like this would flag it."""
+    from pathlib import Path
+
+    tools_dir = Path(__file__).resolve().parent.parent / "src" / "tools"
+    offenders = sorted(p.name for p in tools_dir.glob("*.py") if "get_http_headers" in p.read_text())
+
+    assert offenders == []
