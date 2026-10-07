@@ -33,6 +33,7 @@ mcp_composite_server.mount(server=task_management_mcp)
 mcp_composite_server.mount(server=communication_mcp)
 mcp_composite_server.mount(server=billing_mcp)
 mcp_composite_server.mount(server=intake_forms_mcp)
+mcp_composite_server.mount(server=referrals_mcp)
 
 @mcp_composite_server.custom_route("/health", methods=["GET"])
 async def health_check(request: Request) -> JSONResponse:
