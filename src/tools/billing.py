@@ -463,9 +463,21 @@ async def manageEncounterProcedures(
                             decoded = json.loads(related_diagnosis_ids)
                         except json.JSONDecodeError:
                             decoded = None
-                        related_diagnosis_ids = decoded if isinstance(decoded, list) else [
-                            d.strip() for d in related_diagnosis_ids.split(",") if d.strip()
-                        ]
+                        if isinstance(decoded, list):
+                            related_diagnosis_ids = decoded
+                        else:
+                            # Tolerate a Python-repr list ("['d1', 'd2']") that isn't
+                            # valid JSON because of its single quotes — strip the outer
+                            # brackets and any quote characters before the plain
+                            # comma-split, so this doesn't degrade into mangled entries
+                            # like "['d1'" (PR #22 review, Vibhu, 2026-10-06).
+                            stripped = related_diagnosis_ids.strip()
+                            if stripped.startswith("[") and stripped.endswith("]"):
+                                stripped = stripped[1:-1]
+                            related_diagnosis_ids = [
+                                d.strip().strip("'\"") for d in stripped.split(",")
+                                if d.strip().strip("'\"")
+                            ]
                     elif related_diagnosis_ids is not None and not isinstance(related_diagnosis_ids, list):
                         return {
                             "error": "related_diagnosis_ids must be a comma-separated string or an array of diagnosis IDs",
@@ -541,8 +553,12 @@ async def manageEncounterProcedures(
                         result["consultation_cpt_map_id"] = consultation_cpt_map_id
                     elif isinstance(procedures, list) and len(procedures) == 1 and isinstance(procedures[0], dict):
                         new_id = procedures[0].get("consultation_cpt_map_id")
-                        if isinstance(new_id, str) and new_id.strip():
-                            result["consultation_cpt_map_id"] = new_id
+                        # Normalize to a string regardless of whether the EHR returns
+                        # this id as a string or a number — str-only used to silently
+                        # drop an int id, sending cortex's Undo back to guessing by
+                        # position (PR #22 review, Vibhu, 2026-10-06).
+                        if new_id is not None and str(new_id).strip():
+                            result["consultation_cpt_map_id"] = str(new_id)
 
                     result["guidance"] = f"Procedure {'added to' if action == 'add' else 'updated on'} the encounter. Use action='list' to see the full current set, or action='delete' with consultation_cpt_map_id to remove one."
                     return strip_empty_values(result)

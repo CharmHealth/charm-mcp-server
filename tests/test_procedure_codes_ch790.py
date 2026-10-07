@@ -329,6 +329,27 @@ async def test_add_procedure_accepts_json_encoded_array_for_diagnosis_links(monk
 
 
 @pytest.mark.asyncio
+async def test_add_procedure_tolerates_python_repr_list_for_diagnosis_links(monkeypatch) -> None:
+    """A Python-repr list string ("['d1', 'd2']") isn't valid JSON — its
+    single quotes fail json.loads. Before this fix the fallback comma-split
+    ran on the raw string, mangling it into ["['d1'", "'d2']"] instead of
+    cleanly-parsed IDs (PR #22 review, Vibhu, 2026-10-06)."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/encounters/e1/procedures": {"procedures": []},
+    })
+    _patch_client(monkeypatch, billing, fake)
+
+    await billing.manageEncounterProcedures.fn(
+        action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
+        related_diagnosis_ids="['d1', 'd2']",
+    )
+
+    _, sent_data = fake.post_calls[0]
+    procedure_item = sent_data["procedures"][0]
+    assert procedure_item["related_diagnosis_ids"] == ["d1", "d2"]
+
+
+@pytest.mark.asyncio
 async def test_add_procedure_invoice_already_generated_error_is_explained(monkeypatch) -> None:
     """addOrUpdateProcedure throws FinanceException.INVOICE_GENERATED when an
     invoice already exists for the encounter and skip_invoice_check wasn't set —
@@ -500,6 +521,25 @@ async def test_add_response_includes_top_level_consultation_cpt_map_id_when_unam
     )
 
     assert result["consultation_cpt_map_id"] == "cpt-new"
+
+
+@pytest.mark.asyncio
+async def test_add_response_normalizes_integer_consultation_cpt_map_id_to_string(monkeypatch) -> None:
+    """Before this fix, an int id from the EHR was silently dropped (the
+    check was `isinstance(new_id, str)`), sending cortex's Undo back to
+    guessing by position (PR #22 review, Vibhu, 2026-10-06)."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/encounters/e1/procedures": {"procedures": [
+            {"consultation_cpt_map_id": 12345, "code_id": "c1"},
+        ]},
+    })
+    _patch_client(monkeypatch, billing, fake)
+
+    result = await billing.manageEncounterProcedures.fn(
+        action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
+    )
+
+    assert result["consultation_cpt_map_id"] == "12345"
 
 
 @pytest.mark.asyncio
