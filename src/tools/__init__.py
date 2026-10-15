@@ -54,7 +54,8 @@ from .intake_forms import (
 
 from .billing import (
     billing_mcp,
-    managePatientBilling
+    managePatientBilling,
+    manageEncounterProcedures
 )
 
 from .referrals import (
@@ -91,6 +92,7 @@ __all__ = [
     "manageIntakeForms",
     "billing_mcp",
     "managePatientBilling",
+    "manageEncounterProcedures",
     "referrals_mcp",
     "manageReferrals"
 ]
