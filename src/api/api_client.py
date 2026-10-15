@@ -3,6 +3,7 @@ import asyncio
 import time
 import os
 from dotenv import load_dotenv
+from fastmcp.server.dependencies import get_http_headers
 import logging
 from typing import Optional, Dict, Any
 from asyncio import Lock
@@ -28,12 +29,16 @@ class CharmHealthAPIClient:
                  token_url: Optional[str] = None,
                  max_retries: int = 3,
                  timeout: int = 30):
+        # HTTP tools already pass the remaining credentials explicitly.
+        # These three fields also need request scope for multi-practice hosts;
+        # get_http_headers() returns {} for stdio, retaining env defaults there.
+        headers = get_http_headers()
         self.base_url = base_url or os.getenv("CHARMHEALTH_BASE_URL")
-        self.api_key = api_key or os.getenv("CHARMHEALTH_API_KEY")
+        self.api_key = api_key or headers.get("x-charmhealth-api-key") or os.getenv("CHARMHEALTH_API_KEY")
         self.refresh_token = refresh_token or os.getenv("CHARMHEALTH_REFRESH_TOKEN")
-        self.client_id = client_id or os.getenv("CHARMHEALTH_CLIENT_ID")
+        self.client_id = client_id or headers.get("x-charmhealth-client-id") or os.getenv("CHARMHEALTH_CLIENT_ID")
         self.client_secret = client_secret or os.getenv("CHARMHEALTH_CLIENT_SECRET")
-        self.redirect_uri = redirect_uri or os.getenv("CHARMHEALTH_REDIRECT_URI")
+        self.redirect_uri = redirect_uri or headers.get("x-charmhealth-redirect-uri") or os.getenv("CHARMHEALTH_REDIRECT_URI")
         self.token_url = token_url or os.getenv("CHARMHEALTH_TOKEN_URL")
 
         # Flexible validation: require refresh_token and client_id (allow env vars OR passed credentials)
