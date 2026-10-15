@@ -13,6 +13,25 @@ categories, listed in the order we'd like them addressed.
 
 ---
 
+## Update — 2026-10-14
+
+Re-verified all 4 asks below by calling the live production API directly (via `charm-mcp-server`
+pointed at the `ehr2` OAuth app registration):
+
+- **`patient.referral` (item 2) — fixed.** `manageReferrals(action="list", direction="out")` now
+  returns real data (25 referrals) instead of `HTTP 401`. Thank you.
+- **Recalls `add` scope mismatch (item 3) — fixed.** `POST /patients/{id}/recalls` now succeeds
+  instead of `HTTP 400 "Internal Error"`. Verified live — created a test recall on the "Amy Test
+  patient" record, confirmed it persisted, then deleted it to clean up.
+- **`patient.quicknotes` (item 1) — still blocked.** `managePatientNotes` still gets `HTTP 401`
+  "Unauthorized access" on every action. Re-confirmed this is not a client-side bug: our code calls
+  `GET /patients/{id}/quicknotes` (and the matching POST/PUT/DELETE paths below), which match
+  `charm-charmehr`'s own `security-api-patients.xml:533-549` byte-for-byte — same path, same
+  method, same `oauthscope="patient.quicknotes"` requirement on every verb, no copy-paste scope
+  mismatch like item 3 had. This one still needs the scope grant.
+- **WhatsApp endpoint (item 4)** — not retested this round; still a client-side fix on our end, not
+  something you need to action.
+
 ## 1. Missing OAuth scopes — please grant these to our production app registration
 
 ### `patient.quicknotes` — blocks `managePatientNotes` entirely (all 4 actions)
@@ -133,12 +152,12 @@ restriction — no action needed from the platform team, just flagging for compl
 
 ## Summary — what we're actually asking for
 
-| # | Scope/endpoint | Ask |
-|---|---|---|
-| 1 | `patient.quicknotes` | Grant to production app registration |
-| 2 | `patient.referral` | Grant to production app registration (already present in sandbox) |
-| 3 | `POST /patients/{id}/recalls` (`oauthscope="patient.chartnote"`) | Confirm intended scope; likely fix to `patient.recall` |
-| 4 | `POST /messages/whatsapp/send_free_form_messages` (no `oauthscope`) | Confirm whether OAuth-exposed; if so, assign a scope so we can fix our path |
+| # | Scope/endpoint | Ask | Status (2026-10-14) |
+|---|---|---|---|
+| 1 | `patient.quicknotes` | Grant to production app registration | **Still open** — re-confirmed not a code issue |
+| 2 | `patient.referral` | Grant to production app registration (already present in sandbox) | **Fixed** |
+| 3 | `POST /patients/{id}/recalls` (`oauthscope="patient.chartnote"`) | Confirm intended scope; likely fix to `patient.recall` | **Fixed** |
+| 4 | `POST /messages/whatsapp/send_free_form_messages` (no `oauthscope`) | Confirm whether OAuth-exposed; if so, assign a scope so we can fix our path | Not retested |
 
 Items 5–7 (recalls delete 500, SMS, tasks in-progress) require no platform action — included only
 for completeness/context.

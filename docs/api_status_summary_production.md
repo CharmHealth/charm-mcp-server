@@ -4,6 +4,14 @@ Post-fix status for every tool/action tested against production. Full investigat
 causes, and sandbox-vs-production diffs are in
 [`api_probe_results_production.md`](api_probe_results_production.md) — this file is just the tables.
 
+**Update — 2026-10-14:** re-verified the 4 items flagged to the platform team in
+[`api_scope_gaps_for_platform_team.md`](api_scope_gaps_for_platform_team.md) by calling the live
+production API directly. `patient.referral` and the `recalls` `add` scope mismatch are both now
+**fixed** (moved to Working below). `patient.quicknotes` is still **blocked** — re-confirmed our
+endpoint/method/path exactly match the backend's own registration
+(`security-api-patients.xml:533-549` in `charm-charmehr`), so this remains purely a missing scope
+grant, not a client-side bug. WhatsApp send was not retested this round.
+
 **⚠️ This run caused real side effects: a real SMS (`manageMessages`), a real SMS + portal share of an
 intake form (`manageIntakeForms`), a real PHR invite (`managePatientFiles`), and a real questionnaire
 template creation — all against the "Amy Test patient" record (`513000019594065`) in this production
@@ -71,18 +79,18 @@ account.**
 | manageIntakeForms | share_sms | **Works in production** (sends a real SMS) — 404s in sandbox |
 | manageIntakeForms | share_portal | **Works in production** (real portal share) — 404s in sandbox |
 | manageIntakeForms | get_responses | Correctly rejects invalid answer_id |
+| managePatientRecalls | add | **Fixed as of 2026-10-14** — scope mismatch resolved, now succeeds. Verified live (created + deleted a test recall on the Amy Test patient) |
+| **manageReferrals** | **list (direction=out)** | **Fixed as of 2026-10-14** — `patient.referral` now granted in production, returned 25 real referrals |
 
 ## ❌ Blocked
 
 | Tool | Action | Reason |
 |---|---|---|
 | managePatientVitals | delete | Action doesn't exist in code (doc/code mismatch) — same as sandbox |
-| managePatientNotes | list, add, delete (all actions) | `HTTP 401` "Unauthorized access" — same as sandbox, real OAuth-scope gap |
-| managePatientRecalls | add | `HTTP 400 "Internal Error"` — same as sandbox |
+| managePatientNotes | list, add, delete (all actions) | `HTTP 401` "Unauthorized access" — same as sandbox, real OAuth-scope gap. **Re-confirmed 2026-10-14**: endpoint/method/path verified exactly correct against `charm-charmehr`'s `security-api-patients.xml:533-549`, so this is still purely a missing `patient.quicknotes` grant, not a code issue. |
 | managePatientRecalls | delete | `HTTP 500 "Internal Error"` — sandbox got 401 instead; different failure mode, same net result |
 | manageTasks | change_status (docstring's `new_status` param) | Param doesn't exist — doc/code mismatch, same as sandbox |
 | manageMessages | send (channel=whatsapp) | `HTTP 404 "Invalid URL Passed"` — reproduces identically in both environments; genuinely nonexistent endpoint |
-| **manageReferrals** | **create (direction=out), list, get, update, respond** | **`HTTP 401` "Unauthorized access" — NEW blocker not present in sandbox, where all of these work.** Production-only OAuth-scope/permission gap. |
 | manageFax | send, status | Removed entirely — endpoints confirmed not in CharmHealth's documented API surface (commit `b654fe5`) |
 
 ## ⚠️ Inconclusive (data-dependent, needs more info to confirm)
