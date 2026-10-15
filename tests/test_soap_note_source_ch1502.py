@@ -113,6 +113,36 @@ async def test_review_surfaces_soap_entries_and_notes(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_entry_with_null_metadata_keeps_the_full_key_set(monkeypatch) -> None:
+    """strip_empty_values recurses into every dict in a list, including each
+    soap_entries item — an entry whose entry_name/entry_type/entry_chart_section
+    came back null or "" from the EHR must not silently lose that key. The
+    per-entry contract promises all five keys on every entry, regardless of
+    which fields are null upstream (caught in PR review)."""
+    sparse_entry = {
+        "entry_id": 9,
+        "entry_name": None,
+        "entry_type": "",
+        "entry_chart_section": "Symptoms",
+        "answer": "yes",
+        "is_entry_deleted": "false",
+        "is_answer_deleted": "false",
+    }
+    fake = _FakeAPIClient(get_responses=_base_responses(soap={
+        "soap_encounter": {"entries": [sparse_entry], "notes": {}},
+    }))
+
+    result = await _review(monkeypatch, fake)
+
+    entry = result["encounter_details"]["soap_entries"][0]
+    assert set(entry.keys()) == {
+        "entry_id", "entry_name", "entry_type", "entry_chart_section", "answer",
+    }
+    assert entry["entry_name"] is None
+    assert entry["entry_type"] == ""
+
+
+@pytest.mark.asyncio
 async def test_entry_id_is_passed_through_as_a_string(monkeypatch) -> None:
     """cortex cites entry_id, so an int from the API must become a string, not
     silently stay an int that a downstream citation check could mismatch."""

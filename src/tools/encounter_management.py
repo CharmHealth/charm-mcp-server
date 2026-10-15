@@ -547,10 +547,17 @@ async def manageEncounter(
                     # soap_notes == {} on a successful-but-empty read. The
                     # contract requires the key present whenever the read
                     # succeeded, even empty — only a failed read (soap_encounter
-                    # is None) omits it. soap_entries doesn't need this: empty
-                    # lists survive strip_empty_values by default.
+                    # is None) omits it. soap_entries (the list itself) doesn't
+                    # need this: empty lists survive strip_empty_values by
+                    # default. But strip_empty_values also recurses *inside*
+                    # each soap_entries item, so an entry whose entry_name/
+                    # entry_type/entry_chart_section came back null or "" from
+                    # the EHR would silently lose that key — breaking the
+                    # contract's promise that every entry always carries all
+                    # five keys. Reinserting the unstripped list fixes both.
                     if soap_encounter is not None:
                         review_response["encounter_details"]["soap_notes"] = encounter_details["soap_notes"]
+                        review_response["encounter_details"]["soap_entries"] = encounter_details["soap_entries"]
                     return review_response
             
                 case "sign":
