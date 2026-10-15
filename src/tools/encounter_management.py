@@ -44,29 +44,117 @@ def _describe_attached_templates(encounter_details: dict) -> str:
     )
 
 
-async def _fetch_encounter_templates(client, encounter_id):
-    """Every template record on an encounter, soft-deleted ones included.
+async def _fetch_soap_encounter(client, encounter_id):
+    """The raw soap_encounter payload for an encounter — templates, entries
+    and notes all come from this one call.
 
-    Returns None only when the read failed. CharmHealth answers
-    /soap/encounters/{id} with success for every chart type — Comprehensive,
-    Brief and untyped charts get an empty template list, and so does an
-    encounter id that doesn't exist (checked live 2026-09-23). So a genuine
-    answer is always a list, possibly empty, and None always means "unknown".
-    Callers must never read None as "no templates".
+    Returns None only when the read failed or the response doesn't have the
+    expected shape. CharmHealth answers /soap/encounters/{id} with success
+    for every chart type — Comprehensive, Brief and untyped charts get an
+    empty templates/entries list, and so does an encounter id that doesn't
+    exist (checked live 2026-09-23). So a genuine answer is always a dict,
+    and None always means "unknown". Callers must never read None as "there's
+    nothing here" — see attached_templates_unavailable / soap_note_unavailable,
+    which exist specifically so that distinction survives into the response.
     """
     try:
         response = await client.get(f"/soap/encounters/{encounter_id}")
     except Exception as e:
-        logger.warning(f"Could not fetch attached SOAP templates: {e}")
+        logger.warning(f"Could not fetch SOAP encounter data: {e}")
         return None
     soap_encounter = response.get("soap_encounter") if isinstance(response, dict) else None
     if not isinstance(soap_encounter, dict):
+        return None
+    return soap_encounter
+
+
+async def _fetch_encounter_templates(client, encounter_id):
+    """Every template record on an encounter, soft-deleted ones included.
+
+    Returns None only when the read failed — see _fetch_soap_encounter.
+    Callers must never read None as "no templates".
+    """
+    soap_encounter = await _fetch_soap_encounter(client, encounter_id)
+    if soap_encounter is None:
         return None
     return [t for t in (soap_encounter.get("templates") or []) if isinstance(t, dict)]
 
 
 def _is_live_template(template: dict) -> bool:
     return str(template.get("is_template_deleted", "")).lower() != "true"
+
+
+# The EHR's own soap_encounter["notes"] field names (CH-1502's response
+# contract — cortex cites soap_notes entries by these exact names, so they
+# must stay the EHR's names, not be renamed for readability).
+_SOAP_NOTE_FIELDS = (
+    "physical_examination",
+    "assessment_notes",
+    "history_of_present_illness",
+    "past_medical_history",
+    "family_history",
+    "social_history",
+    "treatment_notes",
+    "instructions",
+    "diets",
+    "life_style",
+)
+
+
+def _is_live_entry(entry: dict) -> bool:
+    return (
+        str(entry.get("is_entry_deleted", "")).lower() != "true"
+        and str(entry.get("is_answer_deleted", "")).lower() != "true"
+    )
+
+
+def _extract_soap_entries(soap_encounter: dict) -> list:
+    """soap_entries per CH-1502's response contract.
+
+    Live entries only, with a live, non-empty answer. entry_id is cast to a
+    string because cortex cites it. answer is passed through raw — the
+    EHR's "^^"/">>" checklist encoding and any HTML are decoded entirely on
+    the cortex side (CH-1368), not here.
+    """
+    result = []
+    for entry in soap_encounter.get("entries") or []:
+        if not isinstance(entry, dict) or not _is_live_entry(entry):
+            continue
+        answer = entry.get("answer")
+        if not answer:
+            continue
+        result.append({
+            "entry_id": str(entry.get("entry_id")),
+            "entry_name": entry.get("entry_name"),
+            "entry_type": entry.get("entry_type"),
+            "entry_chart_section": entry.get("entry_chart_section"),
+            "answer": answer,
+        })
+    return result
+
+
+def _extract_soap_notes(soap_encounter: dict) -> dict:
+    """soap_notes per CH-1502's response contract: the EHR's field names,
+    raw strings (HTML included), omitting fields that are null or empty.
+    """
+    notes = soap_encounter.get("notes")
+    if not isinstance(notes, dict):
+        return {}
+    return {field: notes[field] for field in _SOAP_NOTE_FIELDS if notes.get(field)}
+
+
+def _describe_soap_note_source(encounter_details: dict) -> str:
+    """One line for the review guidance about this encounter's note text."""
+    if encounter_details.get("soap_note_unavailable"):
+        return (
+            "SOAP Note: could not be read just now. Don't assume nothing is "
+            "documented — retry the review before relying on this for a guardrail check."
+        )
+    has_entries = bool(encounter_details.get("soap_entries"))
+    has_notes = bool(encounter_details.get("soap_notes"))
+    if has_entries or has_notes:
+        return "SOAP Note: entries and/or free-text notes present (see soap_entries/soap_notes)."
+    return "SOAP Note: no entries or free-text notes documented on this encounter."
 
 
 def _next_template_position(templates) -> int:
@@ -285,20 +373,27 @@ async def manageEncounter(
                             "record_id": patient.get("record_id")
                         }
                     
-                    # SOAP templates already attached to this encounter. They reach
-                    # an encounter two ways — the practice's visit-type configuration
+                    # SOAP templates already attached to this encounter, plus the
+                    # note itself (soap_entries/soap_notes, CH-1502) — one read of
+                    # /soap/encounters/{id} covers all three. Templates reach an
+                    # encounter two ways — the practice's visit-type configuration
                     # (attached by CharmHealth at creation) or an explicit
                     # manageEncounter(action="update", template_ids=...) — and this
                     # read doesn't distinguish them, because a caller populating
                     # entries only needs to know what is attached now.
                     #
-                    # A failed read is flagged rather than silently omitted. The
-                    # client returns {"error": ...} instead of raising, so without
-                    # the flag a transient failure looked like "no templates" to
-                    # whoever reads this before signing.
-                    templates = await _fetch_encounter_templates(client, encounter_id)
-                    if templates is None:
+                    # A failed read is flagged rather than silently omitted, for
+                    # both templates and the note. The client returns {"error":
+                    # ...} instead of raising, so without the flag a transient
+                    # failure looked like "no templates"/"no note" to whoever
+                    # reads this before signing — and for the note specifically,
+                    # a guardrail reads "no note" and "unknown" differently:
+                    # unknown becomes "not evaluated" and the action goes through,
+                    # while an empty note is evidence nothing was documented.
+                    soap_encounter = await _fetch_soap_encounter(client, encounter_id)
+                    if soap_encounter is None:
                         encounter_details["attached_templates_unavailable"] = True
+                        encounter_details["soap_note_unavailable"] = True
                     else:
                         encounter_details["attached_templates"] = [
                             {
@@ -306,9 +401,11 @@ async def manageEncounter(
                                 "template_name": t.get("template_name"),
                                 "position": t.get("position"),
                             }
-                            for t in templates
-                            if _is_live_template(t)
+                            for t in (soap_encounter.get("templates") or [])
+                            if isinstance(t, dict) and _is_live_template(t)
                         ]
+                        encounter_details["soap_entries"] = _extract_soap_entries(soap_encounter)
+                        encounter_details["soap_notes"] = _extract_soap_notes(soap_encounter)
 
                     # Get vitals for this encounter
                     try:
@@ -341,21 +438,10 @@ async def manageEncounter(
                         
                         # Try to filter by encounter_id first
                         encounter_meds = [
-                            m for m in all_medications 
+                            m for m in all_medications
                             if str(m.get("encounter_id")) == str(encounter_id) and m.get("encounter_id")
                         ]
-                        
-                        # Fallback: match by date
-                        if not encounter_meds and encounter_details["encounter_info"]["encounter_date"]:
-                            # Extract just the date part (YYYY-MM-DD) from datetime
-                            encounter_date_str = encounter_details["encounter_info"]["encounter_date"].split()[0] if encounter_details["encounter_info"]["encounter_date"] else None
-                            if encounter_date_str:
-                                encounter_meds = [
-                                    m for m in all_medications 
-                                    if m.get("date_of_entry") == encounter_date_str or 
-                                    m.get("start_date") == encounter_date_str
-                                ]
-                        
+
                         encounter_details["medications"] = encounter_meds
                     except Exception as e:
                         logger.error(f"Error fetching medications: {e}")
@@ -413,11 +499,17 @@ async def manageEncounter(
                         summary_items.append(f"✓ {len(encounter_details['lab_orders'])} lab order(s)")
                     if encounter_details.get("clinical_notes"):
                         summary_items.append("✓ Clinical notes documented")
-                    
+                    soap_entry_count = len(encounter_details.get("soap_entries") or [])
+                    soap_note_count = len(encounter_details.get("soap_notes") or {})
+                    if soap_entry_count or soap_note_count:
+                        summary_items.append(
+                            f"✓ SOAP note: {soap_entry_count} entry/entries, {soap_note_count} note field(s) documented"
+                        )
+
                     # Check if already signed
                     is_signed = encounter_details["encounter_info"]["status"] == "signed"
                     
-                    return strip_empty_values({
+                    review_response = strip_empty_values({
                         "action": "review",
                         "encounter_details": encounter_details,
                         "summary": summary_items,
@@ -436,6 +528,7 @@ async def manageEncounter(
                 {chr(10).join(summary_items) if summary_items else 'WARNING: No clinical documentation found'}
 
                 {_describe_attached_templates(encounter_details)}
+                {_describe_soap_note_source(encounter_details)}
 
                 {'SIGNED: This encounter is already signed.' if is_signed else f'''
                 IMPORTANT: Review all details above carefully. Once signed, this encounter becomes legally binding and cannot be modified.
@@ -449,6 +542,23 @@ async def manageEncounter(
                 - managePatientDrugs(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')'''}
                 """
                     })
+                    # strip_empty_values unconditionally drops empty dicts (not
+                    # just falsy values), which would silently erase
+                    # soap_notes == {} on a successful-but-empty read. The
+                    # contract requires the key present whenever the read
+                    # succeeded, even empty — only a failed read (soap_encounter
+                    # is None) omits it. soap_entries (the list itself) doesn't
+                    # need this: empty lists survive strip_empty_values by
+                    # default. But strip_empty_values also recurses *inside*
+                    # each soap_entries item, so an entry whose entry_name/
+                    # entry_type/entry_chart_section came back null or "" from
+                    # the EHR would silently lose that key — breaking the
+                    # contract's promise that every entry always carries all
+                    # five keys. Reinserting the unstripped list fixes both.
+                    if soap_encounter is not None:
+                        review_response["encounter_details"]["soap_notes"] = encounter_details["soap_notes"]
+                        review_response["encounter_details"]["soap_entries"] = encounter_details["soap_entries"]
+                    return review_response
             
                 case "sign":
                     if not encounter_id:
