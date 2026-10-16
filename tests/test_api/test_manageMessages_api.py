@@ -31,12 +31,15 @@ async def test_manageMessages_list():
     assert "error" not in resp
 
 
+@pytest.mark.reaches_a_human
 async def test_manageMessages_send_secure_rejected_no_phr_account():
     # $ ... manageMessages '{"action": "send", "patient_id": "100010000000018023", \
     #       "content": "...", "channel": "secure", "facility_id": "100010000000008157"}'
     #
     # Correct rejection, not a bug: Ahmed Choi has no PHR/portal account, and
     # secure messages require one. The tool's guidance correctly identifies this.
+    # If this patient ever gains a portal account, this becomes a real send --
+    # gated out of production runs via reaches_a_human.
     resp = await call_tool(
         "manageMessages",
         {

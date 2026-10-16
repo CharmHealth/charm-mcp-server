@@ -80,11 +80,15 @@ async def test_managePatientFiles_upload_photo():
         assert "Could not read" not in resp["error"]
 
 
+@pytest.mark.no_delete_available
 async def test_managePatientFiles_upload_id():
     # $ ... managePatientFiles '{"patient_id": "100010000000018023", "action": "upload_id", \
     #       "id_file": "<real local PNG path>", "id_qualifier": "drivers_license_id"}'
     #
     # Same fix and same open question as test_managePatientFiles_upload_photo above.
+    # managePatientFiles has no action to delete an uploaded ID document, so
+    # this leaves a permanent fake ID on the test patient's chart -- gated out
+    # of production runs via no_delete_available.
     resp = await call_tool(
         "managePatientFiles",
         {
