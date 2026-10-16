@@ -185,7 +185,7 @@ class CharmHealthAPIClient:
                 logger.error(f"Failed to refresh token: {e} with response: {response_detail}")
                 raise
     
-    async def _make_request(self, method: str, endpoint: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None, retry_count: int = 0, auth_retried: bool = False) -> Dict[str, Any]:
+    async def _make_request(self, method: str, endpoint: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None, files: Optional[Dict[str, Any]] = None, retry_count: int = 0, auth_retried: bool = False) -> Dict[str, Any]:
         logger.info(f"Making {method} request to {endpoint}")
         await self.ensure_client()
         start_time = time.time()
@@ -237,6 +237,13 @@ class CharmHealthAPIClient:
                     # application/json, or the framework never resolves the parameter.
                     form_headers = {**headers, "Content-Type": "application/x-www-form-urlencoded"}
                     response = await self._client.post(endpoint, data=data, params=params, headers=form_headers, timeout=self.timeout)
+                case "POST_MULTIPART":
+                    # File uploads (e.g. patient photo/identity docs). Drop our own
+                    # Content-Type so httpx sets the correct multipart boundary itself —
+                    # forcing application/json here would send a body the server can't
+                    # parse as multipart at all.
+                    multipart_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+                    response = await self._client.post(endpoint, data=data, files=files, params=params, headers=multipart_headers, timeout=self.timeout)
                 case "PUT":
                     response = await self._client.put(endpoint, json=data, params=params, headers=headers, timeout=self.timeout)
                 case "DELETE":
@@ -276,7 +283,7 @@ class CharmHealthAPIClient:
                     self.__class__._shared_token_cache.pop(key, None)
                 except Exception:
                     pass
-                return await self._make_request(method, endpoint, params, data, retry_count, auth_retried=True)
+                return await self._make_request(method, endpoint, params, data, files, retry_count, auth_retried=True)
             logger.error(f"HTTP error {e.response.status_code}: {e}")
             logger.error(f"Response body: {e.response.text}")
             return {"error": f"HTTP {e.response.status_code}: {e.response.text}"}
@@ -289,7 +296,7 @@ class CharmHealthAPIClient:
             if retry_count < self.max_retries:
                 logger.warning(f"Request failed, retrying ({retry_count + 1}/{self.max_retries}): {e}")
                 await asyncio.sleep(2 ** retry_count)
-                return await self._make_request(method, endpoint, params, data, retry_count + 1, auth_retried)
+                return await self._make_request(method, endpoint, params, data, files, retry_count + 1, auth_retried)
 
             logger.error(f"Request failed after {self.max_retries} retries: {e}")
             return {"error": f"Request failed: {e}"}
@@ -320,7 +327,15 @@ class CharmHealthAPIClient:
     async def post_form(self, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Make a POST request with an application/x-www-form-urlencoded body."""
         return await self._make_request('POST_FORM', endpoint, data=data, params=params)
-        
+
+    async def post_multipart(self, endpoint: str, data: Optional[Dict] = None, files: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Make a POST request with a multipart/form-data body (file upload).
+
+        `files` maps field name -> (filename, raw_bytes, content_type), matching
+        httpx's expected shape — pass bytes, not a file path or open file handle,
+        so a retry (see _make_request) can safely resend the same content."""
+        return await self._make_request('POST_MULTIPART', endpoint, data=data, files=files)
+
     async def put(self, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Make a PUT request."""
         return await self._make_request('PUT', endpoint, data=data, params=params)
