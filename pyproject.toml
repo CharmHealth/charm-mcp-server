@@ -33,3 +33,7 @@ py-modules = ["mcp_server"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "no_delete_available: probe creates a record no tool can delete; skipped against production",
+    "reaches_a_human: probe can send a real message/invite to a person; skipped against production",
+]
