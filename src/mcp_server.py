@@ -2,7 +2,9 @@ from fastmcp import FastMCP
 from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
 from fastmcp.server.middleware.rate_limiting import SlidingWindowRateLimitingMiddleware
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
+import json
 import logging
+import re
 from tools import *
 from telemetry import telemetry
 import sys
@@ -13,6 +15,43 @@ from starlette.responses import JSONResponse, Response
 
 
 mcp_composite_server = FastMCP(name="CharmHealth API Assistant")
+
+
+class _DropErrorText(logging.Filter):
+    """Keep the error type, drop the error's text.
+
+    A tool error's text is its error dict, and when the EHR rejected the call
+    that dict carries the EHR's reply body, which can echo back the patient
+    record it rejected. Both middlewares below log that text at ERROR. The
+    caller still receives it; only the log line changes.
+
+    A message in a shape this does not recognise is dropped whole, so a
+    FastMCP upgrade that changes the format fails closed.
+    """
+
+    _ERROR_LINE = re.compile(r"^(Error in [^:]+: \w+)", re.DOTALL)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if record.name == "fastmcp.errors":
+            match = self._ERROR_LINE.match(message)
+            message = match.group(1) if match else "Error in request (text omitted)"
+        else:
+            try:
+                fields = json.loads(message)
+            except ValueError:
+                fields = None
+            if not isinstance(fields, dict):
+                message = "Structured log message omitted"
+            elif "error" in fields:
+                fields["error"] = "omitted"
+                message = json.dumps(fields)
+        record.msg, record.args = message, ()
+        return True
+
+
+for _name in ("fastmcp.errors", "fastmcp.middleware.structured_logging"):
+    logging.getLogger(_name).addFilter(_DropErrorText())
 
 mcp_composite_server.add_middleware(ErrorHandlingMiddleware())
 
