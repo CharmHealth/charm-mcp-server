@@ -12,6 +12,10 @@ values in the arguments and the API's replies, and fail if a marker appears
 anywhere in what was logged at INFO or above (the level the stderr handler
 in `mcp_server.py` lets through). A new line that leaks fails here whichever
 logger wrote it.
+
+The error case runs through the real server with `fastmcp.Client`. Calling a
+tool function directly skips the middleware, and the middleware is what
+logged the EHR's error text — a direct call passed while the leak was live.
 """
 
 from __future__ import annotations
@@ -21,7 +25,11 @@ import logging
 
 import httpx
 import pytest
+from fastmcp import Client
 from fastmcp.exceptions import ToolError
+from mcp.shared.exceptions import MCPError
+
+import mcp_server
 
 from api.api_client import CharmHealthAPIClient
 from tools import clinical_data, core_tools
@@ -117,12 +125,13 @@ async def test_ehr_error_reply(monkeypatch, caplog):
     _install_transport(monkeypatch, handler)
     caplog.set_level(logging.INFO)
 
-    with pytest.raises(ToolError) as excinfo:
-        await clinical_data.managePatientDiagnoses(
-            action="add", patient_id="100000000000000001",
-            diagnosis_name="Hypertension", diagnosis_code="I10", code_type="ICD10",
-            comments=DIAGNOSIS_NOTE,
-        )
+    async with Client(mcp_server.mcp_composite_server) as client:
+        with pytest.raises(MCPError) as excinfo:
+            await client.call_tool("managePatientDiagnoses", {
+                "action": "add", "patient_id": "100000000000000001",
+                "diagnosis_name": "Hypertension", "diagnosis_code": "I10",
+                "code_type": "ICD10", "comments": DIAGNOSIS_NOTE,
+            })
 
     assert DIAGNOSIS_NOTE in str(excinfo.value)
     _assert_no_markers(caplog, DIAGNOSIS_NOTE)
@@ -145,3 +154,23 @@ async def test_failed_token_refresh(monkeypatch, caplog, token_reply):
         await core_tools.findPatients(query=PATIENT_NAME, search_type="name")
 
     _assert_no_markers(caplog, SECRET_TOKEN)
+
+
+@pytest.mark.parametrize("logger_name, message, expected", [
+    ("fastmcp.errors", f"Error in tools/call: ToolError: {DIAGNOSIS_NOTE}",
+     "Error in tools/call: ToolError"),
+    ("fastmcp.errors", f"Unrecognised {DIAGNOSIS_NOTE}", "Error in request (text omitted)"),
+    ("fastmcp.middleware.structured_logging",
+     json.dumps({"event": "request_error", "method": "tools/call", "error": DIAGNOSIS_NOTE}),
+     json.dumps({"event": "request_error", "method": "tools/call", "error": "omitted"})),
+    ("fastmcp.middleware.structured_logging", f"event=request_error error={DIAGNOSIS_NOTE}",
+     "Structured log message omitted"),
+], ids=["error-line", "error-unknown-shape", "structured-json", "structured-unknown-shape"])
+def test_middleware_filter_keeps_the_type_and_fails_closed(caplog, logger_name, message, expected):
+    """A FastMCP upgrade that changes either format must drop the line, not
+    let the text through."""
+    caplog.set_level(logging.INFO)
+
+    logging.getLogger(logger_name).error(message)
+
+    assert caplog.records[-1].getMessage() == expected
