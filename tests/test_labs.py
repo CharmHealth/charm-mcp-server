@@ -510,3 +510,51 @@ def test_expired_entries_and_their_idle_locks_are_dropped() -> None:
 
     assert list(clinical_support._test_params_cache) == [("new", "R1")]
     assert list(clinical_support._test_params_locks) == [("new", "R1")]
+
+
+# ── catalog_duplicates compares ranges per LOINC code ────────────────────
+
+
+def _panel(record_id, measures):
+    return {"lab_test_params": [{"param_name": n, "lab_rec_id": record_id, "loinc_code": loinc,
+                                 "rec_unit": "", "ref_min": lo, "ref_max": hi}
+                                for n, loinc, lo, hi in measures]}
+
+
+@pytest.mark.asyncio
+async def test_panels_that_agree_per_loinc_are_not_duplicates_whatever_their_order(monkeypatch) -> None:
+    """Same lab, same analytes, same ranges. One entry lists them in another
+    order and carries an extra measure with no LOINC code."""
+    panel = lambda rid, tid: {**_tsh(rid, tid), "test_name": "BMP"}
+    fake = _FakeAPIClient(get_responses={
+        "/labs/tests/search": {"lab_tests": [panel("P1", "T1"), panel("P2", "T2")]},
+        "/labs/test/P1/parameters": _panel("P1", [("Sodium", "2951-2", "135", "145"),
+                                                   ("Potassium", "2823-3", "3.5", "5.1")]),
+        "/labs/test/P2/parameters": _panel("P2", [("Comment", "", "", ""),
+                                                   ("Potassium", "2823-3", "3.5", "5.1"),
+                                                   ("Sodium", "2951-2", "135", "145")]),
+    })
+    _patch_client(monkeypatch, fake)
+
+    r = await clinical_support.managePatientLabs(action="search_tests", test_name="BMP")
+
+    assert r["catalog_duplicates"] == []
+
+
+@pytest.mark.asyncio
+async def test_panels_that_differ_on_one_loinc_are_duplicates(monkeypatch) -> None:
+    panel = lambda rid, tid: {**_tsh(rid, tid), "test_name": "BMP"}
+    fake = _FakeAPIClient(get_responses={
+        "/labs/tests/search": {"lab_tests": [panel("P1", "T1"), panel("P2", "T2")]},
+        "/labs/test/P1/parameters": _panel("P1", [("Sodium", "2951-2", "135", "145"),
+                                                   ("Potassium", "2823-3", "3.5", "5.1")]),
+        "/labs/test/P2/parameters": _panel("P2", [("Potassium", "2823-3", "3.5", "5.3"),
+                                                   ("Sodium", "2951-2", "135", "145")]),
+    })
+    _patch_client(monkeypatch, fake)
+
+    r = await clinical_support.managePatientLabs(action="search_tests", test_name="BMP")
+
+    dup = r["catalog_duplicates"][0]
+    assert dup["loinc_codes"] == ["2823-3", "2951-2"]
+    assert sorted(dup["reference_ranges"]) == ["3.5-5.1, 135-145", "3.5-5.3, 135-145"]
