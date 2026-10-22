@@ -227,8 +227,10 @@ def _params(record_id, lo, hi, loinc="11580-8"):
 @pytest.fixture(autouse=True)
 def _clear_params_cache():
     clinical_support._test_params_cache.clear()
+    clinical_support._test_params_locks.clear()
     yield
     clinical_support._test_params_cache.clear()
+    clinical_support._test_params_locks.clear()
 
 
 @pytest.mark.asyncio
@@ -468,3 +470,43 @@ def test_credential_key_separates_callers_and_is_stable_for_one(monkeypatch) -> 
     # The key holds no credential in the clear.
     assert all("refresh-a" not in k and "access" not in k for k in keys)
 
+
+# ── concurrent lookups share one fetch ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_concurrent_searches_fetch_each_tests_parameters_once(monkeypatch) -> None:
+    import asyncio
+
+    class _Slow(_FakeAPIClient):
+        async def get(self, endpoint, params=None):
+            if endpoint.endswith("/parameters"):
+                await asyncio.sleep(0.01)
+            return await super().get(endpoint, params)
+
+    fake = _Slow(get_responses={
+        "/labs/tests/search": {"lab_tests": [_tsh("R1", "T1")]},
+        "/labs/test/R1/parameters": _params("R1", "0.33", "5.33"),
+    })
+    _patch_client(monkeypatch, fake)
+
+    await asyncio.gather(*(clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+                           for _ in range(3)))
+
+    assert [c[0] for c in fake.get_calls].count("/labs/test/R1/parameters") == 1
+
+
+
+def test_expired_entries_and_their_idle_locks_are_dropped() -> None:
+    import asyncio
+
+    ttl = clinical_support._TEST_PARAMS_TTL
+    clinical_support._test_params_cache[("old", "R1")] = (0.0, [])
+    clinical_support._test_params_cache[("new", "R1")] = (ttl, [])
+    clinical_support._test_params_locks[("old", "R1")] = asyncio.Lock()
+    clinical_support._test_params_locks[("new", "R1")] = asyncio.Lock()
+
+    clinical_support._drop_expired_test_params(now=ttl + 1)
+
+    assert list(clinical_support._test_params_cache) == [("new", "R1")]
+    assert list(clinical_support._test_params_locks) == [("new", "R1")]

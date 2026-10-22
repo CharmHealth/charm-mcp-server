@@ -6,8 +6,10 @@ from datetime import date
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
+import asyncio
 import json
 import logging
+import time
 from telemetry import telemetry, with_tool_metrics
 
 logger = logging.getLogger(__name__)
@@ -510,6 +512,9 @@ async def managePatientFiles(
 # process serves many practices, and two practices can both have a record R1.
 _TEST_PARAMS_TTL = 3600.0
 _test_params_cache: Dict[tuple[str, str], tuple[float, List[Dict[str, Any]]]] = {}
+# One lock per entry, as CharmHealthAPIClient._shared_token_locks does for
+# tokens, so concurrent searches that miss on the same test fetch it once.
+_test_params_locks: Dict[tuple[str, str], asyncio.Lock] = {}
 
 # How many matches get their parameters looked up in one search. The rest are
 # returned with name and code only, and the response says so.
@@ -519,18 +524,32 @@ _MAX_DETAILED_MATCHES = 8
 async def _test_params(client: Any, lab_record_id: str) -> Optional[List[Dict[str, Any]]]:
     """A test's parameters, or None when the API returned an error. A failure
     is not cached: stored, it would read as "measures nothing" for an hour."""
-    import time
     key = (client.credential_key(), lab_record_id)
     hit = _test_params_cache.get(key)
     if hit and time.monotonic() - hit[0] < _TEST_PARAMS_TTL:
         return hit[1]
-    resp = await client.get(f"/labs/test/{lab_record_id}/parameters")
-    if error := _api_error(resp):
-        logger.warning(f"Lab test {lab_record_id} parameters lookup failed: {error}")
-        return None
-    params = (resp or {}).get("lab_test_params") or []
-    _test_params_cache[key] = (time.monotonic(), params)
-    return params
+    async with _test_params_locks.setdefault(key, asyncio.Lock()):
+        hit = _test_params_cache.get(key)
+        if hit and time.monotonic() - hit[0] < _TEST_PARAMS_TTL:
+            return hit[1]
+        resp = await client.get(f"/labs/test/{lab_record_id}/parameters")
+        if error := _api_error(resp):
+            logger.warning(f"Lab test {lab_record_id} parameters lookup failed: {error}")
+            return None
+        params = (resp or {}).get("lab_test_params") or []
+        now = time.monotonic()
+        _drop_expired_test_params(now)
+        _test_params_cache[key] = (now, params)
+        return params
+
+
+def _drop_expired_test_params(now: float) -> None:
+    """Remove expired entries and their idle locks. A bearer-auth caller's key
+    changes with each access token, so without this both dicts only grow."""
+    for k in [k for k, (at, _) in _test_params_cache.items() if now - at >= _TEST_PARAMS_TTL]:
+        del _test_params_cache[k]
+    for k in [k for k, lock in _test_params_locks.items() if k not in _test_params_cache and not lock.locked()]:
+        del _test_params_locks[k]
 
 
 def _range_text(p: Dict[str, Any]) -> Optional[str]:
