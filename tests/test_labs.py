@@ -31,9 +31,10 @@ class _FakeAPIClient:
     """Stands in for CharmHealthAPIClient — returns canned responses keyed
     by exact endpoint string, per HTTP method."""
 
-    def __init__(self, get_responses=None, post_responses=None):
+    def __init__(self, get_responses=None, post_responses=None, credential="tenant-a"):
         self._get = get_responses or {}
         self._post = post_responses or {}
+        self._credential = credential
         self.get_calls: list[tuple[str, dict]] = []
         self.post_calls: list[tuple[str, dict]] = []
 
@@ -50,6 +51,9 @@ class _FakeAPIClient:
     async def post(self, endpoint, data=None, params=None):
         self.post_calls.append((endpoint, data or {}))
         return self._post[endpoint]
+
+    def credential_key(self):
+        return self._credential
 
 
 def _patch_client(monkeypatch, fake_client) -> None:
@@ -347,3 +351,50 @@ async def test_list_orders_reports_whether_the_lab_has_it(monkeypatch) -> None:
     assert r["lab_orders"][0]["e_order_status"] == "ERROR"
     assert r["lab_orders"][0]["test_names"] == ["TSH"]
     assert fake.get_calls == [("/labs/orders", {"patient_id": "P1"})]
+
+
+# ── API errors come back as a dict, not an exception ─────────────────────
+#
+# CharmHealthAPIClient._make_request returns {"error": "HTTP 403: ..."} on an
+# HTTP failure instead of raising. Read as a success, that dict has no
+# "lab_tests" key, and the caller is told nothing matched.
+
+
+_FORBIDDEN = {"error": 'HTTP 403: {"message":"invalid oauth scope"}'}
+_SERVER_ERROR = {"error": "HTTP 500: Internal Server Error"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action,kwargs,endpoint", [
+    ("list_labs", {}, "/labs/search"),
+    ("search_tests", {"test_name": "TSH"}, "/labs/tests/search"),
+    ("test_questions", {"lab_record_id": "R1"}, "/labs/tests/R1/ask_at_order_entry"),
+])
+async def test_catalog_scope_denial_from_the_real_client_says_which_scope(monkeypatch, action, kwargs, endpoint) -> None:
+    _patch_client(monkeypatch, _FakeAPIClient(get_responses={endpoint: _FORBIDDEN}))
+
+    with pytest.raises(ToolError) as exc_info:
+        await clinical_support.managePatientLabs(action=action, **kwargs)
+
+    body = json.loads(str(exc_info.value))
+    assert "HTTP 403" in body["error"]
+    assert "charmhealth.defaults.READ" in body["guidance"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action,kwargs,endpoint", [
+    ("list_orders", {"patient_id": "P1"}, "/labs/orders"),
+    ("list_labs", {}, "/labs/search"),
+    ("search_tests", {"test_name": "TSH"}, "/labs/tests/search"),
+    ("test_questions", {"lab_record_id": "R1"}, "/labs/tests/R1/ask_at_order_entry"),
+])
+async def test_catalog_api_failure_is_an_error_not_an_empty_result(monkeypatch, action, kwargs, endpoint) -> None:
+    _patch_client(monkeypatch, _FakeAPIClient(get_responses={endpoint: _SERVER_ERROR}))
+
+    with pytest.raises(ToolError) as exc_info:
+        await clinical_support.managePatientLabs(action=action, **kwargs)
+
+    body = json.loads(str(exc_info.value))
+    assert "HTTP 500" in body["error"]
+    assert "charmhealth.defaults.READ" not in body["guidance"]
+
