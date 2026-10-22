@@ -506,8 +506,10 @@ async def managePatientFiles(
 # when a practice edits its lab catalog, which is rare. Searching "TSH" costs
 # one call plus one per match, and the API allows 100 a minute across every
 # caller, so each test's parameters are fetched once an hour at most.
+# Entries are keyed by the caller's credential as well as the record id: one
+# process serves many practices, and two practices can both have a record R1.
 _TEST_PARAMS_TTL = 3600.0
-_test_params_cache: Dict[str, tuple[float, List[Dict[str, Any]]]] = {}
+_test_params_cache: Dict[tuple[str, str], tuple[float, List[Dict[str, Any]]]] = {}
 
 # How many matches get their parameters looked up in one search. The rest are
 # returned with name and code only, and the response says so.
@@ -518,7 +520,8 @@ async def _test_params(client: Any, lab_record_id: str) -> Optional[List[Dict[st
     """A test's parameters, or None when the API returned an error. A failure
     is not cached: stored, it would read as "measures nothing" for an hour."""
     import time
-    hit = _test_params_cache.get(lab_record_id)
+    key = (client.credential_key(), lab_record_id)
+    hit = _test_params_cache.get(key)
     if hit and time.monotonic() - hit[0] < _TEST_PARAMS_TTL:
         return hit[1]
     resp = await client.get(f"/labs/test/{lab_record_id}/parameters")
@@ -526,7 +529,7 @@ async def _test_params(client: Any, lab_record_id: str) -> Optional[List[Dict[st
         logger.warning(f"Lab test {lab_record_id} parameters lookup failed: {error}")
         return None
     params = (resp or {}).get("lab_test_params") or []
-    _test_params_cache[lab_record_id] = (time.monotonic(), params)
+    _test_params_cache[key] = (time.monotonic(), params)
     return params
 
 
