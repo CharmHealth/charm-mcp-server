@@ -514,12 +514,17 @@ _test_params_cache: Dict[str, tuple[float, List[Dict[str, Any]]]] = {}
 _MAX_DETAILED_MATCHES = 8
 
 
-async def _test_params(client: Any, lab_record_id: str) -> List[Dict[str, Any]]:
+async def _test_params(client: Any, lab_record_id: str) -> Optional[List[Dict[str, Any]]]:
+    """A test's parameters, or None when the API returned an error. A failure
+    is not cached: stored, it would read as "measures nothing" for an hour."""
     import time
     hit = _test_params_cache.get(lab_record_id)
     if hit and time.monotonic() - hit[0] < _TEST_PARAMS_TTL:
         return hit[1]
     resp = await client.get(f"/labs/test/{lab_record_id}/parameters")
+    if error := _api_error(resp):
+        logger.warning(f"Lab test {lab_record_id} parameters lookup failed: {error}")
+        return None
     params = (resp or {}).get("lab_test_params") or []
     _test_params_cache[lab_record_id] = (time.monotonic(), params)
     return params
@@ -920,9 +925,13 @@ async def managePatientLabs(
                     matches = (response or {}).get("lab_tests") or []
                     options = []
                     raw_params: Dict[str, List[Dict[str, Any]]] = {}
+                    lookup_failed = 0
                     for i, t in enumerate(matches):
-                        detail = await _test_params(client, str(t["lab_record_id"])) \
-                            if i < _MAX_DETAILED_MATCHES and t.get("lab_record_id") else None
+                        detail = None
+                        if i < _MAX_DETAILED_MATCHES and t.get("lab_record_id"):
+                            detail = await _test_params(client, str(t["lab_record_id"]))
+                            if detail is None:
+                                lookup_failed += 1
                         if detail is not None:
                             raw_params[str(t["lab_record_id"])] = detail
                         options.append(_catalog_option(t, detail))
@@ -938,6 +947,9 @@ async def managePatientLabs(
                                     "what it measures and reference range; do not pick by name.")
                     if omitted:
                         guidance += f" Only the first {_MAX_DETAILED_MATCHES} have measures looked up; {omitted} more are listed by name and code only — narrow with lab_name."
+                    if lookup_failed:
+                        guidance += (f" Measures could not be looked up for {lookup_failed} match(es) because the API "
+                                     "returned an error; their reference ranges are unknown, so check them before ordering.")
                     if duplicates:
                         guidance += " Some entries measure the same thing with different reference ranges — see catalog_duplicates."
                     if inverted:
