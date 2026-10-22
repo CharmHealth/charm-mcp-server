@@ -10,6 +10,12 @@ from telemetry import record_api_call, start_api_call, end_api_call, set_client_
 import re
 logger = logging.getLogger(__name__)
 
+# httpx logs every request URL at INFO, query string included, so a patient
+# search by name or date of birth would write those values to the log. The
+# per-request line below (method, endpoint without IDs, status, duration) is
+# what we keep instead.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 load_dotenv()
 
 
@@ -190,7 +196,10 @@ class CharmHealthAPIClient:
                 new_token = token_data.get('access_token')
                 expires_in = token_data.get('expires_in', 3600)
                 if not new_token:
-                    raise ValueError(f"Failed to obtain new token with response: {response.text}")
+                    # Never the body: a reply without an access_token can still
+                    # carry token material, and this message is logged and
+                    # returned to the caller. The OAuth error code is enough.
+                    raise ValueError(f"Failed to obtain new token (error: {token_data.get('error', 'unknown')})")
 
                 self._auth_token = new_token
                 self._token_expires_at = current_time + expires_in
@@ -212,8 +221,9 @@ class CharmHealthAPIClient:
                 # and referencing response.text unconditionally would replace that real
                 # error with an UnboundLocalError, undermining the "a failed refresh
                 # returns a clean error" goal this whole retry path exists for.
-                response_detail = response.text if response is not None else "no response received"
-                logger.error(f"Failed to refresh token: {e} with response: {response_detail}")
+                # Status only — the OAuth server's reply body can carry token material.
+                response_detail = f"status {response.status_code}" if response is not None else "no response received"
+                logger.error(f"Failed to refresh token: {e} ({response_detail})")
                 raise
     
     async def _make_request(self, method: str, endpoint: str, params: Optional[Dict[str, Any]] = None, data: Optional[Dict[str, Any]] = None, retry_count: int = 0, auth_retried: bool = False) -> Dict[str, Any]:

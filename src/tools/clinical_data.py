@@ -1180,9 +1180,7 @@ async def managePatientDiagnoses(
                         diagnosis_data[0]["to_date"] = to_date
                     if diagnosis_order:
                         diagnosis_data[0]["diagnosis_order"] = str(diagnosis_order)
-                    logger.info(f"Diagnosis data: {diagnosis_data}")
                     response = await client.post(f"/patients/{patient_id}/diagnoses", data=diagnosis_data)
-                    logger.info(f"Diagnosis response: {response}")
                     if response.get("patient_diagnoses"):
                         guidance = f"Diagnosis '{diagnosis_name}' ({diagnosis_code}) added successfully to problem list."
                         if encounter_id:
