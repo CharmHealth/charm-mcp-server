@@ -419,3 +419,52 @@ async def test_a_failed_parameters_lookup_is_not_cached(monkeypatch) -> None:
     assert second["lab_tests"][0]["measures"][0]["reference_range"] == "0.33-5.33"
     assert [c[0] for c in fake.get_calls].count("/labs/test/R1/parameters") == 2
 
+
+# ── the parameters cache is per caller ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_parameters_cached_for_one_caller_are_not_served_to_another(monkeypatch) -> None:
+    """Two practices can each have a lab_record_id R1. The second must get
+    its own catalog's range, not the first one's."""
+    a = _FakeAPIClient(credential="tenant-a", get_responses={
+        "/labs/tests/search": {"lab_tests": [_tsh("R1", "T1")]},
+        "/labs/test/R1/parameters": _params("R1", "0.33", "5.33"),
+    })
+    b = _FakeAPIClient(credential="tenant-b", get_responses={
+        "/labs/tests/search": {"lab_tests": [_tsh("R1", "T1")]},
+        "/labs/test/R1/parameters": _params("R1", "0.45", "4.5"),
+    })
+
+    _patch_client(monkeypatch, a)
+    await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+    _patch_client(monkeypatch, b)
+    r = await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+
+    assert r["lab_tests"][0]["measures"][0]["reference_range"] == "0.45-4.5"
+    assert [c[0] for c in b.get_calls].count("/labs/test/R1/parameters") == 1
+
+
+def test_credential_key_separates_callers_and_is_stable_for_one(monkeypatch) -> None:
+    from api import CharmHealthAPIClient
+
+    monkeypatch.setenv("CHARMHEALTH_CLIENT_ID", "cid")
+    monkeypatch.delenv("CHARMHEALTH_REFRESH_TOKEN", raising=False)
+    base = "https://ehr.example/api/ehr/v1"
+
+    a1 = CharmHealthAPIClient(base_url=base, access_token="a-access-1", refresh_token="refresh-a")
+    a2 = CharmHealthAPIClient(base_url=base, access_token="a-access-2", refresh_token="refresh-a")
+    b = CharmHealthAPIClient(base_url=base, access_token="b-access", refresh_token="refresh-b")
+    bearer_c = CharmHealthAPIClient(base_url=base, access_token="c-access")
+    bearer_d = CharmHealthAPIClient(base_url=base, access_token="d-access")
+    other_region = CharmHealthAPIClient(base_url="https://ehr.other/api/ehr/v1", access_token="a-access-1",
+                                        refresh_token="refresh-a")
+
+    # The same refresh token is the same caller, whatever access token it holds now.
+    assert a1.credential_key() == a2.credential_key()
+    keys = [a1.credential_key(), b.credential_key(), bearer_c.credential_key(),
+            bearer_d.credential_key(), other_region.credential_key()]
+    assert len(set(keys)) == len(keys)
+    # The key holds no credential in the clear.
+    assert all("refresh-a" not in k and "access" not in k for k in keys)
+
