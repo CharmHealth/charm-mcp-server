@@ -62,7 +62,6 @@ async def managePatientVitals(
     - "add": Record new vitals (requires patient_id + vitals dict OR individual vital fields, plus encounter_id OR entry_date; defaults to today if neither provided). Check available vitals with getPracticeInfo(info_type='vitals') first to ensure all vital names and units are correct.
     - "list": Show patient vital history (optionally filter by vital name and/or date range)
     - "update": Modify existing vital record (requires record_id + fields to change)
-    - "delete": Remove incorrect vital record (requires record_id)
     
     Vitals Format:
     - As dict: keys are EXACT CharmHealth vital names, values are "value unit" strings.

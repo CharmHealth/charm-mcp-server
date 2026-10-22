@@ -538,6 +538,9 @@ _WIRE_IDS = [
     ("diagnosis_list", {"diagnoses": [{"diagnosis_name": "Hypertension", "patient_diagnosis_id": "d1"}]}),
     ("note_list", {"quick_notes": [{"notes": "Call back Tuesday", "quick_notes_id": "n1"}]}),
     ("recall_list", {"recall": [{"recall_type": "Office Visit", "patient_recall_id": "r1"}]}),
+    ("vitals_list", {"vital_entries": [{"entry_date": "2026-08-01", "vital_entry_id": "v1",
+                                        "vitals": [{"vital_name": "Weight", "vital_value": "30"}]}]}),
+    ("lab_list", {"lab_results": [{"test_names": ["Hemoglobin A1c"], "group_id": "g1"}]}),
 ]
 
 

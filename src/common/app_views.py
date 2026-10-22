@@ -907,6 +907,7 @@ def vitals_list_view(data: Dict[str, Any]) -> Column:
             "",
             " · ".join(readings),
             f"Encounter {entry['encounter_id']}" if entry.get("encounter_id") else "",
+            ident=_first(entry, "vital_entry_id", default=""),
         )
     return _records_view(_items(data, "vital_entries", "recent_vitals", "vitals"), build,
                          "No vitals recorded.")
@@ -927,6 +928,9 @@ def lab_list_view(data: Dict[str, Any]) -> Column:
                      "lab": _first(lab, "lab_name", default=""),
                      "notes": _first(lab, "internal_comments", default="")},
                     "reported", "lab", "notes"),
+            # group_id first: managePatientLabs' own list guidance says to use
+            # it when present, and /labs/results always carries one.
+            ident=_first(lab, "group_id", "lab_order_id", default=""),
         )
     return _records_view(_items(data, "lab_results", "lab_orders"), build,
                          "No lab results available.")
