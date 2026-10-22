@@ -398,3 +398,24 @@ async def test_catalog_api_failure_is_an_error_not_an_empty_result(monkeypatch, 
     assert "HTTP 500" in body["error"]
     assert "charmhealth.defaults.READ" not in body["guidance"]
 
+
+@pytest.mark.asyncio
+async def test_a_failed_parameters_lookup_is_not_cached(monkeypatch) -> None:
+    """A transient failure on the first lookup must not stand in for "this
+    test measures nothing" for the next hour."""
+    responses = {
+        "/labs/tests/search": {"lab_tests": [_tsh("R1", "T1")]},
+        "/labs/test/R1/parameters": _SERVER_ERROR,
+    }
+    fake = _FakeAPIClient(get_responses=responses)
+    _patch_client(monkeypatch, fake)
+
+    first = await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+    responses["/labs/test/R1/parameters"] = _params("R1", "0.33", "5.33")
+    second = await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+
+    assert "measures" not in first["lab_tests"][0]
+    assert "could not be looked up" in first["guidance"]
+    assert second["lab_tests"][0]["measures"][0]["reference_range"] == "0.33-5.33"
+    assert [c[0] for c in fake.get_calls].count("/labs/test/R1/parameters") == 2
+
