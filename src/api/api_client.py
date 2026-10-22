@@ -373,6 +373,23 @@ class CharmHealthAPIClient:
         """Get the client ID from the API client."""
         return self.client_id
     
+    def credential_key(self) -> str:
+        """Who this client acts as, for a cache of API data shared across requests.
+
+        This server serves many practices from one process, and record ids are
+        not unique across them, so a cache keyed only by an id can answer one
+        practice with another's data. The client id comes from the environment
+        and is the same for every caller, so it does not separate them; the
+        credential does. Like _token_cache_key, this keys on the refresh token,
+        which stays the same while access tokens rotate. A bearer-auth client
+        has no refresh token, so it keys on its access token. A key is per
+        user, which is narrower than per practice: callers in one practice do
+        not share entries, and no caller can reach another practice's."""
+        import hashlib
+        secret = self.refresh_token or self._auth_token or ""
+        material = f"{self.base_url}\0{self.client_id}\0{secret}"
+        return hashlib.sha256(material.encode()).hexdigest()[:32]
+
     def _token_cache_key(self) -> str:
         # Create user-specific cache key using hash of refresh token
         # This prevents token collision between different users
