@@ -594,9 +594,33 @@ def _inverted_ranges(options: List[Dict[str, Any]], raw: Dict[str, List[Dict[str
     return out
 
 
-def _scope_error(e: Exception) -> bool:
+def _scope_error(e: Union[Exception, str]) -> bool:
     text = str(e).lower()
     return "scope" in text or "401" in text or "403" in text or "unauthorized" in text
+
+
+def _api_error(response: Any) -> Optional[str]:
+    """The error CharmHealthAPIClient returned in place of a response.
+
+    The client does not raise on an HTTP failure; it returns
+    {"error": "HTTP 403: ..."}. Read as a success, that dict has none of the
+    keys a lookup expects, and an empty answer looks like "nothing found"."""
+    if isinstance(response, dict) and response.get("error"):
+        return str(response["error"])
+    return None
+
+
+_CATALOG_ACTIONS = ("list_labs", "search_tests", "test_questions")
+_CATALOG_SCOPE_GUIDANCE = ("The lab catalog needs the charmhealth.defaults.READ scope, and this token may not "
+                           "carry it. Sign in again with that scope; until then, catalog values cannot be looked up.")
+
+
+def _lab_lookup_failed(action: str, error: str) -> Dict[str, Any]:
+    if action in _CATALOG_ACTIONS and _scope_error(error):
+        return {"error": error, "guidance": _CATALOG_SCOPE_GUIDANCE}
+    return {"error": error,
+            "guidance": f"Lab {action} failed at the CharmHealth API, so this is not an empty result. "
+                        "Try again; if it keeps failing, report the error."}
 
 
 @clinical_support_mcp.tool(app=True)
@@ -850,6 +874,8 @@ async def managePatientLabs(
                         return {"error": "patient_id required for list_orders",
                                 "guidance": "Give the patient whose orders to list."}
                     response = await client.get("/labs/orders", params={"patient_id": patient_id})
+                    if error := _api_error(response):
+                        return _lab_lookup_failed(action, error)
                     orders = [{
                         "lab_order_id": o.get("lab_order_id"),
                         "order_date": o.get("order_date"),
@@ -869,6 +895,8 @@ async def managePatientLabs(
 
                 case "list_labs":
                     response = await client.get("/labs/search", params={"per_page": 200})
+                    if error := _api_error(response):
+                        return _lab_lookup_failed(action, error)
                     labs = [{"lab_id": l.get("lab_id"), "lab_name": l.get("lab_name")}
                             for l in (response or {}).get("labs") or []]
                     return strip_empty_values({
@@ -887,6 +915,8 @@ async def managePatientLabs(
                     if page:
                         params["page"] = page
                     response = await client.get("/labs/tests/search", params=params)
+                    if error := _api_error(response):
+                        return _lab_lookup_failed(action, error)
                     matches = (response or {}).get("lab_tests") or []
                     options = []
                     raw_params: Dict[str, List[Dict[str, Any]]] = {}
@@ -926,6 +956,8 @@ async def managePatientLabs(
                         return {"error": "lab_record_id required for test_questions",
                                 "guidance": "Use action='search_tests' to find the test's lab_record_id."}
                     response = await client.get(f"/labs/tests/{lab_record_id}/ask_at_order_entry")
+                    if error := _api_error(response):
+                        return _lab_lookup_failed(action, error)
                     questions = (response or {}).get("ask_at_order_entry") or []
                     return strip_empty_values({
                         "questions": questions,
@@ -935,12 +967,8 @@ async def managePatientLabs(
 
         except Exception as e:
             logger.error(f"Error in managePatientLabs: {e}")
-            if action in ("list_labs", "search_tests", "test_questions") and _scope_error(e):
-                return {
-                    "error": str(e),
-                    "guidance": "The lab catalog needs the charmhealth.defaults.READ scope, and this token may not "
-                                "carry it. Sign in again with that scope; until then, catalog values cannot be looked up.",
-                }
+            if action in _CATALOG_ACTIONS and _scope_error(e):
+                return {"error": str(e), "guidance": _CATALOG_SCOPE_GUIDANCE}
             return {
                 "error": str(e),
                 "guidance": f"Lab {action} failed. Check your parameters and ensure IDs are valid. Use action='list' to find correct group_id or lab_order_id values."
