@@ -592,7 +592,11 @@ def _catalog_duplicates(options: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             groups.setdefault((o.get("lab_id"), loincs), []).append(o)
     out = []
     for (lab_id, loincs), members in groups.items():
-        ranges = {tuple(m.get("reference_range") for m in o["measures"]) for o in members}
+        # One range per LOINC code, in the key's sorted order, so two entries
+        # that list the same analytes in a different order, or carry an extra
+        # measure with no code, compare equal when every analyte agrees.
+        ranges = {tuple({m["loinc_code"]: m.get("reference_range") for m in o["measures"]
+                         if m.get("loinc_code")}[code] for code in loincs) for o in members}
         if len(members) > 1 and len(ranges) > 1:
             out.append({
                 "lab_name": members[0].get("lab_name"),
