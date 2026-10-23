@@ -450,7 +450,7 @@ async def managePatientDrugs(
     Manage patient drugs and supplements.
 
     <usecase>
-    Unified drug management for medications, supplements, and vitamins - prescribe medications, 
+    Unified drug management for medication chart records, supplements, and vitamins - document medication orders,
     document supplements, manage drug interactions. Includes automatic allergy checking and 
     comprehensive drug safety workflow for optimal patient care.
     </usecase>
@@ -458,7 +458,7 @@ async def managePatientDrugs(
     <instructions>
     Actions:
     - "add": Log a drug (medication/supplement/vitamin) the patient takes — no encounter tie required. Requires drug_name, directions for medications; drug_name, dosage for supplements.
-    - "prescribe": Same as "add" but for medication only, and REQUIRES encounter_id — this is what actually marks it as a prescription written during a visit rather than a medication-history log entry. Use this, not "add", when a clinician is writing a new prescription during an encounter. There is no lookup action here to discover real catalog values (drug_details_id, generic_drug_id, etc.) — the practice's drug-catalog lookup endpoint (GET /drug/search) requires an OAuth scope this app's credentials don't carry, confirmed via live testing, not fixable from this tool. drug_name is plain free text; a bad/unmatched name may be rejected by the real API as a catalog mismatch — that's expected, not a bug here.
+    - "prescribe": Same chart-record POST as "add" but for medication only, and REQUIRES encounter_id to link the record to a visit. It doesn't sign or electronically send a prescription to a pharmacy. Use it when documenting a clinician's new medication order during an encounter. There is no lookup action here to discover real catalog values (drug_details_id, generic_drug_id, etc.) — the practice's drug-catalog lookup endpoint (GET /drug/search) requires an OAuth scope this app's credentials don't carry, confirmed via live testing, not fixable from this tool. drug_name is plain free text; a bad/unmatched name may be rejected by the real API as a catalog mismatch — that's expected, not a bug here.
     - "update": Modify existing prescription (requires record_id + fields to change). IMPORTANT: drug name and strength CANNOT be changed via update — use discontinue + add instead. Updatable fields: directions, dispense, refills, status.
     - "discontinue": Stop drug (requires record_id)
     - "list": Show all patient drugs by type (filter by substance_type, optionally filter by status)
@@ -671,8 +671,12 @@ async def managePatientDrugs(
                         response = await client.post(f"/patients/{patient_id}/medications", data=med_data)
 
                         if response.get("medications"):
-                            verb = "prescribed" if action == "prescribe" else "added"
-                            guidance = f"Medication '{drug_name}' {verb} successfully. Monitor for allergic reactions and drug interactions. Use reviewPatientHistory() to see all current medications."
+                            guidance = (
+                                f"Medication '{drug_name}' added to the Charm chart. "
+                                "This API response doesn't confirm electronic transmission to a pharmacy. "
+                                "Monitor for allergic reactions and drug interactions. "
+                                "Use reviewPatientHistory() to see all current medications."
+                            )
                             if allergy_warning:
                                 guidance = f"{allergy_warning} {guidance}"
                             if comments_dropped:

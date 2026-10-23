@@ -244,6 +244,9 @@ async def test_prescribe_surfaces_allergy_warning_without_logging_allergen_names
 
     assert "Penicillin" in result["guidance"]
     assert "Peanuts" in result["guidance"]
+    assert "added to the Charm chart" in result["guidance"]
+    assert "doesn't confirm electronic transmission to a pharmacy" in result["guidance"]
+    assert "prescribed successfully" not in result["guidance"]
     assert "Penicillin" not in caplog.text
     assert "Peanuts" not in caplog.text
 
