@@ -6,12 +6,14 @@ pattern as test_referrals.py.
 order's order_tests items each need lab_id/lab_name/medical_record_id/
 lab_record_id — validated client-side before ever calling the API, since the
 real backend NPEs on a missing order_tests array entirely rather than
-returning a clean 400. There is no lookup action in this tool to discover
-those catalog values (search_labs/search_tests were removed — the real
-GET /labs/list and GET /lab/{id}/tests/search endpoints require an OAuth
-scope this app's credentials don't carry, confirmed via live testing against
-sandbox, not fixable from this tool). Callers must supply real catalog
-values from elsewhere.
+returning a clean 400.
+
+Those values come from the catalog actions (list_labs, search_tests,
+test_questions). An earlier version removed lookup actions because
+GET /lab/{id}/tests/search failed on sandbox. That path is wrong — it 404s —
+and the one CharmAnywhere uses, GET /labs/tests/search, answers with a token
+carrying charmhealth.defaults.READ (checked against the demo practice,
+2026-10-07).
 """
 
 from __future__ import annotations
@@ -29,9 +31,10 @@ class _FakeAPIClient:
     """Stands in for CharmHealthAPIClient — returns canned responses keyed
     by exact endpoint string, per HTTP method."""
 
-    def __init__(self, get_responses=None, post_responses=None):
+    def __init__(self, get_responses=None, post_responses=None, credential="tenant-a"):
         self._get = get_responses or {}
         self._post = post_responses or {}
+        self._credential = credential
         self.get_calls: list[tuple[str, dict]] = []
         self.post_calls: list[tuple[str, dict]] = []
 
@@ -48,6 +51,9 @@ class _FakeAPIClient:
     async def post(self, endpoint, data=None, params=None):
         self.post_calls.append((endpoint, data or {}))
         return self._post[endpoint]
+
+    def credential_key(self):
+        return self._credential
 
 
 def _patch_client(monkeypatch, fake_client) -> None:
@@ -203,3 +209,352 @@ async def test_order_rejects_order_tests_with_non_dict_elements(monkeypatch) -> 
 
     assert "order_tests" in json.loads(str(exc_info.value))["error"]
     assert fake.post_calls == []
+
+
+# ── catalog lookup ───────────────────────────────────────────────────────
+
+
+def _tsh(record_id, test_id, code=""):
+    return {"lab_name": "General", "lab_id": "L1", "test_name": "TSH", "test_code": code,
+            "lab_record_id": record_id, "test_id": test_id}
+
+
+def _params(record_id, lo, hi, loinc="11580-8"):
+    return {"lab_test_params": [{"param_name": "TSH", "lab_rec_id": record_id, "loinc_code": loinc,
+                                 "rec_unit": "uIU/mL", "ref_min": lo, "ref_max": hi}]}
+
+
+@pytest.fixture(autouse=True)
+def _clear_params_cache():
+    clinical_support._test_params_cache.clear()
+    clinical_support._test_params_locks.clear()
+    yield
+    clinical_support._test_params_cache.clear()
+    clinical_support._test_params_locks.clear()
+
+
+@pytest.mark.asyncio
+async def test_search_tests_returns_orderable_options_with_what_tells_them_apart(monkeypatch) -> None:
+    """Four entries named TSH in one lab is the demo practice's real catalog.
+    By name they are identical; by reference range two of them are not."""
+    fake = _FakeAPIClient(get_responses={
+        "/labs/tests/search": {"lab_tests": [_tsh("R1", "T1"), _tsh("R2", "T2"), _tsh("R4", "T4", "004259")]},
+        "/labs/test/R1/parameters": _params("R1", "0.33", "5.33"),
+        "/labs/test/R2/parameters": _params("R2", "0.358", "3.74"),
+        "/labs/test/R4/parameters": _params("R4", "0.45", "4.5"),
+    })
+    _patch_client(monkeypatch, fake)
+
+    r = await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+
+    first = r["lab_tests"][0]
+    assert first["lab_record_id"] == "R1" and first["medical_record_id"] == "T1"
+    assert first["measures"][0] == {"name": "TSH", "loinc_code": "11580-8", "unit": "uIU/mL",
+                                    "reference_range": "0.33-5.33"}
+    assert r["lab_tests"][2]["test_code"] == "004259"
+    assert "do not pick by name" in r["guidance"]
+    # Same lab, same LOINC, three different ranges: one duplicate group.
+    dup = r["catalog_duplicates"][0]
+    assert dup["loinc_codes"] == ["11580-8"] and sorted(dup["lab_record_ids"]) == ["R1", "R2", "R4"]
+
+
+@pytest.mark.asyncio
+async def test_search_tests_caches_parameters_between_searches(monkeypatch) -> None:
+    fake = _FakeAPIClient(get_responses={
+        "/labs/tests/search": {"lab_tests": [_tsh("R1", "T1")]},
+        "/labs/test/R1/parameters": _params("R1", "0.33", "5.33"),
+    })
+    _patch_client(monkeypatch, fake)
+
+    await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+    await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+
+    assert [c[0] for c in fake.get_calls].count("/labs/test/R1/parameters") == 1
+
+
+@pytest.mark.asyncio
+async def test_search_tests_says_when_it_stopped_looking_up_details(monkeypatch) -> None:
+    many = [_tsh(f"R{i}", f"T{i}") for i in range(11)]
+    responses = {"/labs/tests/search": {"lab_tests": many}}
+    responses.update({f"/labs/test/R{i}/parameters": _params(f"R{i}", "0.3", "5") for i in range(11)})
+    fake = _FakeAPIClient(get_responses=responses)
+    _patch_client(monkeypatch, fake)
+
+    r = await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+
+    assert r["details_omitted"] == 3
+    assert "measures" not in r["lab_tests"][10]
+    assert "narrow with lab_name" in r["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_search_tests_requires_test_name(monkeypatch) -> None:
+    fake = _FakeAPIClient()
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await clinical_support.managePatientLabs(action="search_tests")
+
+    assert json.loads(str(exc_info.value))["error"] == "test_name required for search_tests"
+    assert fake.get_calls == []
+
+
+@pytest.mark.asyncio
+async def test_test_questions_returns_ask_at_order_entry(monkeypatch) -> None:
+    fake = _FakeAPIClient(get_responses={
+        "/labs/tests/R1/ask_at_order_entry": {"ask_at_order_entry": [{"code": "FAST", "description": "Fasting?"}]},
+    })
+    _patch_client(monkeypatch, fake)
+
+    r = await clinical_support.managePatientLabs(action="test_questions", lab_record_id="R1")
+
+    assert r["questions"][0]["code"] == "FAST"
+
+
+@pytest.mark.asyncio
+async def test_catalog_scope_failure_says_which_scope(monkeypatch) -> None:
+    class _Denied(_FakeAPIClient):
+        async def get(self, endpoint, params=None):
+            raise RuntimeError("401 Unauthorized: invalid oauth scope")
+    _patch_client(monkeypatch, _Denied())
+
+    with pytest.raises(ToolError) as exc_info:
+        await clinical_support.managePatientLabs(action="list_labs")
+
+    assert "charmhealth.defaults.READ" in json.loads(str(exc_info.value))["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_search_tests_flags_a_range_stored_backwards(monkeypatch) -> None:
+    """Real demo data: a TSH stored as 5.5-0.35. No value is inside it."""
+    fake = _FakeAPIClient(get_responses={
+        "/labs/tests/search": {"lab_tests": [_tsh("R3", "T3")]},
+        "/labs/test/R3/parameters": _params("R3", "5.5", "0.35", loinc=""),
+    })
+    _patch_client(monkeypatch, fake)
+
+    r = await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+
+    assert r["inverted_ranges"] == [{"lab_name": "General", "test_name": "TSH", "lab_record_id": "R3",
+                                     "measure": "TSH", "reference_range": "5.5-0.35"}]
+    assert "see inverted_ranges" in r["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_list_orders_reports_whether_the_lab_has_it(monkeypatch) -> None:
+    fake = _FakeAPIClient(get_responses={"/labs/orders": {"lab_orders": [
+        {"lab_order_id": "O1", "order_date": "Oct 07, 2026", "lab_name": "General", "test_names": ["TSH"],
+         "eORDER_STATUS": "ERROR", "order_status": 0},
+    ]}})
+    _patch_client(monkeypatch, fake)
+
+    r = await clinical_support.managePatientLabs(action="list_orders", patient_id="P1")
+
+    assert r["lab_orders"][0]["e_order_status"] == "ERROR"
+    assert r["lab_orders"][0]["test_names"] == ["TSH"]
+    assert fake.get_calls == [("/labs/orders", {"patient_id": "P1"})]
+
+
+# ── API errors come back as a dict, not an exception ─────────────────────
+#
+# CharmHealthAPIClient._make_request returns {"error": "HTTP 403: ..."} on an
+# HTTP failure instead of raising. Read as a success, that dict has no
+# "lab_tests" key, and the caller is told nothing matched.
+
+
+_FORBIDDEN = {"error": 'HTTP 403: {"message":"invalid oauth scope"}'}
+_SERVER_ERROR = {"error": "HTTP 500: Internal Server Error"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action,kwargs,endpoint", [
+    ("list_labs", {}, "/labs/search"),
+    ("search_tests", {"test_name": "TSH"}, "/labs/tests/search"),
+    ("test_questions", {"lab_record_id": "R1"}, "/labs/tests/R1/ask_at_order_entry"),
+])
+async def test_catalog_scope_denial_from_the_real_client_says_which_scope(monkeypatch, action, kwargs, endpoint) -> None:
+    _patch_client(monkeypatch, _FakeAPIClient(get_responses={endpoint: _FORBIDDEN}))
+
+    with pytest.raises(ToolError) as exc_info:
+        await clinical_support.managePatientLabs(action=action, **kwargs)
+
+    body = json.loads(str(exc_info.value))
+    assert "HTTP 403" in body["error"]
+    assert "charmhealth.defaults.READ" in body["guidance"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action,kwargs,endpoint", [
+    ("list_orders", {"patient_id": "P1"}, "/labs/orders"),
+    ("list_labs", {}, "/labs/search"),
+    ("search_tests", {"test_name": "TSH"}, "/labs/tests/search"),
+    ("test_questions", {"lab_record_id": "R1"}, "/labs/tests/R1/ask_at_order_entry"),
+])
+async def test_catalog_api_failure_is_an_error_not_an_empty_result(monkeypatch, action, kwargs, endpoint) -> None:
+    _patch_client(monkeypatch, _FakeAPIClient(get_responses={endpoint: _SERVER_ERROR}))
+
+    with pytest.raises(ToolError) as exc_info:
+        await clinical_support.managePatientLabs(action=action, **kwargs)
+
+    body = json.loads(str(exc_info.value))
+    assert "HTTP 500" in body["error"]
+    assert "charmhealth.defaults.READ" not in body["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_parameters_lookup_is_not_cached(monkeypatch) -> None:
+    """A transient failure on the first lookup must not stand in for "this
+    test measures nothing" for the next hour."""
+    responses = {
+        "/labs/tests/search": {"lab_tests": [_tsh("R1", "T1")]},
+        "/labs/test/R1/parameters": _SERVER_ERROR,
+    }
+    fake = _FakeAPIClient(get_responses=responses)
+    _patch_client(monkeypatch, fake)
+
+    first = await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+    responses["/labs/test/R1/parameters"] = _params("R1", "0.33", "5.33")
+    second = await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+
+    assert "measures" not in first["lab_tests"][0]
+    assert "could not be looked up" in first["guidance"]
+    assert second["lab_tests"][0]["measures"][0]["reference_range"] == "0.33-5.33"
+    assert [c[0] for c in fake.get_calls].count("/labs/test/R1/parameters") == 2
+
+
+# ── the parameters cache is per caller ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_parameters_cached_for_one_caller_are_not_served_to_another(monkeypatch) -> None:
+    """Two practices can each have a lab_record_id R1. The second must get
+    its own catalog's range, not the first one's."""
+    a = _FakeAPIClient(credential="tenant-a", get_responses={
+        "/labs/tests/search": {"lab_tests": [_tsh("R1", "T1")]},
+        "/labs/test/R1/parameters": _params("R1", "0.33", "5.33"),
+    })
+    b = _FakeAPIClient(credential="tenant-b", get_responses={
+        "/labs/tests/search": {"lab_tests": [_tsh("R1", "T1")]},
+        "/labs/test/R1/parameters": _params("R1", "0.45", "4.5"),
+    })
+
+    _patch_client(monkeypatch, a)
+    await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+    _patch_client(monkeypatch, b)
+    r = await clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+
+    assert r["lab_tests"][0]["measures"][0]["reference_range"] == "0.45-4.5"
+    assert [c[0] for c in b.get_calls].count("/labs/test/R1/parameters") == 1
+
+
+def test_credential_key_separates_callers_and_is_stable_for_one(monkeypatch) -> None:
+    from api import CharmHealthAPIClient
+
+    monkeypatch.setenv("CHARMHEALTH_CLIENT_ID", "cid")
+    monkeypatch.delenv("CHARMHEALTH_REFRESH_TOKEN", raising=False)
+    base = "https://ehr.example/api/ehr/v1"
+
+    a1 = CharmHealthAPIClient(base_url=base, access_token="a-access-1", refresh_token="refresh-a")
+    a2 = CharmHealthAPIClient(base_url=base, access_token="a-access-2", refresh_token="refresh-a")
+    b = CharmHealthAPIClient(base_url=base, access_token="b-access", refresh_token="refresh-b")
+    bearer_c = CharmHealthAPIClient(base_url=base, access_token="c-access")
+    bearer_d = CharmHealthAPIClient(base_url=base, access_token="d-access")
+    other_region = CharmHealthAPIClient(base_url="https://ehr.other/api/ehr/v1", access_token="a-access-1",
+                                        refresh_token="refresh-a")
+
+    # The same refresh token is the same caller, whatever access token it holds now.
+    assert a1.credential_key() == a2.credential_key()
+    keys = [a1.credential_key(), b.credential_key(), bearer_c.credential_key(),
+            bearer_d.credential_key(), other_region.credential_key()]
+    assert len(set(keys)) == len(keys)
+    # The key holds no credential in the clear.
+    assert all("refresh-a" not in k and "access" not in k for k in keys)
+
+
+# ── concurrent lookups share one fetch ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_concurrent_searches_fetch_each_tests_parameters_once(monkeypatch) -> None:
+    import asyncio
+
+    class _Slow(_FakeAPIClient):
+        async def get(self, endpoint, params=None):
+            if endpoint.endswith("/parameters"):
+                await asyncio.sleep(0.01)
+            return await super().get(endpoint, params)
+
+    fake = _Slow(get_responses={
+        "/labs/tests/search": {"lab_tests": [_tsh("R1", "T1")]},
+        "/labs/test/R1/parameters": _params("R1", "0.33", "5.33"),
+    })
+    _patch_client(monkeypatch, fake)
+
+    await asyncio.gather(*(clinical_support.managePatientLabs(action="search_tests", test_name="TSH")
+                           for _ in range(3)))
+
+    assert [c[0] for c in fake.get_calls].count("/labs/test/R1/parameters") == 1
+
+
+
+def test_expired_entries_and_their_idle_locks_are_dropped() -> None:
+    import asyncio
+
+    ttl = clinical_support._TEST_PARAMS_TTL
+    clinical_support._test_params_cache[("old", "R1")] = (0.0, [])
+    clinical_support._test_params_cache[("new", "R1")] = (ttl, [])
+    clinical_support._test_params_locks[("old", "R1")] = asyncio.Lock()
+    clinical_support._test_params_locks[("new", "R1")] = asyncio.Lock()
+
+    clinical_support._drop_expired_test_params(now=ttl + 1)
+
+    assert list(clinical_support._test_params_cache) == [("new", "R1")]
+    assert list(clinical_support._test_params_locks) == [("new", "R1")]
+
+
+# ── catalog_duplicates compares ranges per LOINC code ────────────────────
+
+
+def _panel(record_id, measures):
+    return {"lab_test_params": [{"param_name": n, "lab_rec_id": record_id, "loinc_code": loinc,
+                                 "rec_unit": "", "ref_min": lo, "ref_max": hi}
+                                for n, loinc, lo, hi in measures]}
+
+
+@pytest.mark.asyncio
+async def test_panels_that_agree_per_loinc_are_not_duplicates_whatever_their_order(monkeypatch) -> None:
+    """Same lab, same analytes, same ranges. One entry lists them in another
+    order and carries an extra measure with no LOINC code."""
+    panel = lambda rid, tid: {**_tsh(rid, tid), "test_name": "BMP"}
+    fake = _FakeAPIClient(get_responses={
+        "/labs/tests/search": {"lab_tests": [panel("P1", "T1"), panel("P2", "T2")]},
+        "/labs/test/P1/parameters": _panel("P1", [("Sodium", "2951-2", "135", "145"),
+                                                   ("Potassium", "2823-3", "3.5", "5.1")]),
+        "/labs/test/P2/parameters": _panel("P2", [("Comment", "", "", ""),
+                                                   ("Potassium", "2823-3", "3.5", "5.1"),
+                                                   ("Sodium", "2951-2", "135", "145")]),
+    })
+    _patch_client(monkeypatch, fake)
+
+    r = await clinical_support.managePatientLabs(action="search_tests", test_name="BMP")
+
+    assert r["catalog_duplicates"] == []
+
+
+@pytest.mark.asyncio
+async def test_panels_that_differ_on_one_loinc_are_duplicates(monkeypatch) -> None:
+    panel = lambda rid, tid: {**_tsh(rid, tid), "test_name": "BMP"}
+    fake = _FakeAPIClient(get_responses={
+        "/labs/tests/search": {"lab_tests": [panel("P1", "T1"), panel("P2", "T2")]},
+        "/labs/test/P1/parameters": _panel("P1", [("Sodium", "2951-2", "135", "145"),
+                                                   ("Potassium", "2823-3", "3.5", "5.1")]),
+        "/labs/test/P2/parameters": _panel("P2", [("Potassium", "2823-3", "3.5", "5.3"),
+                                                   ("Sodium", "2951-2", "135", "145")]),
+    })
+    _patch_client(monkeypatch, fake)
+
+    r = await clinical_support.managePatientLabs(action="search_tests", test_name="BMP")
+
+    dup = r["catalog_duplicates"][0]
+    assert dup["loinc_codes"] == ["2823-3", "2951-2"]
+    assert sorted(dup["reference_ranges"]) == ["3.5-5.1, 135-145", "3.5-5.3, 135-145"]

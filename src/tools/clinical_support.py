@@ -6,8 +6,10 @@ from datetime import date
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
+import asyncio
 import json
 import logging
+import time
 from telemetry import telemetry, with_tool_metrics
 
 logger = logging.getLogger(__name__)
@@ -502,10 +504,160 @@ async def managePatientFiles(
                 "guidance": f"Patient file {action} failed. Check your file paths and parameters. Ensure files exist and are in supported formats."
             }
 
+# A test's parameters (what it measures, its units and reference range) change
+# when a practice edits its lab catalog, which is rare. Searching "TSH" costs
+# one call plus one per match, and the API allows 100 a minute across every
+# caller, so each test's parameters are fetched once an hour at most.
+# Entries are keyed by the caller's credential as well as the record id: one
+# process serves many practices, and two practices can both have a record R1.
+_TEST_PARAMS_TTL = 3600.0
+_test_params_cache: Dict[tuple[str, str], tuple[float, List[Dict[str, Any]]]] = {}
+# One lock per entry, as CharmHealthAPIClient._shared_token_locks does for
+# tokens, so concurrent searches that miss on the same test fetch it once.
+_test_params_locks: Dict[tuple[str, str], asyncio.Lock] = {}
+
+# How many matches get their parameters looked up in one search. The rest are
+# returned with name and code only, and the response says so.
+_MAX_DETAILED_MATCHES = 8
+
+
+async def _test_params(client: Any, lab_record_id: str) -> Optional[List[Dict[str, Any]]]:
+    """A test's parameters, or None when the API returned an error. A failure
+    is not cached: stored, it would read as "measures nothing" for an hour."""
+    key = (client.credential_key(), lab_record_id)
+    hit = _test_params_cache.get(key)
+    if hit and time.monotonic() - hit[0] < _TEST_PARAMS_TTL:
+        return hit[1]
+    async with _test_params_locks.setdefault(key, asyncio.Lock()):
+        hit = _test_params_cache.get(key)
+        if hit and time.monotonic() - hit[0] < _TEST_PARAMS_TTL:
+            return hit[1]
+        resp = await client.get(f"/labs/test/{lab_record_id}/parameters")
+        if error := _api_error(resp):
+            logger.warning(f"Lab test {lab_record_id} parameters lookup failed: {error}")
+            return None
+        params = (resp or {}).get("lab_test_params") or []
+        now = time.monotonic()
+        _drop_expired_test_params(now)
+        _test_params_cache[key] = (now, params)
+        return params
+
+
+def _drop_expired_test_params(now: float) -> None:
+    """Remove expired entries and their idle locks. A bearer-auth caller's key
+    changes with each access token, so without this both dicts only grow."""
+    for k in [k for k, (at, _) in _test_params_cache.items() if now - at >= _TEST_PARAMS_TTL]:
+        del _test_params_cache[k]
+    for k in [k for k, lock in _test_params_locks.items() if k not in _test_params_cache and not lock.locked()]:
+        del _test_params_locks[k]
+
+
+def _range_text(p: Dict[str, Any]) -> Optional[str]:
+    lo, hi = p.get("ref_min"), p.get("ref_max")
+    if lo not in (None, "") and hi not in (None, ""):
+        return f"{lo}-{hi}"
+    return p.get("ref_range") or p.get("param_ref_range") or None
+
+
+def _catalog_option(t: Dict[str, Any], params: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
+    """One catalog entry, with what a person needs to tell it from the
+    entries around it: lab, test code, what it measures, and the reference range."""
+    option: Dict[str, Any] = {
+        "lab_name": t.get("lab_name"),
+        "lab_id": t.get("lab_id"),
+        "test_name": t.get("test_name"),
+        "test_code": t.get("test_code") or None,
+        "lab_record_id": t.get("lab_record_id"),
+        # The order action's medical_record_id is the search result's test_id.
+        "medical_record_id": t.get("test_id"),
+    }
+    if params is not None:
+        option["measures"] = [{
+            "name": p.get("param_name"),
+            "loinc_code": p.get("loinc_code") or None,
+            "unit": p.get("rec_unit") or None,
+            "reference_range": _range_text(p),
+        } for p in params]
+    return option
+
+
+def _catalog_duplicates(options: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Entries in the same lab that measure the same thing (same LOINC codes)
+    but flag results differently (different reference ranges). Ordering either
+    is a real choice; the duplicate is the practice's to clean up."""
+    groups: Dict[tuple, List[Dict[str, Any]]] = {}
+    for o in options:
+        loincs = tuple(sorted(m["loinc_code"] for m in o.get("measures") or [] if m.get("loinc_code")))
+        if loincs:
+            groups.setdefault((o.get("lab_id"), loincs), []).append(o)
+    out = []
+    for (lab_id, loincs), members in groups.items():
+        # One range per LOINC code, in the key's sorted order, so two entries
+        # that list the same analytes in a different order, or carry an extra
+        # measure with no code, compare equal when every analyte agrees.
+        ranges = {tuple({m["loinc_code"]: m.get("reference_range") for m in o["measures"]
+                         if m.get("loinc_code")}[code] for code in loincs) for o in members}
+        if len(members) > 1 and len(ranges) > 1:
+            out.append({
+                "lab_name": members[0].get("lab_name"),
+                "loinc_codes": list(loincs),
+                "lab_record_ids": [o.get("lab_record_id") for o in members],
+                "reference_ranges": [", ".join(r or "?" for r in rr) for rr in sorted(ranges, key=str)],
+            })
+    return out
+
+
+def _inverted_ranges(options: List[Dict[str, Any]], raw: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Reference ranges stored with the minimum above the maximum. No value
+    falls inside one, so every result for that test would read as abnormal.
+    The demo catalog has two: a TSH stored as 5.5-0.35 and one as 3.0-0.5."""
+    out = []
+    for o in options:
+        for prm in raw.get(str(o.get("lab_record_id")), []):
+            try:
+                lo, hi = float(prm.get("ref_min")), float(prm.get("ref_max"))
+            except (TypeError, ValueError):
+                continue
+            if lo > hi:
+                out.append({"lab_name": o.get("lab_name"), "test_name": o.get("test_name"),
+                            "lab_record_id": o.get("lab_record_id"), "measure": prm.get("param_name"),
+                            "reference_range": _range_text(prm)})
+    return out
+
+
+def _scope_error(e: Union[Exception, str]) -> bool:
+    text = str(e).lower()
+    return "scope" in text or "401" in text or "403" in text or "unauthorized" in text
+
+
+def _api_error(response: Any) -> Optional[str]:
+    """The error CharmHealthAPIClient returned in place of a response.
+
+    The client does not raise on an HTTP failure; it returns
+    {"error": "HTTP 403: ..."}. Read as a success, that dict has none of the
+    keys a lookup expects, and an empty answer looks like "nothing found"."""
+    if isinstance(response, dict) and response.get("error"):
+        return str(response["error"])
+    return None
+
+
+_CATALOG_ACTIONS = ("list_labs", "search_tests", "test_questions")
+_CATALOG_SCOPE_GUIDANCE = ("The lab catalog needs the charmhealth.defaults.READ scope, and this token may not "
+                           "carry it. Sign in again with that scope; until then, catalog values cannot be looked up.")
+
+
+def _lab_lookup_failed(action: str, error: str) -> Dict[str, Any]:
+    if action in _CATALOG_ACTIONS and _scope_error(error):
+        return {"error": error, "guidance": _CATALOG_SCOPE_GUIDANCE}
+    return {"error": error,
+            "guidance": f"Lab {action} failed at the CharmHealth API, so this is not an empty result. "
+                        "Try again; if it keeps failing, report the error."}
+
+
 @clinical_support_mcp.tool(app=True)
 @with_tool_metrics()
 async def managePatientLabs(
-    action: Literal["list", "get_details", "order"],
+    action: Literal["list", "get_details", "order", "list_orders", "list_labs", "search_tests", "test_questions"],
     # Common fields
     patient_id: Optional[str] = None,
     group_id: Optional[str] = None,
@@ -535,6 +687,12 @@ async def managePatientLabs(
     specimen_collection_date: Optional[str] = None,
     specimen_additional_comments: Optional[str] = None,  # same as enc_facility_id: confirmed via XML, absent from published docs
 
+    # catalog lookup fields
+    test_name: Optional[str] = None,
+    lab_name: Optional[str] = None,
+    lab_record_id: Optional[str] = None,
+    page: Optional[int] = None,
+
     response_format: Optional[Literal["concise", "detailed"]] = None,  # reserved for cortex; no behavior change yet (J13/CH-695)
 
     ctx: Context = None,
@@ -557,19 +715,38 @@ async def managePatientLabs(
       encounter) or both member_id and facility_id. order_tests is required and
       must be non-empty — a list of objects (or a JSON-encoded string of one),
       each with at least lab_id, lab_name, medical_record_id, and lab_record_id.
-      There is currently no lookup action in this tool to discover those catalog
-      values — the practice's lab/test catalog lookup endpoints
-      (GET /labs/list, GET /lab/{id}/tests/search) require an OAuth scope
-      ("defaults" on the sandbox tenant tested) that this app's credentials don't
-      carry, confirmed via live testing, not fixable from this tool. Whoever calls
-      "order" needs to already know the real catalog values (e.g. looked up
-      manually in the CharmHealth web UI's Settings > Labs) — don't guess or
-      fabricate them; a bad id fails clean, not silently. Optionally: test_name,
+      Get those from "search_tests" — never guess or fabricate them; a bad id
+      fails clean, not silently. Optionally: test_name,
       test_code, test_type, specimen_condition_temperature, specimen_type,
       z_segment_aoe_map per test. Optional order-level fields: ordered_date
       (defaults to today, ignored if encounter_id is set), lab_order_id (add these
       tests to an existing open order instead of creating a new one), lab_notes,
       intra_office_notes, specimen_collection_date, specimen_additional_comments.
+    - "list_orders": Lab orders placed for a patient (requires patient_id), with
+      whether each reached the lab. e_order_status is the lab's side:
+      QUEUED (sent, not yet pulled by the lab), SUCCESS (the lab has it),
+      EXCEPTION (sending failed at Charm), ERROR (the lab rejected it). The lab
+      does not say why it rejected an order. order_status is the results side:
+      0 pending, 1 partial, 2 completed.
+    - "list_labs": The labs this practice orders from (lab_id, lab_name).
+    - "search_tests": Find a test in the practice's lab catalog (requires
+      test_name; optional lab_name, page). Each match comes back ready to
+      order — lab_id, lab_name, lab_record_id, medical_record_id — plus what a
+      person needs to tell matches apart: test_code, and under "measures" the
+      LOINC code, unit and reference range of each thing it measures. Names
+      repeat: one demo catalog has four entries called "TSH" in the same lab.
+      When more than one match fits, show the person every option with those
+      fields rather than picking by name. "catalog_duplicates" lists entries in
+      the same lab that measure the same thing but have different reference
+      ranges — the same result would be flagged differently depending on which
+      is ordered, which is worth telling the practice about. "inverted_ranges"
+      lists reference ranges stored with the minimum above the maximum; every
+      result for such a test would read as abnormal.
+    - "test_questions": The ask-at-order-entry questions a test needs answered
+      before it can be ordered (requires lab_record_id). Answer them in the
+      order's z_segment_aoe_map; an unanswered required question can get the
+      order rejected by the lab.
+    The catalog actions need the charmhealth.defaults.READ scope on the token.
     For detailed results: Use group_id for result groups or lab_order_id for specific orders
     Status codes: 0 for pending, 2 for final results
 
@@ -723,8 +900,113 @@ async def managePatientLabs(
                     result = {"lab_order_ids": order_ids, "guidance": "Lab order placed." if order_ids else "Lab order call succeeded but returned no order IDs — verify against action='list'."}
                     return strip_empty_values(result)
 
+                case "list_orders":
+                    if not patient_id:
+                        return {"error": "patient_id required for list_orders",
+                                "guidance": "Give the patient whose orders to list."}
+                    response = await client.get("/labs/orders", params={"patient_id": patient_id})
+                    if error := _api_error(response):
+                        return _lab_lookup_failed(action, error)
+                    orders = [{
+                        "lab_order_id": o.get("lab_order_id"),
+                        "order_date": o.get("order_date"),
+                        "lab_name": o.get("lab_name"),
+                        "test_names": o.get("test_names") or [],
+                        # Renamed: the API spells it eORDER_STATUS, the one
+                        # upper-case key in an otherwise snake_case payload.
+                        "e_order_status": o.get("eORDER_STATUS") or None,
+                        "order_status": o.get("order_status"),
+                        "order_ref_number": o.get("order_ref_number"),
+                    } for o in (response or {}).get("lab_orders") or []]
+                    return strip_empty_values({
+                        "lab_orders": orders,
+                        "guidance": (f"{len(orders)} lab order(s). e_order_status SUCCESS means the lab has it; "
+                                     "ERROR means the lab rejected it." if orders else "No lab orders for this patient."),
+                    })
+
+                case "list_labs":
+                    response = await client.get("/labs/search", params={"per_page": 200})
+                    if error := _api_error(response):
+                        return _lab_lookup_failed(action, error)
+                    labs = [{"lab_id": l.get("lab_id"), "lab_name": l.get("lab_name")}
+                            for l in (response or {}).get("labs") or []]
+                    return strip_empty_values({
+                        "labs": labs,
+                        "guidance": (f"{len(labs)} labs. Use action='search_tests' with test_name to find a test."
+                                     if labs else "This practice has no labs set up."),
+                    })
+
+                case "search_tests":
+                    if not test_name:
+                        return {"error": "test_name required for search_tests",
+                                "guidance": "Give the test's name as a clinician would say it, e.g. 'TSH'."}
+                    params: Dict[str, Any] = {"test_name": test_name}
+                    if lab_name:
+                        params["lab_name"] = lab_name
+                    if page:
+                        params["page"] = page
+                    response = await client.get("/labs/tests/search", params=params)
+                    if error := _api_error(response):
+                        return _lab_lookup_failed(action, error)
+                    matches = (response or {}).get("lab_tests") or []
+                    options = []
+                    raw_params: Dict[str, List[Dict[str, Any]]] = {}
+                    lookup_failed = 0
+                    for i, t in enumerate(matches):
+                        detail = None
+                        if i < _MAX_DETAILED_MATCHES and t.get("lab_record_id"):
+                            detail = await _test_params(client, str(t["lab_record_id"]))
+                            if detail is None:
+                                lookup_failed += 1
+                        if detail is not None:
+                            raw_params[str(t["lab_record_id"])] = detail
+                        options.append(_catalog_option(t, detail))
+                    omitted = max(0, len(matches) - _MAX_DETAILED_MATCHES)
+                    duplicates = _catalog_duplicates(options)
+                    inverted = _inverted_ranges(options, raw_params)
+                    if not options:
+                        guidance = f"No test matching '{test_name}' in this practice's catalog."
+                    elif len(options) == 1:
+                        guidance = "One match. Check its reference range and code before ordering."
+                    else:
+                        guidance = (f"{len(options)} matches. Show the person every option with its lab, test code, "
+                                    "what it measures and reference range; do not pick by name.")
+                    if omitted:
+                        guidance += f" Only the first {_MAX_DETAILED_MATCHES} have measures looked up; {omitted} more are listed by name and code only — narrow with lab_name."
+                    if lookup_failed:
+                        guidance += (f" Measures could not be looked up for {lookup_failed} match(es) because the API "
+                                     "returned an error; their reference ranges are unknown, so check them before ordering.")
+                    if duplicates:
+                        guidance += " Some entries measure the same thing with different reference ranges — see catalog_duplicates."
+                    if inverted:
+                        guidance += (" Some reference ranges are stored with the minimum above the maximum, so every result "
+                                     "would read as abnormal — see inverted_ranges.")
+                    return strip_empty_values({
+                        "lab_tests": options,
+                        "catalog_duplicates": duplicates,
+                        "inverted_ranges": inverted,
+                        "details_omitted": omitted,
+                        "guidance": guidance,
+                    })
+
+                case "test_questions":
+                    if not lab_record_id:
+                        return {"error": "lab_record_id required for test_questions",
+                                "guidance": "Use action='search_tests' to find the test's lab_record_id."}
+                    response = await client.get(f"/labs/tests/{lab_record_id}/ask_at_order_entry")
+                    if error := _api_error(response):
+                        return _lab_lookup_failed(action, error)
+                    questions = (response or {}).get("ask_at_order_entry") or []
+                    return strip_empty_values({
+                        "questions": questions,
+                        "guidance": (f"{len(questions)} question(s) to answer in z_segment_aoe_map before ordering."
+                                     if questions else "This test asks nothing at order entry."),
+                    })
+
         except Exception as e:
             logger.error(f"Error in managePatientLabs: {e}")
+            if action in _CATALOG_ACTIONS and _scope_error(e):
+                return {"error": str(e), "guidance": _CATALOG_SCOPE_GUIDANCE}
             return {
                 "error": str(e),
                 "guidance": f"Lab {action} failed. Check your parameters and ensure IDs are valid. Use action='list' to find correct group_id or lab_order_id values."
