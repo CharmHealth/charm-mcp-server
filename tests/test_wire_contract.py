@@ -237,10 +237,18 @@ async def test_an_api_error_still_reaches_the_client_as_an_error(monkeypatch) ->
 
 
 @pytest.mark.asyncio
-async def test_a_wildcard_facility_id_is_refused_with_a_usable_message() -> None:
+async def test_a_wildcard_facility_id_is_refused_with_a_usable_message(monkeypatch) -> None:
     """A model with no practice context guesses facility_ids="all". The API
     answers with an opaque 400, so the tool says what is wrong and how to fix it
     before spending the call."""
+    # The client is built before the refusal, and it needs a credential, a base URL
+    # and an API key to be built at all. Placeholders keep the test independent of
+    # a local .env. No request is made, and the .invalid host could not resolve if
+    # one were.
+    monkeypatch.setenv("CHARMHEALTH_REFRESH_TOKEN", "test-refresh-token")
+    monkeypatch.setenv("CHARMHEALTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("CHARMHEALTH_BASE_URL", "https://ehr.invalid/api/ehr/v1")
+    monkeypatch.setenv("CHARMHEALTH_API_KEY", "test-api-key")
     async with Client(mcp_server.mcp_composite_server) as client:
         with pytest.raises(Exception) as excinfo:
             await client.call_tool("manageAppointments", {
