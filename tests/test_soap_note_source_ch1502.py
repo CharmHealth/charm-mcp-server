@@ -65,7 +65,7 @@ def _base_responses(soap=None, encounter_date="2026-09-21", medications=None):
 
 async def _review(monkeypatch, fake):
     _patch_client(monkeypatch, fake)
-    return await encounter_management.manageEncounter.fn(
+    return await encounter_management.manageEncounter(
         action="review", patient_id="p1", encounter_id="e1",
     )
 
