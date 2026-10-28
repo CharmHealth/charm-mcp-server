@@ -26,7 +26,7 @@ from tools import core_tools, billing
 # getPracticeInfo's info_type Literal is a straight list of string constants,
 # duplicated nowhere else that the test suite checks — a rebase can silently
 # drop an entry from it (or from the match statement) while every existing
-# test still passes, since tests call `.fn(...)` directly and bypass the
+# test still passes, since tests call `(...)` directly and bypass the
 # generated JSON schema entirely. This validates against the actual schema
 # FastMCP generates and the MCP SDK checks before a tool ever runs, the same
 # way tests/test_response_format_param.py does for response_format (PR #22
@@ -37,8 +37,11 @@ from tools import core_tools, billing
     "info_type", ["procedure_codes", "providers_by_privilege", "visit_types"],
 )
 def test_get_practice_info_info_type_passes_schema_validation(info_type: str) -> None:
-    tools = asyncio.run(mcp_server.mcp_composite_server.get_tools())
-    tool = tools["getPracticeInfo"]
+    # FastMCP 4.x removed get_tools() (name -> Tool dict); list_tools() returns
+    # provider tools carrying the same .parameters schema, matching the pattern
+    # already in test_response_format_param.py.
+    listed = asyncio.run(mcp_server.mcp_composite_server.list_tools())
+    tool = next(t for t in listed if t.name == "getPracticeInfo")
 
     jsonschema.validate(instance={"info_type": info_type}, schema=tool.parameters)
 
@@ -88,7 +91,7 @@ async def test_get_practice_info_procedure_codes_happy_path(monkeypatch) -> None
     })
     _patch_client(monkeypatch, core_tools, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="procedure_codes")
+    result = await core_tools.getPracticeInfo(info_type="procedure_codes")
 
     assert result["procedure_code_count"] == 1
     assert result["procedure_codes"][0]["code_number"] == "99214"
@@ -99,7 +102,7 @@ async def test_get_practice_info_procedure_codes_empty_catalog(monkeypatch) -> N
     fake = _FakeAPIClient(get_responses={"/billing/procedures": {}})
     _patch_client(monkeypatch, core_tools, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="procedure_codes")
+    result = await core_tools.getPracticeInfo(info_type="procedure_codes")
 
     assert result["procedure_code_count"] == 0
 
@@ -121,7 +124,7 @@ async def test_get_practice_info_procedure_codes_defaults_to_procedure_type_only
     fake = _CapturingClient(get_responses={"/billing/procedures": {"procedures": []}})
     _patch_client(monkeypatch, core_tools, fake)
 
-    await core_tools.getPracticeInfo.fn(info_type="procedure_codes")
+    await core_tools.getPracticeInfo(info_type="procedure_codes")
 
     assert captured["params"] == {"code_type": "PROCEDURE_CODE"}
 
@@ -143,7 +146,7 @@ async def test_get_practice_info_procedure_codes_filters_by_code_number(monkeypa
     })
     _patch_client(monkeypatch, core_tools, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="procedure_codes", code_number="99214")
+    result = await core_tools.getPracticeInfo(info_type="procedure_codes", code_number="99214")
 
     assert captured["params"] == {"code_type": "PROCEDURE_CODE", "code_number": "99214"}
     assert result["procedure_code_count"] == 1
@@ -161,7 +164,7 @@ async def test_list_procedures_happy_path(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, billing, fake)
 
-    result = await billing.manageEncounterProcedures.fn(action="list", patient_id="p1", encounter_id="e1")
+    result = await billing.manageEncounterProcedures(action="list", patient_id="p1", encounter_id="e1")
 
     assert result["total_count"] == 1
     assert "1 procedure(s)" in result["guidance"]
@@ -173,7 +176,7 @@ async def test_list_procedures_missing_ids_returns_clean_error(monkeypatch) -> N
     _patch_client(monkeypatch, billing, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.manageEncounterProcedures.fn(action="list", patient_id="p1", encounter_id="")
+        await billing.manageEncounterProcedures(action="list", patient_id="p1", encounter_id="")
 
     assert "encounter_id" in json.loads(str(exc_info.value))["error"]
 
@@ -193,7 +196,7 @@ async def test_list_procedures_surfaces_real_api_failure_instead_of_empty_state(
     _patch_client(monkeypatch, billing, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.manageEncounterProcedures.fn(action="list", patient_id="p1", encounter_id="e1")
+        await billing.manageEncounterProcedures(action="list", patient_id="p1", encounter_id="e1")
 
     result = json.loads(str(exc_info.value))
     assert result["error"] == "HTTP 404: Not Found"
@@ -215,7 +218,7 @@ async def test_add_procedure_sends_batch_envelope_with_defaults(monkeypatch) -> 
     })
     _patch_client(monkeypatch, billing, fake)
 
-    result = await billing.manageEncounterProcedures.fn(
+    result = await billing.manageEncounterProcedures(
         action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
     )
 
@@ -233,7 +236,7 @@ async def test_add_procedure_missing_code_id_returns_clean_error(monkeypatch) ->
     _patch_client(monkeypatch, billing, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.manageEncounterProcedures.fn(
+        await billing.manageEncounterProcedures(
             action="add", patient_id="p1", encounter_id="e1", item_charge=150.0,
         )
 
@@ -249,7 +252,7 @@ async def test_add_procedure_missing_item_charge_returns_clean_error(monkeypatch
     _patch_client(monkeypatch, billing, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.manageEncounterProcedures.fn(action="add", patient_id="p1", encounter_id="e1", code_id="c1")
+        await billing.manageEncounterProcedures(action="add", patient_id="p1", encounter_id="e1", code_id="c1")
 
     assert json.loads(str(exc_info.value))["error"] == "item_charge required for add"
 
@@ -260,7 +263,7 @@ async def test_add_procedure_invalid_place_of_service_rejected(monkeypatch) -> N
     _patch_client(monkeypatch, billing, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.manageEncounterProcedures.fn(
+        await billing.manageEncounterProcedures(
             action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
             place_of_service="63",  # not in the legal 01-62,65,71,72,81,99 set
         )
@@ -276,7 +279,7 @@ async def test_add_procedure_with_modifiers_and_diagnosis_links(monkeypatch) -> 
     })
     _patch_client(monkeypatch, billing, fake)
 
-    await billing.manageEncounterProcedures.fn(
+    await billing.manageEncounterProcedures(
         action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
         modifier_1="25", related_diagnosis_ids="d1, d2",
     )
@@ -298,7 +301,7 @@ async def test_add_procedure_accepts_native_array_for_diagnosis_links(monkeypatc
     })
     _patch_client(monkeypatch, billing, fake)
 
-    await billing.manageEncounterProcedures.fn(
+    await billing.manageEncounterProcedures(
         action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
         related_diagnosis_ids=["d1", "d2"],
     )
@@ -318,7 +321,7 @@ async def test_add_procedure_accepts_json_encoded_array_for_diagnosis_links(monk
     })
     _patch_client(monkeypatch, billing, fake)
 
-    await billing.manageEncounterProcedures.fn(
+    await billing.manageEncounterProcedures(
         action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
         related_diagnosis_ids=json.dumps(["d1", "d2"]),
     )
@@ -339,7 +342,7 @@ async def test_add_procedure_tolerates_python_repr_list_for_diagnosis_links(monk
     })
     _patch_client(monkeypatch, billing, fake)
 
-    await billing.manageEncounterProcedures.fn(
+    await billing.manageEncounterProcedures(
         action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
         related_diagnosis_ids="['d1', 'd2']",
     )
@@ -365,7 +368,7 @@ async def test_add_procedure_invoice_already_generated_error_is_explained(monkey
     _patch_client(monkeypatch, billing, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.manageEncounterProcedures.fn(
+        await billing.manageEncounterProcedures(
             action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
         )
 
@@ -384,7 +387,7 @@ async def test_update_procedure_includes_consultation_cpt_map_id_in_body(monkeyp
     })
     _patch_client(monkeypatch, billing, fake)
 
-    await billing.manageEncounterProcedures.fn(
+    await billing.manageEncounterProcedures(
         action="update", patient_id="p1", encounter_id="e1",
         consultation_cpt_map_id="cpt1", item_charge=200.0,
     )
@@ -407,7 +410,7 @@ async def test_update_procedure_does_not_overwrite_unspecified_fields(monkeypatc
     })
     _patch_client(monkeypatch, billing, fake)
 
-    await billing.manageEncounterProcedures.fn(
+    await billing.manageEncounterProcedures(
         action="update", patient_id="p1", encounter_id="e1",
         consultation_cpt_map_id="cpt1", item_charge=200.0,
     )
@@ -428,7 +431,7 @@ async def test_update_procedure_applies_explicitly_supplied_fields(monkeypatch) 
     })
     _patch_client(monkeypatch, billing, fake)
 
-    await billing.manageEncounterProcedures.fn(
+    await billing.manageEncounterProcedures(
         action="update", patient_id="p1", encounter_id="e1",
         consultation_cpt_map_id="cpt1", item_quantity=3, place_of_service="02",
     )
@@ -445,7 +448,7 @@ async def test_update_procedure_missing_map_id_returns_clean_error(monkeypatch) 
     _patch_client(monkeypatch, billing, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.manageEncounterProcedures.fn(action="update", patient_id="p1", encounter_id="e1")
+        await billing.manageEncounterProcedures(action="update", patient_id="p1", encounter_id="e1")
 
     assert json.loads(str(exc_info.value))["error"] == "consultation_cpt_map_id required for update"
 
@@ -458,7 +461,7 @@ async def test_delete_procedure_happy_path(monkeypatch) -> None:
     fake = _FakeAPIClient()
     _patch_client(monkeypatch, billing, fake)
 
-    result = await billing.manageEncounterProcedures.fn(
+    result = await billing.manageEncounterProcedures(
         action="delete", patient_id="p1", encounter_id="e1", consultation_cpt_map_id="cpt1",
     )
 
@@ -472,7 +475,7 @@ async def test_delete_procedure_missing_map_id_returns_clean_error(monkeypatch) 
     _patch_client(monkeypatch, billing, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await billing.manageEncounterProcedures.fn(action="delete", patient_id="p1", encounter_id="e1")
+        await billing.manageEncounterProcedures(action="delete", patient_id="p1", encounter_id="e1")
 
     assert "consultation_cpt_map_id" in json.loads(str(exc_info.value))["error"]
     assert fake.delete_calls == []
@@ -497,7 +500,7 @@ async def test_update_response_includes_top_level_consultation_cpt_map_id(monkey
     })
     _patch_client(monkeypatch, billing, fake)
 
-    result = await billing.manageEncounterProcedures.fn(
+    result = await billing.manageEncounterProcedures(
         action="update", patient_id="p1", encounter_id="e1",
         consultation_cpt_map_id="cpt1", item_charge=200.0,
     )
@@ -516,7 +519,7 @@ async def test_add_response_includes_top_level_consultation_cpt_map_id_when_unam
     })
     _patch_client(monkeypatch, billing, fake)
 
-    result = await billing.manageEncounterProcedures.fn(
+    result = await billing.manageEncounterProcedures(
         action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
     )
 
@@ -535,7 +538,7 @@ async def test_add_response_normalizes_integer_consultation_cpt_map_id_to_string
     })
     _patch_client(monkeypatch, billing, fake)
 
-    result = await billing.manageEncounterProcedures.fn(
+    result = await billing.manageEncounterProcedures(
         action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
     )
 
@@ -556,7 +559,7 @@ async def test_add_response_omits_top_level_id_when_response_shape_is_ambiguous(
     })
     _patch_client(monkeypatch, billing, fake)
 
-    result = await billing.manageEncounterProcedures.fn(
+    result = await billing.manageEncounterProcedures(
         action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=150.0,
     )
 

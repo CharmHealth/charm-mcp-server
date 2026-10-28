@@ -48,7 +48,7 @@ async def test_providers_by_privilege_happy_path(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="providers_by_privilege", privilege="add_medications")
+    result = await core_tools.getPracticeInfo(info_type="providers_by_privilege", privilege="add_medications")
 
     assert result["privilege"] == "add_medications"
     assert result["provider_count"] == 1
@@ -71,7 +71,7 @@ async def test_providers_by_privilege_member_not_in_list_means_unauthorized(monk
     })
     _patch_client(monkeypatch, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="providers_by_privilege", privilege="add_medications")
+    result = await core_tools.getPracticeInfo(info_type="providers_by_privilege", privilege="add_medications")
 
     assert "m2" not in {p["member_id"] for p in result["providers"]}
 
@@ -81,7 +81,7 @@ async def test_providers_by_privilege_empty_result(monkeypatch) -> None:
     fake = _FakeAPIClient(get_responses={"/members": {}})
     _patch_client(monkeypatch, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="providers_by_privilege", privilege="add_medications")
+    result = await core_tools.getPracticeInfo(info_type="providers_by_privilege", privilege="add_medications")
 
     assert result["provider_count"] == 0
     assert result["providers"] == []
@@ -97,7 +97,7 @@ async def test_providers_by_privilege_missing_privilege_returns_clean_error(monk
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await core_tools.getPracticeInfo.fn(info_type="providers_by_privilege")
+        await core_tools.getPracticeInfo(info_type="providers_by_privilege")
 
     assert json.loads(str(exc_info.value))["error"] == "privilege required for providers_by_privilege"
     assert fake.get_calls == []
@@ -112,7 +112,7 @@ async def test_providers_by_privilege_unrecognized_token_returns_clean_error(mon
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await core_tools.getPracticeInfo.fn(info_type="providers_by_privilege", privilege="some_made_up_privilege")
+        await core_tools.getPracticeInfo(info_type="providers_by_privilege", privilege="some_made_up_privilege")
 
     assert "Unrecognized privilege token" in json.loads(str(exc_info.value))["error"]
     assert fake.get_calls == []
@@ -128,7 +128,7 @@ async def test_providers_by_privilege_truncated_list_is_flagged(monkeypatch) -> 
     })
     _patch_client(monkeypatch, fake)
 
-    result = await core_tools.getPracticeInfo.fn(info_type="providers_by_privilege", privilege="add_medications")
+    result = await core_tools.getPracticeInfo(info_type="providers_by_privilege", privilege="add_medications")
 
     assert result["list_truncated"] is True
     assert "truncated" in result["guidance"].lower()

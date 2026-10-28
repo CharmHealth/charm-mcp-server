@@ -6,7 +6,11 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.13"
 dependencies = [
-    "fastmcp>2.11.0",
+    # FastMCP 4.x: `apps` extra pulls prefab-ui, which powers MCP Apps
+    # (interactive UI returned from tools). prefab-ui is pinned because
+    # upstream ships frequent breaking changes and sets no upper bound.
+    "fastmcp[apps]>=4.0.2,<5",
+    "prefab-ui==0.20.2",
     "httpx>=0.27.0",
     "python-dotenv>=1.0.1",
     "opentelemetry-api>=1.36.0",

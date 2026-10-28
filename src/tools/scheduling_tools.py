@@ -1,10 +1,11 @@
 from fastmcp import FastMCP, Context
-from fastmcp.server.dependencies import get_http_headers
+from common.auth import resolve_auth
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
+from common.app_views import app_result
 import logging
 from telemetry import telemetry, with_tool_metrics
 
@@ -12,7 +13,49 @@ logger = logging.getLogger(__name__)
 
 scheduling_tools_mcp = FastMCP(name="CharmHealth Scheduling Tools MCP Server")
 
-@scheduling_tools_mcp.tool
+async def _known_facilities(client) -> List[Dict[str, Any]]:
+    """The practice's facilities, or an empty list if they can't be fetched.
+
+    Fails open on purpose: this only ever adds a note to a guidance string, so a
+    lookup failure must never change the answer.
+    """
+    try:
+        response = await client.get("/facilities")
+    except Exception:
+        return []
+    if not isinstance(response, dict) or "error" in response:
+        return []
+    return [f for f in (response.get("facilities") or []) if isinstance(f, dict)]
+
+
+def _empty_result_guidance(facilities: List[Dict[str, Any]], facility_ids: Optional[str]) -> str:
+    """Guidance for an empty appointment list, flagging an unknown facility id.
+
+    Every value is read from the request and the live response — nothing about
+    this practice is hard-coded.
+    """
+    base = "No appointments found in this date range."
+    supplied = [part.strip() for part in str(facility_ids or "").split(",") if part.strip()]
+    if not facilities or not supplied:
+        return base
+
+    known = {str(f.get("facility_id")) for f in facilities if f.get("facility_id")}
+    if not known or any(value in known for value in supplied):
+        return base
+
+    listed = ", ".join(
+        f"{f.get('facility_id')} ({f.get('facility_name')})" if f.get("facility_name")
+        else str(f.get("facility_id"))
+        for f in facilities if f.get("facility_id")
+    )
+    return (
+        f"{base} WARNING: facility_ids={','.join(supplied)} does not match any facility "
+        f"in this practice, so this empty result is probably wrong rather than an empty "
+        f"schedule. Valid facility_ids: {listed}. Retry with one of those."
+    )
+
+
+@scheduling_tools_mcp.tool(app=True)
 @with_tool_metrics()
 async def manageAppointments(
     action: Literal["schedule", "reschedule", "cancel", "list"],
@@ -81,6 +124,14 @@ async def manageAppointments(
     - "reschedule": Change existing appointment time (requires appointment_id + new scheduling details)
     - "cancel": Cancel appointment (requires appointment_id + cancel_reason)
     - "list": Show appointments with filtering (requires start_date, end_date_range, facility_ids; optionally filter by status/provider/mode)
+
+    facility_ids is a comma-separated list of REAL facility IDs, e.g.
+    facility_ids="1995529000000021081" or facility_ids="1995529000000021081,1995529000000021082".
+    There is no "all" or wildcard value — the API rejects anything that is not an
+    ID with: {"code":2,"error_input":"facility_ids","message":"Invalid value passed
+    for facility_ids"}. If you do not have the IDs, call
+    getPracticeInfo(info_type="facilities") first and use the facility_id values it
+    returns.
     
     Time format: Use 12-hour format like "09:30 AM" or "02:15 PM"
     For recurring: Set repetition to "Weekly" or "Daily" and provide frequency + end_date
@@ -96,43 +147,9 @@ async def manageAppointments(
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
     """
-    # Extract user tokens and environment from HTTP headers (proper FastMCP way)
-    access_token = None
-    refresh_token = None
-    base_url = None
-    token_url = None
+    auth = resolve_auth("manageAppointments")
     
-    try:
-        headers = get_http_headers()
-        access_token = headers.get('x-user-access-token')
-        refresh_token = headers.get('x-user-refresh-token')
-        base_url = headers.get('x-charmhealth-base-url')
-        token_url = headers.get('x-charmhealth-token-url')
-        client_secret = headers.get('x-charmhealth-client-secret')
-        accounts_server = headers.get('x-charmhealth-accounts-server')
-        
-        # If accounts_server is provided, use it for token URL (mobile flow)
-        if accounts_server:
-            token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
-        
-        # Normalize base URL to include API path
-        if base_url and not base_url.endswith('/api/ehr/v1'):
-            base_url = base_url.rstrip('/') + '/api/ehr/v1'
-        
-        if access_token:
-            logger.info(f"manageAppointments using user credentials")
-        else:
-            logger.info("manageAppointments using environment variable credentials")
-    except Exception as e:
-        logger.debug(f"Could not get HTTP headers (might be stdio mode): {e}")
-    
-    async with CharmHealthAPIClient(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        base_url=base_url,
-        token_url=token_url,
-        client_secret=client_secret
-    ) as client:
+    async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             match action:
                 case "schedule":
@@ -283,11 +300,19 @@ async def manageAppointments(
                     return strip_empty_values(response)
                     
                 case "list":
+                    if facility_ids and facility_ids.strip().lower() in ("all", "*", "any"):
+                        # A model with no practice context guesses a wildcard here.
+                        # The API answers with an opaque 400, so say what is wrong
+                        # and how to get the real values.
+                        return {
+                            "error": f"facility_ids={facility_ids!r} is not valid — there is no wildcard value",
+                            "guidance": "facility_ids must be a comma-separated list of real facility IDs. Call getPracticeInfo(info_type='facilities') and pass the facility_id values it returns.",
+                        }
                     required = [start_date, end_date_range, facility_ids]
                     if not all(required):
                         return {
                             "error": "Missing required fields for listing appointments",
-                            "guidance": "For listing appointments, provide: start_date, end_date_range, and facility_ids (comma-separated)"
+                            "guidance": "For listing appointments, provide: start_date, end_date_range, and facility_ids. facility_ids must be a comma-separated list of real facility IDs — there is no 'all' value. Call getPracticeInfo(info_type='facilities') to get them."
                         }
                     
                     # Build query parameters
@@ -350,8 +375,22 @@ async def manageAppointments(
                             f"Found {total_count} appointments in the specified date range; {filtered['filtered_count']} match the provided filters."
                             " Use action='reschedule' or action='cancel' to modify appointments."
                         )
+                    else:
+                        # A facility id this practice does not have is *accepted*
+                        # by the API — it answers 200 with an empty list rather
+                        # than an error — so a quiet day and a wrong facility are
+                        # indistinguishable to the caller. Observed live: a
+                        # caller passed facility_ids="1", got an empty result,
+                        # and reported the schedule as clear.
+                        #
+                        # Say so in the guidance rather than raising: an empty
+                        # schedule is a legitimate answer, and turning it into an
+                        # error would break the common case to catch the rare one.
+                        response["guidance"] = _empty_result_guidance(
+                            await _known_facilities(client), facility_ids
+                        )
 
-                    return strip_empty_values(response)
+                    return app_result(strip_empty_values(response), "appointment_list")
                     
         except Exception as e:
             logger.error(f"Error in manageAppointments: {e}")

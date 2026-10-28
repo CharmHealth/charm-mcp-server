@@ -65,7 +65,7 @@ async def test_add_medication_explicit_quantity_zero_is_sent_not_defaulted(monke
     })
     _patch_client(monkeypatch, fake)
 
-    await clinical_data.managePatientDrugs.fn(
+    await clinical_data.managePatientDrugs(
         action="add", patient_id="p1", substance_type="medication",
         drug_name="Lisinopril 10mg", directions="Take 1 tablet by mouth once daily",
         quantity=0,
@@ -82,7 +82,7 @@ async def test_add_medication_omitted_quantity_defaults_to_30(monkeypatch) -> No
     })
     _patch_client(monkeypatch, fake)
 
-    await clinical_data.managePatientDrugs.fn(
+    await clinical_data.managePatientDrugs(
         action="add", patient_id="p1", substance_type="medication",
         drug_name="Lisinopril 10mg", directions="Take 1 tablet by mouth once daily",
     )
@@ -101,7 +101,7 @@ async def test_add_medication_title_case_route_is_normalized_not_rejected(monkey
     })
     _patch_client(monkeypatch, fake)
 
-    await clinical_data.managePatientDrugs.fn(
+    await clinical_data.managePatientDrugs(
         action="add", patient_id="p1", substance_type="medication",
         drug_name="Lisinopril 10mg", directions="Take 1 tablet by mouth once daily",
         route="Oral", dose_form="Tablet", dosage_unit="MG",
@@ -128,7 +128,7 @@ async def test_add_medication_comments_is_dropped_with_warning(monkeypatch) -> N
     })
     _patch_client(monkeypatch, fake)
 
-    result = await clinical_data.managePatientDrugs.fn(
+    result = await clinical_data.managePatientDrugs(
         action="add", patient_id="p1", substance_type="medication",
         drug_name="Lisinopril 10mg", directions="Take 1 tablet by mouth once daily",
         comments="Patient prefers generic.",
@@ -153,7 +153,7 @@ async def test_add_medication_invalid_route_returns_clean_error(monkeypatch) -> 
     _patch_client(monkeypatch, fake)
 
     with pytest.raises(ToolError) as exc_info:
-        await clinical_data.managePatientDrugs.fn(
+        await clinical_data.managePatientDrugs(
             action="add", patient_id="p1", substance_type="medication",
             drug_name="Lisinopril 10mg", directions="Take 1 tablet by mouth once daily",
             route="not-a-real-route",
@@ -173,7 +173,7 @@ async def test_add_supplement_route_accepts_any_string_unvalidated(monkeypatch) 
     })
     _patch_client(monkeypatch, fake)
 
-    await clinical_data.managePatientDrugs.fn(
+    await clinical_data.managePatientDrugs(
         action="add", patient_id="p1", substance_type="supplement",
         drug_name="Vitamin D3", dosage=5,
         route="whatever the caller wants",
@@ -195,7 +195,7 @@ async def test_add_supplement_explicit_quantity_zero_is_sent_not_dropped(monkeyp
     })
     _patch_client(monkeypatch, fake)
 
-    await clinical_data.managePatientDrugs.fn(
+    await clinical_data.managePatientDrugs(
         action="add", patient_id="p1", substance_type="supplement",
         drug_name="Vitamin D3", dosage=5, quantity=0,
     )
@@ -211,7 +211,7 @@ async def test_add_supplement_omitted_quantity_is_not_sent(monkeypatch) -> None:
     })
     _patch_client(monkeypatch, fake)
 
-    await clinical_data.managePatientDrugs.fn(
+    await clinical_data.managePatientDrugs(
         action="add", patient_id="p1", substance_type="supplement",
         drug_name="Vitamin D3", dosage=5,
     )
@@ -237,7 +237,7 @@ async def test_prescribe_surfaces_allergy_warning_without_logging_allergen_names
     _patch_client(monkeypatch, fake)
 
     with caplog.at_level(logging.WARNING):
-        result = await clinical_data.managePatientDrugs.fn(
+        result = await clinical_data.managePatientDrugs(
             action="prescribe", patient_id="p1", encounter_id="100010000000128111",
             drug_name="Amoxicillin 500mg", directions="Take 1 capsule twice daily",
         )
@@ -256,7 +256,7 @@ async def test_add_medication_without_allergies_has_no_warning(monkeypatch) -> N
     )
     _patch_client(monkeypatch, fake)
 
-    result = await clinical_data.managePatientDrugs.fn(
+    result = await clinical_data.managePatientDrugs(
         action="add", patient_id="p1",
         drug_name="Lisinopril 10mg", directions="Take 1 tablet daily",
     )
@@ -282,7 +282,7 @@ async def test_update_medication_preserves_explicit_dispense_zero(monkeypatch) -
     )
     _patch_client(monkeypatch, fake)
 
-    await clinical_data.managePatientDrugs.fn(
+    await clinical_data.managePatientDrugs(
         action="update", patient_id="p1", record_id="m1",
         directions="new directions",
     )
@@ -303,7 +303,7 @@ async def test_discontinue_medication_preserves_explicit_dispense_zero(monkeypat
     )
     _patch_client(monkeypatch, fake)
 
-    await clinical_data.managePatientDrugs.fn(
+    await clinical_data.managePatientDrugs(
         action="discontinue", patient_id="p1", record_id="m1",
     )
 
