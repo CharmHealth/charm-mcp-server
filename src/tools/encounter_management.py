@@ -348,7 +348,28 @@ async def manageEncounter(
                         "status": "signed" if found_encounter.get("is_approved") == "true" else "unsigned",  # Changed
                         "chart_type": found_encounter.get("chart_type"),
                     }
-                    
+
+                    # The list gives the facility's id only, and "facility" keeps
+                    # that id for existing callers. The name a clinician recognizes
+                    # needs the facility list. Best effort: a failed read leaves the
+                    # name out rather than failing the review.
+                    facility_id = found_encounter.get("facility_id")
+                    if facility_id:
+                        try:
+                            facilities_response = await client.get("/facilities")
+                            facility_name = next(
+                                (
+                                    f.get("facility_name")
+                                    for f in (facilities_response.get("facilities") or [])
+                                    if isinstance(f, dict) and str(f.get("facility_id")) == str(facility_id)
+                                ),
+                                None,
+                            )
+                            if facility_name:
+                                encounter_details["encounter_info"]["facility_name"] = facility_name
+                        except Exception as e:
+                            logger.error(f"Error fetching facilities: {e}")
+
                     # Get patient demographics for context
                     patient_response = await client.get(f"/patients/{patient_id}")
                     if patient_response.get("patient"):
@@ -603,7 +624,7 @@ async def manageEncounter(
                     # Unlock the encounter using the API
                     unlock_data = {"reason": reason}
                     unlock_response = await client.post(
-                        f"/api/ehr/v1/encounters/{encounter_id}/unlock",
+                        f"/encounters/{encounter_id}/unlock",
                         data=unlock_data
                     )
                     
