@@ -4,7 +4,7 @@ from common.app_views import app_result
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
-from common.utils import build_params_from_locals, strip_empty_values
+from common.utils import build_params_from_locals, strip_empty_values, read_failure, failed_read_result
 import logging
 from telemetry import telemetry, with_tool_metrics
 
@@ -366,44 +366,62 @@ async def getPracticeInfo(
             match info_type:
                 case "facilities":
                     facilities_response = await client.get("/facilities")
+                    if reason := read_failure(facilities_response):
+                        return failed_read_result("facilities", reason)
                     result["facilities"] = facilities_response.get("facilities") or []
                     result["guidance"] = "Use facility IDs from this list when scheduling appointments or creating encounters. Each patient must be assigned to at least one facility."
                 case "providers":
                     # Get providers (members with sign encounter privilege)
                     providers_response = await client.get("/members", params={"privilege": "sign_encounter"})
+                    if reason := read_failure(providers_response):
+                        return failed_read_result("providers", reason)
                     result["providers"] = _add_provider_name(providers_response.get("members") or [])
                     result["guidance"] = "Use provider IDs (member_id) from this list when scheduling appointments or documenting encounters. Only providers with 'sign_encounter' privilege can sign clinical documentation."
                 case "vitals":
                     vitals_response = await client.get("/vitals/metrics")
+                    if reason := read_failure(vitals_response):
+                        return failed_read_result("vital types", reason)
                     result["available_vitals"] = vitals_response.get("vitals") or []
                     result["guidance"] = "Use these vital sign names when documenting patient vitals in encounters. Common vitals include Weight, Height, Blood Pressure, Pulse Rate, Temperature."
                 case "overview":
-                    # Get all data for overview
-                    facilities_response = await client.get("/facilities")
-                    result["facilities"] = facilities_response.get("facilities") or []
-                    result["facility_count"] = len(result["facilities"])
-
-                    providers_response = await client.get("/members", params={"privilege": "sign_encounter"})
-                    result["providers"] = _add_provider_name(providers_response.get("members") or [])
-                    result["provider_count"] = len(result["providers"])
-
-                    vitals_response = await client.get("/vitals/metrics")
-                    result["available_vitals"] = vitals_response.get("vitals") or []
-                    result["vital_types_count"] = len(result["available_vitals"])
-
-                    try:
-                        templates_response = await client.get("/templates", params={"template_filter": "all_templates", "per_page": 100})
-                        result["templates"] = templates_response.get("templates") or []
-                        result["template_count"] = len(result["templates"])
-                    except Exception as e:
-                        logger.warning(f"Could not fetch templates in overview: {e}")
-                        result["templates"] = []
-                        result["template_count"] = 0
+                    # Four independent reads. One failing doesn't fail the
+                    # overview, but it is flagged as <key>_unavailable with no
+                    # list and no count, because an empty list and a count of 0
+                    # would claim the practice has none (CH-1902).
+                    overview_reads = [
+                        ("facilities", "facility_count", "/facilities", None, "facilities"),
+                        ("providers", "provider_count", "/members", {"privilege": "sign_encounter"}, "members"),
+                        ("available_vitals", "vital_types_count", "/vitals/metrics", None, "vitals"),
+                        ("templates", "template_count", "/templates", {"template_filter": "all_templates", "per_page": 100}, "templates"),
+                    ]
+                    unavailable = []
+                    for key, count_key, endpoint, read_params, response_key in overview_reads:
+                        try:
+                            section_response = await client.get(endpoint, params=read_params)
+                        except Exception as e:
+                            section_response = {"error": str(e)}
+                        if reason := read_failure(section_response):
+                            logger.warning(f"Could not fetch {key} in overview: {reason}")
+                            result[f"{key}_unavailable"] = True
+                            unavailable.append(key)
+                            continue
+                        items = section_response.get(response_key) or []
+                        if key == "providers":
+                            items = _add_provider_name(items)
+                        result[key] = items
+                        result[count_key] = len(items)
 
                     result["guidance"] = "Practice overview complete. Use specific info_type values to get detailed lists with IDs needed for patient operations. Use info_type='template_details' with template_ids to get full entry schemas for SOAP templates."
+                    if unavailable:
+                        result["guidance"] += (
+                            f" Could not be read just now: {', '.join(unavailable)}. "
+                            "Don't treat those as empty; retry, or request that info_type on its own."
+                        )
 
                 case "templates":
                     templates_response = await client.get("/templates", params={"template_filter": "all_templates", "per_page": 100})
+                    if reason := read_failure(templates_response):
+                        return failed_read_result("templates", reason)
                     result["templates"] = templates_response.get("templates") or []
                     result["template_count"] = len(result["templates"])
                     result["guidance"] = "Use template_id values from this list with info_type='template_details' to fetch full entry schemas. Filter by template_type (e.g. 'SOAP', 'Chief Complaints', 'Symptoms', 'Physical Examination', 'Assessment Notes', 'Diagnosis') to find relevant templates."
@@ -415,6 +433,8 @@ async def getPracticeInfo(
                             "guidance": "Provide comma-separated template IDs. Use info_type='templates' first to get available template IDs."
                         }
                     soap_response = await client.get("/soap/templates", params={"template_ids": template_ids})
+                    if reason := read_failure(soap_response):
+                        return failed_read_result("template details", reason)
                     result["soap_templates"] = soap_response.get("soap_templates") or []
                     result["guidance"] = "Each soap_template contains soap_templates_inner (widget placements) → soap_widgets → soap_widget_entries. Use entry_id values when populating entries in manageEncounter(action='update'). Entry types: 'Simple Question'/'Text Box'/'Radio' → free text; 'Yes/No Question' → 'Yes' or 'No'; 'Header' → skip (display only)."
 
@@ -434,6 +454,8 @@ async def getPracticeInfo(
                     if code_number:
                         params["code_number"] = code_number
                     procedures_response = await client.get("/billing/procedures", params=params)
+                    if reason := read_failure(procedures_response):
+                        return failed_read_result("procedure codes", reason)
                     result["procedure_codes"] = procedures_response.get("procedures") or []
                     result["procedure_code_count"] = len(result["procedure_codes"])
                     result["guidance"] = "Use code_id values from this list with manageEncounterProcedures(action='add') to attach a procedure to an encounter. code_number is the CPT/HCPCS code (e.g. '99214'); code_name is its description. Pass code_id, code_name, or code_number to look up a specific procedure instead of scanning the full catalog."
