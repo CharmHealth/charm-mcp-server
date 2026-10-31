@@ -32,6 +32,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from prefab_ui.components import (
+    Alert,
+    AlertDescription,
+    AlertTitle,
     Badge,
     Card,
     CardContent,
@@ -432,6 +435,23 @@ def patient_summary_view(data: Dict[str, Any]) -> Card:
                 lines.append(line)
         return lines
 
+    # reviewPatientHistory flags a section whose read failed as
+    # <section>_unavailable and leaves its data out (CH-1902). Without this the
+    # section would just not render — on a card, "no Allergies heading" reads as
+    # "no allergies". So a failed section keeps its heading and says so.
+    unavailable_titles = {
+        "Active problems": "diagnoses_unavailable",
+        "Current medications": "medications_unavailable",
+        "Supplements": "supplements_unavailable",
+        "Allergies": "allergies_unavailable",
+        "Recent vitals": "vitals_unavailable",
+        "Recent encounters": "encounters_unavailable",
+        "Upcoming appointments": "appointments_unavailable",
+    }
+    failed = [title for title, flag in unavailable_titles.items() if data.get(flag)]
+    if data.get("demographics_unavailable"):
+        failed.insert(0, "Demographics")
+
     sections = [
         ("Active problems", _names("diagnoses", _DIAGNOSIS_NAME_KEYS, ("code", "status"))
          or _names("patient_diagnoses", _DIAGNOSIS_NAME_KEYS, ("code", "status"))),
@@ -459,10 +479,25 @@ def patient_summary_view(data: Dict[str, Any]) -> Card:
                 ("provider_name", "physician_name", "member_name"))),
     ]
 
-    body: List[Any] = [identifiers, Separator(spacing=2)]
+    body: List[Any] = []
+    if failed:
+        body.append(Alert(variant="warning", children=[
+            AlertTitle(content="Some sections could not be loaded"),
+            AlertDescription(content=(
+                f"{', '.join(failed)}: unknown, not empty. Retry before relying on this summary."
+            )),
+        ]))
+    body += [identifiers, Separator(spacing=2)]
     rendered = 0
     for title, lines in sections:
-        block = _section(title, lines)
+        if title in failed:
+            block = [
+                Text(content=title, bold=True),
+                Text(content="⚠ Could not be loaded. Unknown, not none. Retry."),
+                Separator(spacing=2),
+            ]
+        else:
+            block = _section(title, lines)
         body += block
         rendered += bool(block)
 

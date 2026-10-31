@@ -89,7 +89,11 @@ async def managePatientVitals(
                 case "list":
                     response = await client.get(f"/patients/{patient_id}/vitals", params={})
 
-                    entries = response.get("vitals") or []
+                    # The endpoint answers under "vital_entries" (a live read on
+                    # ehr2 from cortex, 2026-10-31). Reading only "vitals" reported
+                    # total_count 0 while the entries sat next to it, and the
+                    # view, which reads vital_entries first, drew them unfiltered.
+                    entries = response.get("vital_entries") or response.get("vitals") or []
                     total_count = len(entries)
 
                     # Optionally filter inner vitals by name (and drop entries with no remaining vitals).
@@ -156,6 +160,10 @@ async def managePatientVitals(
 
                     filtered_count = len(second_pass)
                     response["vitals"] = [w.get("_orig", w) for w in limited]
+                    # Same filtered list under the endpoint's own key, so a
+                    # reader of either key (and the view) sees what the
+                    # filters kept, not the raw response.
+                    response["vital_entries"] = response["vitals"]
                     response["total_count"] = total_count
                     response["filtered_count"] = filtered_count
 

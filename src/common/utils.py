@@ -1,3 +1,4 @@
+import re
 from typing import Dict, Any, List, Optional
 from datetime import date, time
 
@@ -57,3 +58,42 @@ def strip_empty_values(data: Any, preserve_empty_lists: bool = True) -> Any:
     elif isinstance(data, list):
         return [strip_empty_values(item, preserve_empty_lists) for item in data]
     return data
+
+
+def read_failure(response: Any) -> Optional[str]:
+    """Why a CharmHealthAPIClient read failed, or None when it succeeded.
+
+    The client returns {"error": "HTTP 503: ..."} instead of raising, so a
+    caller that goes straight to `response.get("allergies", [])` turns a failed
+    read into "no allergies". Check this first. A bare list (some endpoints
+    answer with one) is a success. The text is capped because it is the
+    backend's own message and can be long.
+    """
+    if response is None:
+        return "no response"
+    if isinstance(response, dict) and response.get("error"):
+        return str(response["error"])[:200]
+    return None
+
+
+def failed_read_result(what: str, reason: str) -> Dict[str, Any]:
+    """The error a list read returns when its only read failed.
+
+    A top-level "error" makes `@with_tool_metrics()` raise ToolError, so the
+    caller sees a failure instead of an empty list (CH-1902).
+    """
+    # A 4xx other than 429 fails the same way on retry: it is a wrong id or a
+    # missing parameter. Only a 5xx, a 429 or a network error is worth retrying.
+    match = re.match(r"HTTP (\d{3})", reason)
+    status = int(match.group(1)) if match else None
+    if status is not None and 400 <= status < 500 and status != 429:
+        advice = (
+            "The request was rejected, so retrying won't help. Check the ids and "
+            "parameters (findPatients or getPracticeInfo can confirm them)."
+        )
+    else:
+        advice = "This is likely temporary. Retry; don't treat this as none."
+    return {
+        "error": f"Could not read {what}: {reason}",
+        "guidance": f"The {what} read failed, so it is not known what is there. {advice}",
+    }

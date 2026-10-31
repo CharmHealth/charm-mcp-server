@@ -4,7 +4,7 @@ from common.app_views import app_result
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
-from common.utils import build_params_from_locals, strip_empty_values
+from common.utils import build_params_from_locals, strip_empty_values, read_failure
 from common.filtering import filter_items
 import logging
 from telemetry import telemetry, with_tool_metrics
@@ -752,93 +752,110 @@ async def reviewPatientHistory(
             # Get basic patient info
             if "demographics" in include_sections:
                 patient_response = await client.get(f"/patients/{patient_id}")
-                if patient_response.get("patient"):
+                if read_failure(patient_response):
+                    patient_summary["demographics_unavailable"] = True
+                elif patient_response.get("patient"):
                     patient_summary["demographics"] = patient_response["patient"]
             
             # Get current medications
             if "medications" in include_sections:
                 meds_response = await client.get(f"/patients/{patient_id}/medications")
-                meds = meds_response.get("medications", []) or []
-                patient_summary["current_medications_total_count"] = len(meds)
+                if read_failure(meds_response):
+                    patient_summary["medications_unavailable"] = True
+                else:
+                    meds = meds_response.get("medications", []) or []
+                    patient_summary["current_medications_total_count"] = len(meds)
 
-                wrappers = []
-                for m in meds:
-                    derived_status = "active" if (m or {}).get("is_active") else "inactive"
-                    wrappers.append({**(m or {}), "_orig": m, "med_status": derived_status})
+                    wrappers = []
+                    for m in meds:
+                        derived_status = "active" if (m or {}).get("is_active") else "inactive"
+                        wrappers.append({**(m or {}), "_orig": m, "med_status": derived_status})
 
-                filtered_wrappers = wrappers
-                if medication_status_filter:
-                    filtered_wrappers = filter_items(
-                        filtered_wrappers,
-                        {"med_status": {"op": "eq", "value": medication_status_filter}},
-                    )["items"]
+                    filtered_wrappers = wrappers
+                    if medication_status_filter:
+                        filtered_wrappers = filter_items(
+                            filtered_wrappers,
+                            {"med_status": {"op": "eq", "value": medication_status_filter}},
+                        )["items"]
 
-                patient_summary["current_medications_filtered_count"] = len(filtered_wrappers)
-                limited = filter_items(filtered_wrappers, filters=None, limit=None)["items"]
-                patient_summary["current_medications"] = [w.get("_orig", w) for w in limited]
+                    patient_summary["current_medications_filtered_count"] = len(filtered_wrappers)
+                    limited = filter_items(filtered_wrappers, filters=None, limit=None)["items"]
+                    patient_summary["current_medications"] = [w.get("_orig", w) for w in limited]
             
             # Get current supplements/vitamins
             if "supplements" in include_sections:
                 supps_response = await client.get(f"/patients/{patient_id}/supplements")
-                supps = supps_response.get("supplements", []) or []
-                patient_summary["current_supplements_total_count"] = len(supps)
+                if read_failure(supps_response):
+                    patient_summary["supplements_unavailable"] = True
+                else:
+                    supps = supps_response.get("supplements", []) or []
+                    patient_summary["current_supplements_total_count"] = len(supps)
 
-                wrappers = []
-                for s in supps:
-                    derived_status = str((s or {}).get("status", "")).casefold()
-                    wrappers.append({**(s or {}), "_orig": s, "supp_status": derived_status})
+                    wrappers = []
+                    for s in supps:
+                        derived_status = str((s or {}).get("status", "")).casefold()
+                        wrappers.append({**(s or {}), "_orig": s, "supp_status": derived_status})
 
-                filtered_wrappers = wrappers
-                if supplement_status_filter:
-                    filtered_wrappers = filter_items(
-                        filtered_wrappers,
-                        {"supp_status": {"op": "eq", "value": str(supplement_status_filter).casefold()}},
-                    )["items"]
+                    filtered_wrappers = wrappers
+                    if supplement_status_filter:
+                        filtered_wrappers = filter_items(
+                            filtered_wrappers,
+                            {"supp_status": {"op": "eq", "value": str(supplement_status_filter).casefold()}},
+                        )["items"]
 
-                patient_summary["current_supplements_filtered_count"] = len(filtered_wrappers)
-                patient_summary["current_supplements"] = [w.get("_orig", w) for w in filtered_wrappers]
+                    patient_summary["current_supplements_filtered_count"] = len(filtered_wrappers)
+                    patient_summary["current_supplements"] = [w.get("_orig", w) for w in filtered_wrappers]
             
             # Get allergies
             if "allergies" in include_sections:
                 allergies_response = await client.get(f"/patients/{patient_id}/allergies")
-                patient_summary["allergies"] = allergies_response.get("allergies", [])
+                if read_failure(allergies_response):
+                    patient_summary["allergies_unavailable"] = True
+                else:
+                    patient_summary["allergies"] = allergies_response.get("allergies", [])
             
             # Get recent vitals
             if "vitals" in include_sections:
                 vitals_response = await client.get(f"/patients/{patient_id}/vitals")
-                vitals = vitals_response.get("vital_entries", []) or vitals_response.get("vitals", []) or []
-                # Unlike /encounters, the vitals endpoint takes no page/per_page
-                # (documented params are encounter_id and vital_entry_id only),
-                # so everything is fetched and the limit slices client-side.
-                # Entries arrive newest-first — confirmed against a live practice
-                # 2026-09-22 — so the slice really is the recent ones.
-                vitals_limit = _bounded_limit(vitals_limit, _MAX_VITALS)
-                patient_summary["recent_vitals_total_count"] = len(vitals)
-                patient_summary["recent_vitals_has_more"] = len(vitals) > vitals_limit
-                limited = filter_items(vitals, filters=None, limit=vitals_limit)
-                patient_summary["recent_vitals"] = limited["items"]
-                patient_summary["recent_vitals_filtered_count"] = limited.get("filtered_count", len(vitals))
+                if read_failure(vitals_response):
+                    patient_summary["vitals_unavailable"] = True
+                else:
+                    vitals = vitals_response.get("vital_entries", []) or vitals_response.get("vitals", []) or []
+                    # Unlike /encounters, the vitals endpoint takes no page/per_page
+                    # (documented params are encounter_id and vital_entry_id only),
+                    # so everything is fetched and the limit slices client-side.
+                    # Entries arrive newest-first — confirmed against a live practice
+                    # 2026-09-22 — so the slice really is the recent ones.
+                    vitals_limit = _bounded_limit(vitals_limit, _MAX_VITALS)
+                    patient_summary["recent_vitals_total_count"] = len(vitals)
+                    patient_summary["recent_vitals_has_more"] = len(vitals) > vitals_limit
+                    limited = filter_items(vitals, filters=None, limit=vitals_limit)
+                    patient_summary["recent_vitals"] = limited["items"]
+                    patient_summary["recent_vitals_filtered_count"] = limited.get("filtered_count", len(vitals))
             
             # Get active diagnoses
             if "diagnoses" in include_sections:
                 diagnoses_response = await client.get(f"/patients/{patient_id}/diagnoses")
-                dx = diagnoses_response.get("patient_diagnoses") or diagnoses_response.get("diagnoses") or []
-                patient_summary["diagnoses_total_count"] = len(dx)
+                if read_failure(diagnoses_response):
+                    patient_summary["diagnoses_unavailable"] = True
+                else:
+                    dx = diagnoses_response.get("patient_diagnoses") or diagnoses_response.get("diagnoses") or []
+                    patient_summary["diagnoses_total_count"] = len(dx)
 
-                wrappers = []
-                for d in dx:
-                    status_val = (d or {}).get("diagnosis_status") or (d or {}).get("status")
-                    wrappers.append({**(d or {}), "_orig": d, "dx_status": status_val})
+                    wrappers = []
+                    for d in dx:
+                        status_val = (d or {}).get("diagnosis_status") or (d or {}).get("status")
+                        wrappers.append({**(d or {}), "_orig": d, "dx_status": status_val})
 
-                filtered_wrappers = wrappers
-                if diagnosis_status_filter:
-                    filtered_wrappers = filter_items(
-                        filtered_wrappers,
-                        {"dx_status": {"op": "eq", "value": diagnosis_status_filter}},
-                    )["items"]
+                    filtered_wrappers = wrappers
+                    if diagnosis_status_filter:
+                        filtered_wrappers = filter_items(
+                            filtered_wrappers,
+                            {"dx_status": {"op": "eq", "value": diagnosis_status_filter}},
+                        )["items"]
 
-                patient_summary["diagnoses_filtered_count"] = len(filtered_wrappers)
-                patient_summary["diagnoses"] = [w.get("_orig", w) for w in filtered_wrappers]
+                    patient_summary["diagnoses_filtered_count"] = len(filtered_wrappers)
+                    patient_summary["diagnoses"] = [w.get("_orig", w) for w in filtered_wrappers]
             
             # Get recent encounters (last 10)
             if "encounters" in include_sections:
@@ -851,26 +868,29 @@ async def reviewPatientHistory(
                     "per_page": per_page,
                     "sort_order": "D"
                 })
-                enc = encounters_response.get("encounters", []) or []
-                # NB: this is the number returned, not the patient's total —
-                # /encounters is a paginated read and its page_context carries
-                # has_more_page but no grand total. The name predates the
-                # pagination and is kept for wire compatibility; the flag below
-                # is what a caller should branch on.
-                patient_summary["recent_encounters_total_count"] = len(enc)
-                _enc_page = encounters_response.get("page_context") or {}
-                # Two ways rows can be hidden, and either one counts: the API has
-                # further pages, or the fetch returned more than the caller's limit
-                # and the slice below drops the rest. The API flag alone missed the
-                # second — encounters_limit=5 still fetches 10, and a patient with
-                # 8 encounters came back "has_more": false with 3 of them dropped.
-                patient_summary["recent_encounters_has_more"] = (
-                    str(_enc_page.get("has_more_page", "")).lower() == "true"
-                    or len(enc) > encounters_limit
-                )
-                limited = filter_items(enc, filters=None, limit=encounters_limit)
-                patient_summary["recent_encounters"] = limited["items"]
-                patient_summary["recent_encounters_filtered_count"] = limited.get("filtered_count", len(enc))
+                if read_failure(encounters_response):
+                    patient_summary["encounters_unavailable"] = True
+                else:
+                    enc = encounters_response.get("encounters", []) or []
+                    # NB: this is the number returned, not the patient's total —
+                    # /encounters is a paginated read and its page_context carries
+                    # has_more_page but no grand total. The name predates the
+                    # pagination and is kept for wire compatibility; the flag below
+                    # is what a caller should branch on.
+                    patient_summary["recent_encounters_total_count"] = len(enc)
+                    _enc_page = encounters_response.get("page_context") or {}
+                    # Two ways rows can be hidden, and either one counts: the API has
+                    # further pages, or the fetch returned more than the caller's limit
+                    # and the slice below drops the rest. The API flag alone missed the
+                    # second — encounters_limit=5 still fetches 10, and a patient with
+                    # 8 encounters came back "has_more": false with 3 of them dropped.
+                    patient_summary["recent_encounters_has_more"] = (
+                        str(_enc_page.get("has_more_page", "")).lower() == "true"
+                        or len(enc) > encounters_limit
+                    )
+                    limited = filter_items(enc, filters=None, limit=encounters_limit)
+                    patient_summary["recent_encounters"] = limited["items"]
+                    patient_summary["recent_encounters_filtered_count"] = limited.get("filtered_count", len(enc))
             
             # Get upcoming appointments
             if "appointments" in include_sections:
@@ -884,10 +904,23 @@ async def reviewPatientHistory(
                     "end_date": future_date.strftime("%Y-%m-%d"),
                     "facility_ids": "ALL"
                 })
-                patient_summary["upcoming_appointments"] = appointments_response.get("appointments", [])
+                if read_failure(appointments_response):
+                    patient_summary["appointments_unavailable"] = True
+                else:
+                    patient_summary["upcoming_appointments"] = appointments_response.get("appointments", [])
             
+            # Sections whose read failed (CH-1902). Each is flagged
+            # <section>_unavailable with its data left out, so it can't be read
+            # as "none" — no allergies, no medications — by the model or a card.
+            unavailable = [s for s in include_sections if patient_summary.get(f"{s}_unavailable")]
+
             # Add clinical insights
             insights = []
+            if unavailable:
+                insights.append(
+                    f"Could not be read just now: {', '.join(unavailable)}. "
+                    "These are unknown, not empty — retry before relying on them"
+                )
             
             if patient_summary.get("allergies"):
                 allergy_count = len(patient_summary["allergies"])
@@ -916,7 +949,9 @@ async def reviewPatientHistory(
             workflow_guidance = []
             
             # Safety-first guidance
-            if patient_summary.get("allergies"):
+            if patient_summary.get("allergies_unavailable"):
+                workflow_guidance.append("Allergies could not be read - do not assume none; retry managePatientAllergies() before prescribing")
+            elif patient_summary.get("allergies"):
                 workflow_guidance.append("Review allergies before prescribing with managePatientDrugs()")
             else:
                 workflow_guidance.append("Consider checking allergies with managePatientAllergies() before prescribing")
@@ -931,7 +966,7 @@ async def reviewPatientHistory(
             if patient_summary.get("upcoming_appointments"):
                 next_appt = patient_summary["upcoming_appointments"][0]
                 workflow_guidance.append(f"Next visit: {next_appt.get('appointment_date')} - prepare encounter with manageEncounter()()")
-            else:
+            elif not patient_summary.get("appointments_unavailable"):
                 workflow_guidance.append("No upcoming appointments - schedule follow-up with manageAppointments() if needed")
             
             # Medication review guidance
@@ -941,11 +976,17 @@ async def reviewPatientHistory(
             # Vitals review guidance
             if patient_summary.get("recent_vitals"):
                 workflow_guidance.append("Review vital sign trends with managePatientVitals() for clinical monitoring")
-            else:
+            elif not patient_summary.get("vitals_unavailable"):
                 workflow_guidance.append("Consider recording current vitals with managePatientVitals() during next encounter")
             
             patient_summary["workflow_guidance"] = workflow_guidance
             patient_summary["guidance"] = "Clinical review complete. " + "; ".join(workflow_guidance[:2]) + "."
+            if unavailable:
+                patient_summary["guidance"] = (
+                    f"Clinical review INCOMPLETE: could not read {', '.join(unavailable)}. "
+                    "Those sections are unknown, not empty — don't tell the user there are none; retry. "
+                    + "; ".join(workflow_guidance[:2]) + "."
+                )
             
             logger.info(f"reviewPatientHistory completed for patient {patient_id}")
             return app_result(strip_empty_values(patient_summary), "patient_history")
