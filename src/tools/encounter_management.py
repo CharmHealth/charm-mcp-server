@@ -4,7 +4,7 @@ from common.app_views import app_result
 from typing import Optional, List, Dict, Any, Literal, TypedDict
 from datetime import date
 from api import CharmHealthAPIClient
-from common.utils import build_params_from_locals, strip_empty_values
+from common.utils import build_params_from_locals, strip_empty_values, read_failure, failed_read_result
 import logging
 from telemetry import telemetry, with_tool_metrics
 
@@ -156,6 +156,94 @@ def _describe_soap_note_source(encounter_details: dict) -> str:
     if has_entries or has_notes:
         return "SOAP Note: entries and/or free-text notes present (see soap_entries/soap_notes)."
     return "SOAP Note: no entries or free-text notes documented on this encounter."
+
+
+# The review's per-encounter sections: response key -> (label, endpoint
+# suffix, the keys the endpoint may answer under). Each is read on its own,
+# and a failed read sets <key>_unavailable instead of an empty list (CH-1902),
+# because an empty list here reads as "nothing documented" to whoever signs.
+_REVIEW_SECTIONS = {
+    "vitals": ("Vitals", "vitals", ("vital_entries", "vitals")),
+    "diagnoses": ("Diagnoses", "diagnoses", ("patient_diagnoses", "diagnoses")),
+    "medications": ("Medications", "medications", ("medications",)),
+    "supplements": ("Supplements", "supplements", ("supplements",)),
+    "lab_orders": ("Lab orders", "lab-orders", ("lab_orders",)),
+}
+
+# Labels for every flag the review can set, in the order the guidance lists them.
+_UNAVAILABLE_LABELS = {
+    "patient_info": "Patient demographics",
+    "facility_name": "Facility name",
+    **{key: label for key, (label, _, _) in _REVIEW_SECTIONS.items()},
+    "clinical_notes": "Chief complaint",
+    "attached_templates": "SOAP templates",
+    "soap_note": "SOAP note",
+}
+
+
+async def _read_patient_records(client, patient_id, suffix, keys):
+    """(records, None) when the read worked, (None, reason) when it failed."""
+    try:
+        response = await client.get(f"/patients/{patient_id}/{suffix}")
+    except Exception as e:
+        return None, str(e)[:200]
+    if reason := read_failure(response):
+        return None, reason
+    for key in keys:
+        if response.get(key):
+            return [r for r in response[key] if isinstance(r, dict)], None
+    return [], None
+
+
+# Sections that, unread, make the review not ready to sign: the note, plus the
+# clinical sections. CharmEHR's server locks only the note text on signing
+# (ChartsAPIHandler.saveSoapChartDetails), but its UI makes vitals, diagnoses,
+# medications and supplements read-only on a signed encounter, and the signed
+# visit-summary PDF includes them, so they are part of what a clinician signs.
+# Facility name and patient demographics are labels: the encounter's facility
+# id and patient are known either way. Vibhu's call, 2026-10-31 (CH-1902).
+_SIGN_BLOCKING = frozenset({
+    "clinical_notes", "attached_templates", "soap_note", *_REVIEW_SECTIONS,
+})
+
+
+def _unavailable_sections(encounter_details: dict) -> list:
+    """Labels of the review sections whose read failed, in display order."""
+    return [
+        label for key, label in _UNAVAILABLE_LABELS.items()
+        if encounter_details.get(f"{key}_unavailable")
+    ]
+
+
+def _blocking_unavailable(encounter_details: dict) -> list:
+    """Labels of the unread sections that stop ready_to_sign."""
+    return [
+        label for key, label in _UNAVAILABLE_LABELS.items()
+        if key in _SIGN_BLOCKING and encounter_details.get(f"{key}_unavailable")
+    ]
+
+
+def _describe_unavailable(encounter_details: dict) -> str:
+    """The review guidance's warning about sections that could not be read."""
+    lines = []
+    blocking = _blocking_unavailable(encounter_details)
+    labels_only = [s for s in _unavailable_sections(encounter_details) if s not in blocking]
+    if blocking:
+        lines.append(
+            f"COULD NOT BE READ: {', '.join(blocking)}. These are unknown, not empty. "
+            "Retry the review before signing, and don't tell the clinician none are documented."
+        )
+    if labels_only:
+        lines.append(
+            f"Could not be read: {', '.join(labels_only)}. This doesn't affect signing."
+        )
+    if encounter_details.get("clinical_notes_source") == "signed_copy":
+        lines.append(
+            "Chief complaint: the current text could not be read. clinical_notes holds the "
+            "version saved at the last signing, which is out of date if the note was unlocked "
+            "and edited since. Say so when showing it, and retry the review to get the current text."
+        )
+    return "\n                ".join(lines)
 
 
 def _next_template_position(templates) -> int:
@@ -321,6 +409,9 @@ async def manageEncounter(
                         "patient_id": patient_id
                     })
                     
+                    if reason := read_failure(encounter_response):
+                        return failed_read_result("this patient's encounters", reason)
+
                     found_encounter = None
                     for enc in encounter_response.get("encounters", []):
                         if enc.get("encounter_id") == encounter_id:
@@ -351,12 +442,16 @@ async def manageEncounter(
 
                     # The list gives the facility's id only, and "facility" keeps
                     # that id for existing callers. The name a clinician recognizes
-                    # needs the facility list. Best effort: a failed read leaves the
-                    # name out rather than failing the review.
+                    # needs the facility list. A failed read leaves the name out
+                    # and sets facility_name_unavailable rather than failing the
+                    # review. A facility that isn't in a successful list just has
+                    # no name — that is an answer, not a failure.
                     facility_id = found_encounter.get("facility_id")
                     if facility_id:
                         try:
                             facilities_response = await client.get("/facilities")
+                            if read_failure(facilities_response):
+                                raise RuntimeError(read_failure(facilities_response))
                             facility_name = next(
                                 (
                                     f.get("facility_name")
@@ -369,10 +464,13 @@ async def manageEncounter(
                                 encounter_details["encounter_info"]["facility_name"] = facility_name
                         except Exception as e:
                             logger.error(f"Error fetching facilities: {e}")
+                            encounter_details["facility_name_unavailable"] = True
 
                     # Get patient demographics for context
                     patient_response = await client.get(f"/patients/{patient_id}")
-                    if patient_response.get("patient"):
+                    if read_failure(patient_response):
+                        encounter_details["patient_info_unavailable"] = True
+                    elif patient_response.get("patient"):
                         patient = patient_response["patient"]
                         encounter_details["patient_info"] = {
                             "name": f"{patient.get('first_name', '')} {patient.get('last_name', '')}".strip(),
@@ -415,78 +513,31 @@ async def manageEncounter(
                         encounter_details["soap_entries"] = _extract_soap_entries(soap_encounter)
                         encounter_details["soap_notes"] = _extract_soap_notes(soap_encounter)
 
-                    # Get vitals for this encounter
-                    try:
-                        vitals_response = await client.get(f"/patients/{patient_id}/vitals")
-                        all_vitals = vitals_response.get("vital_entries", [])
-                        encounter_details["vitals"] = [
-                            v for v in all_vitals 
-                            if v.get("encounter_id") == encounter_id
-                        ]
-                    except Exception as e:
-                        logger.error(f"Error fetching vitals: {e}")
-                        encounter_details["vitals"] = []
-
-                    # Get diagnoses for this encounter
-                    try:
-                        diagnoses_response = await client.get(f"/patients/{patient_id}/diagnoses")
-                        all_diagnoses = diagnoses_response.get("patient_diagnoses", [])
-                        encounter_details["diagnoses"] = [
-                            d for d in all_diagnoses 
-                            if str(d.get("encounter_id")) == str(encounter_id)
-                        ]
-                    except Exception as e:
-                        logger.error(f"Error fetching diagnoses: {e}")
-                        encounter_details["diagnoses"] = []
-
-                    # Get medications for this encounter
-                    try:
-                        medications_response = await client.get(f"/patients/{patient_id}/medications")
-                        all_medications = medications_response.get("medications", [])
-                        
-                        # Try to filter by encounter_id first
-                        encounter_meds = [
-                            m for m in all_medications
-                            if str(m.get("encounter_id")) == str(encounter_id) and m.get("encounter_id")
-                        ]
-
-                        encounter_details["medications"] = encounter_meds
-                    except Exception as e:
-                        logger.error(f"Error fetching medications: {e}")
-                        encounter_details["medications"] = []
-                    
-                    # Get supplements for this encounter
-                    try:
-                        supps_response = await client.get(f"/patients/{patient_id}/supplements")
-                        all_supps = supps_response.get("supplements", []) or []
-                        encounter_supps = [
-                            s for s in all_supps
-                            if str(s.get("encounter_id")) == str(encounter_id) and s.get("encounter_id")
-                        ]
-                        if not encounter_supps and encounter_details["encounter_info"]["encounter_date"]:
-                            encounter_date_str = encounter_details["encounter_info"]["encounter_date"].split()[0] if encounter_details["encounter_info"]["encounter_date"] else None
-                            if encounter_date_str:
-                                encounter_supps = [
-                                    s for s in all_supps
-                                    if s.get("start_date") == encounter_date_str
-                                ]
-                        encounter_details["supplements"] = encounter_supps
-                    except Exception as e:
-                        logger.error(f"Error fetching supplements: {e}")
-                        encounter_details["supplements"] = []
-
-                    # Get lab orders for this encounter
-                    try:
-                        labs_response = await client.get(f"/patients/{patient_id}/lab-orders")
-                        all_labs = labs_response.get("lab_orders", []) or []
-                        encounter_labs = [
-                            l for l in all_labs
-                            if str(l.get("encounter_id")) == str(encounter_id) and l.get("encounter_id")
-                        ]
-                        encounter_details["lab_orders"] = encounter_labs
-                    except Exception as e:
-                        logger.error(f"Error fetching lab orders: {e}")
-                        encounter_details["lab_orders"] = []
+                    # The five per-encounter sections. A failed read sets
+                    # <section>_unavailable and leaves the key out; a read that
+                    # worked and matched nothing stays []. The client returns
+                    # {"error": ...} rather than raising, so the old except
+                    # blocks almost never ran and a failure became [] (CH-1902).
+                    encounter_id_str = str(encounter_id)
+                    encounter_date_str = str(encounter_details["encounter_info"]["encounter_date"] or "").split()[0] if encounter_details["encounter_info"]["encounter_date"] else None
+                    for key, (label, suffix, response_keys) in _REVIEW_SECTIONS.items():
+                        records, reason = await _read_patient_records(client, patient_id, suffix, response_keys)
+                        if records is None:
+                            logger.error(f"Error fetching {key} for the encounter review: {reason}")
+                            encounter_details[f"{key}_unavailable"] = True
+                            continue
+                        if key in ("vitals", "diagnoses"):
+                            matched = [r for r in records if str(r.get("encounter_id")) == encounter_id_str]
+                        else:
+                            matched = [
+                                r for r in records
+                                if r.get("encounter_id") and str(r.get("encounter_id")) == encounter_id_str
+                            ]
+                        # Supplements are often recorded without an encounter
+                        # id, so fall back to ones started on the visit date.
+                        if key == "supplements" and not matched and encounter_date_str:
+                            matched = [r for r in records if r.get("start_date") == encounter_date_str]
+                        encounter_details[key] = matched
 
                     # Get clinical notes. The list's chief_complaints is a copy
                     # taken when the encounter is signed: empty until the first
@@ -495,39 +546,55 @@ async def manageEncounter(
                     # charts too, though the API docs list it for Quick, Brief and
                     # Comprehensive only. A successful read is used even when it
                     # is empty, so a cleared chief complaint does not bring the
-                    # stale copy back. Only a failed read falls back to the list.
-                    clinical_notes = found_encounter.get("chief_complaints")
+                    # stale copy back.
+                    #
+                    # A failed read always sets clinical_notes_unavailable. If the
+                    # signed copy has text, it is included too, marked with
+                    # clinical_notes_source="signed_copy" so every surface can say
+                    # it is the last signed version (CH-1902, Vibhu's call
+                    # 2026-10-31: more informative than nothing, as long as the
+                    # surfaces label it). Without the flag, a failed read on a
+                    # never-signed encounter looked like "no chief complaint".
+                    clinical_notes = None
+                    notes_failed = False
                     try:
                         single_response = await client.get(f"/encounters/{encounter_id}")
-                        current_notes = (single_response.get("encounter") or {}).get("notes")
+                        current_notes = None
+                        if not read_failure(single_response):
+                            current_notes = (single_response.get("encounter") or {}).get("notes")
                         if isinstance(current_notes, dict):
                             clinical_notes = current_notes.get("chief_complaints")
                         else:
-                            logger.warning(
-                                f"Encounter {encounter_id} read returned no notes; "
-                                "using the list's chief_complaints, which may be stale"
-                            )
+                            notes_failed = True
                     except Exception as e:
+                        logger.warning(f"Error fetching encounter {encounter_id}: {e}")
+                        notes_failed = True
+                    if notes_failed:
                         logger.warning(
-                            f"Error fetching encounter {encounter_id}: {e}; "
-                            "using the list's chief_complaints, which may be stale"
+                            f"Encounter {encounter_id}: current chief complaint unavailable; "
+                            "flagging it, with the signed copy if there is one"
                         )
-                    if clinical_notes:
+                        encounter_details["clinical_notes_unavailable"] = True
+                        signed_copy = found_encounter.get("chief_complaints")
+                        if signed_copy:
+                            encounter_details["clinical_notes"] = signed_copy
+                            encounter_details["clinical_notes_source"] = "signed_copy"
+                    elif clinical_notes:
                         encounter_details["clinical_notes"] = clinical_notes
                     
                     # Create summary for review
                     summary_items = []
-                    if encounter_details["vitals"]:
+                    if encounter_details.get("vitals"):
                         summary_items.append(f"✓ {len(encounter_details['vitals'])} vital sign(s) recorded")
-                    if encounter_details["diagnoses"]:
+                    if encounter_details.get("diagnoses"):
                         summary_items.append(f"✓ {len(encounter_details['diagnoses'])} diagnosis/diagnoses documented")
-                    if encounter_details["medications"]:
+                    if encounter_details.get("medications"):
                         summary_items.append(f"✓ {len(encounter_details['medications'])} medication(s) prescribed/reviewed")
                     if encounter_details.get("supplements"):
                         summary_items.append(f"✓ {len(encounter_details['supplements'])} supplement(s) documented")
                     if encounter_details.get("lab_orders"):
                         summary_items.append(f"✓ {len(encounter_details['lab_orders'])} lab order(s)")
-                    if encounter_details.get("clinical_notes"):
+                    if encounter_details.get("clinical_notes") and not encounter_details.get("clinical_notes_unavailable"):
                         summary_items.append("✓ Clinical notes documented")
                     soap_entry_count = len(encounter_details.get("soap_entries") or [])
                     soap_note_count = len(encounter_details.get("soap_notes") or {})
@@ -538,13 +605,42 @@ async def manageEncounter(
 
                     # Check if already signed
                     is_signed = encounter_details["encounter_info"]["status"] == "signed"
+                    unavailable = _unavailable_sections(encounter_details)
+                    blocking = _blocking_unavailable(encounter_details)
+                    ready_to_sign = len(summary_items) > 0 and not is_signed and not blocking
+                    if is_signed:
+                        next_step = "SIGNED: This encounter is already signed."
+                    elif ready_to_sign:
+                        next_step = (
+                            "IMPORTANT: Review all details above carefully. Once signed, this "
+                            "encounter becomes legally binding and cannot be modified.\n\n"
+                            f"To sign after review: manageEncounter(patient_id='{patient_id}', "
+                            f"encounter_id='{encounter_id}', action='sign')"
+                        )
+                    elif blocking:
+                        next_step = (
+                            "NOT READY TO SIGN: part of what would be signed could not be read "
+                            "(see above). Retry manageEncounter(action='review') first."
+                        )
+                    else:
+                        next_step = (
+                            "WARNING: This encounter has minimal documentation. Consider adding "
+                            "vitals, diagnoses, or medications before signing.\n\n"
+                            "To add documentation:\n"
+                            f"- managePatientVitals(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')\n"
+                            f"- managePatientDiagnoses(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')\n"
+                            f"- managePatientDrugs(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')"
+                        )
                     
                     review_response = strip_empty_values({
                         "action": "review",
                         "encounter_details": encounter_details,
                         "summary": summary_items,
                         "is_signed": is_signed,
-                        "ready_to_sign": len(summary_items) > 0 and not is_signed,
+                        # Not ready while part of what gets signed is unknown
+                        # (see _SIGN_BLOCKING): signing then would attest to
+                        # documentation nobody could see.
+                        "ready_to_sign": ready_to_sign,
                         "guidance": f"""
                 ENCOUNTER REVIEW - Please confirm all information is accurate:
 
@@ -555,21 +651,13 @@ async def manageEncounter(
                 Status: {encounter_details['encounter_info']['status']}
 
                 Documentation Summary:
-                {chr(10).join(summary_items) if summary_items else 'WARNING: No clinical documentation found'}
+                {chr(10).join(summary_items) if summary_items else ('Nothing found in the sections that could be read.' if unavailable else 'WARNING: No clinical documentation found')}
 
+                {_describe_unavailable(encounter_details)}
                 {_describe_attached_templates(encounter_details)}
                 {_describe_soap_note_source(encounter_details)}
 
-                {'SIGNED: This encounter is already signed.' if is_signed else f'''
-                IMPORTANT: Review all details above carefully. Once signed, this encounter becomes legally binding and cannot be modified.
-
-                To sign after review: manageEncounter(patient_id='{patient_id}', encounter_id='{encounter_id}', action='sign')''' if summary_items else '''
-                WARNING: This encounter has minimal documentation. Consider adding vitals, diagnoses, or medications before signing.
-
-                To add documentation:
-                - managePatientVitals(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')
-                - managePatientDiagnoses(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')
-                - managePatientDrugs(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')'''}
+                {next_step}
                 """
                     })
                     # strip_empty_values unconditionally drops empty dicts (not

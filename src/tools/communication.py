@@ -2,7 +2,7 @@ from fastmcp import FastMCP, Context
 from common.auth import resolve_auth
 from typing import Optional, List, Dict, Any, Literal
 from api import CharmHealthAPIClient
-from common.utils import strip_empty_values
+from common.utils import strip_empty_values, read_failure, failed_read_result
 import logging
 from telemetry import with_tool_metrics
 
@@ -308,6 +308,8 @@ async def _list_messages(
         secure_params["facility_id"] = int(facility_id)
 
     secure_response = await client.get("/messages", params=secure_params)
+    if reason := read_failure(secure_response):
+        return failed_read_result("secure messages", reason)
     secure_messages = secure_response.get("messages", [])
     for msg in secure_messages:
         msg["channel"] = "secure"
