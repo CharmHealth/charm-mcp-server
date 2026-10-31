@@ -348,7 +348,28 @@ async def manageEncounter(
                         "status": "signed" if found_encounter.get("is_approved") == "true" else "unsigned",  # Changed
                         "chart_type": found_encounter.get("chart_type"),
                     }
-                    
+
+                    # The list gives the facility's id only, and "facility" keeps
+                    # that id for existing callers. The name a clinician recognizes
+                    # needs the facility list. Best effort: a failed read leaves the
+                    # name out rather than failing the review.
+                    facility_id = found_encounter.get("facility_id")
+                    if facility_id:
+                        try:
+                            facilities_response = await client.get("/facilities")
+                            facility_name = next(
+                                (
+                                    f.get("facility_name")
+                                    for f in (facilities_response.get("facilities") or [])
+                                    if isinstance(f, dict) and str(f.get("facility_id")) == str(facility_id)
+                                ),
+                                None,
+                            )
+                            if facility_name:
+                                encounter_details["encounter_info"]["facility_name"] = facility_name
+                        except Exception as e:
+                            logger.error(f"Error fetching facilities: {e}")
+
                     # Get patient demographics for context
                     patient_response = await client.get(f"/patients/{patient_id}")
                     if patient_response.get("patient"):
@@ -467,8 +488,30 @@ async def manageEncounter(
                         logger.error(f"Error fetching lab orders: {e}")
                         encounter_details["lab_orders"] = []
 
-                    # Get clinical notes
+                    # Get clinical notes. The list's chief_complaints is a copy
+                    # taken when the encounter is signed: empty until the first
+                    # sign, and the old text after an unlock and edit. The
+                    # single-encounter read returns what is saved now, on SOAP
+                    # charts too, though the API docs list it for Quick, Brief and
+                    # Comprehensive only. A successful read is used even when it
+                    # is empty, so a cleared chief complaint does not bring the
+                    # stale copy back. Only a failed read falls back to the list.
                     clinical_notes = found_encounter.get("chief_complaints")
+                    try:
+                        single_response = await client.get(f"/encounters/{encounter_id}")
+                        current_notes = (single_response.get("encounter") or {}).get("notes")
+                        if isinstance(current_notes, dict):
+                            clinical_notes = current_notes.get("chief_complaints")
+                        else:
+                            logger.warning(
+                                f"Encounter {encounter_id} read returned no notes; "
+                                "using the list's chief_complaints, which may be stale"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Error fetching encounter {encounter_id}: {e}; "
+                            "using the list's chief_complaints, which may be stale"
+                        )
                     if clinical_notes:
                         encounter_details["clinical_notes"] = clinical_notes
                     
@@ -603,7 +646,7 @@ async def manageEncounter(
                     # Unlock the encounter using the API
                     unlock_data = {"reason": reason}
                     unlock_response = await client.post(
-                        f"/api/ehr/v1/encounters/{encounter_id}/unlock",
+                        f"/encounters/{encounter_id}/unlock",
                         data=unlock_data
                     )
                     
