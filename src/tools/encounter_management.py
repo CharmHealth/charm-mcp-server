@@ -488,8 +488,30 @@ async def manageEncounter(
                         logger.error(f"Error fetching lab orders: {e}")
                         encounter_details["lab_orders"] = []
 
-                    # Get clinical notes
+                    # Get clinical notes. The list's chief_complaints is a copy
+                    # taken when the encounter is signed: empty until the first
+                    # sign, and the old text after an unlock and edit. The
+                    # single-encounter read returns what is saved now, on SOAP
+                    # charts too, though the API docs list it for Quick, Brief and
+                    # Comprehensive only. A successful read is used even when it
+                    # is empty, so a cleared chief complaint does not bring the
+                    # stale copy back. Only a failed read falls back to the list.
                     clinical_notes = found_encounter.get("chief_complaints")
+                    try:
+                        single_response = await client.get(f"/encounters/{encounter_id}")
+                        current_notes = (single_response.get("encounter") or {}).get("notes")
+                        if isinstance(current_notes, dict):
+                            clinical_notes = current_notes.get("chief_complaints")
+                        else:
+                            logger.warning(
+                                f"Encounter {encounter_id} read returned no notes; "
+                                "using the list's chief_complaints, which may be stale"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Error fetching encounter {encounter_id}: {e}; "
+                            "using the list's chief_complaints, which may be stale"
+                        )
                     if clinical_notes:
                         encounter_details["clinical_notes"] = clinical_notes
                     

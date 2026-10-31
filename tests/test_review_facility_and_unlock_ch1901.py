@@ -1,5 +1,5 @@
-"""manageEncounter: the review names the encounter's facility, and unlock
-reaches the EHR — CH-1901.
+"""manageEncounter: the review names the encounter's facility, shows the
+chief complaint as it is saved now, and unlock reaches the EHR — CH-1901.
 
 cortex's sign card shows the encounter as the clinician signs it, and a
 facility id is not something a clinician recognizes. The list endpoint the
@@ -8,6 +8,11 @@ review reads gives the id only, so the name comes from /facilities.
 Unlock posted to "/api/ehr/v1/encounters/{id}/unlock". The client's base URL
 already ends in /api/ehr/v1, so the request went to the prefix twice and the
 EHR answered 404 (found in the CH-1901 live run against ehr2).
+
+The review took the chief complaint from the /encounters list, which holds a
+copy made when the encounter is signed. Before the first sign it is empty, and
+after an unlock and edit it is the old text, while the EHR signs the new. The
+single-encounter read returns the saved value (checked live on a SOAP chart).
 
 Fakes CharmHealthAPIClient — same pattern as test_soap_note_source_ch1502.py.
 """
@@ -48,18 +53,21 @@ def _patch_client(monkeypatch, fake_client) -> None:
     )
 
 
-def _review_responses(facilities=None):
+def _review_responses(facilities=None, list_cc="", current_notes=None):
     responses = {
         "/encounters": {"encounters": [{
             "encounter_id": "e1", "date": "2026-10-30",
             "physician_name": "Dr. Jones", "facility_id": "f1",
             "is_approved": "false", "chart_type": "SOAP",
+            "chief_complaints": list_cc,
         }]},
         "/patients/p1": {"patient": {"first_name": "Amy", "last_name": "Test"}},
         "/soap/encounters/e1": {"soap_encounter": {"templates": [], "entries": [], "notes": {}}},
     }
     if facilities is not None:
         responses["/facilities"] = {"facilities": facilities}
+    if current_notes is not None:
+        responses["/encounters/e1"] = {"code": "0", "encounter": {"notes": current_notes}}
     return responses
 
 
@@ -95,6 +103,40 @@ async def test_a_failed_facilities_read_leaves_the_name_out(monkeypatch) -> None
     info = result["encounter_details"]["encounter_info"]
     assert "facility_name" not in info
     assert info["facility"] == "f1"
+
+
+@pytest.mark.asyncio
+async def test_review_shows_the_chief_complaint_saved_now(monkeypatch) -> None:
+    fake = _FakeAPIClient(get_responses=_review_responses(
+        list_cc="knee pain", current_notes={"chief_complaints": "knee pain, fall at home"},
+    ))
+
+    details = (await _review(monkeypatch, fake))["encounter_details"]
+
+    assert details["clinical_notes"] == "knee pain, fall at home"
+
+
+@pytest.mark.asyncio
+async def test_a_cleared_chief_complaint_does_not_bring_back_the_signed_copy(monkeypatch) -> None:
+    fake = _FakeAPIClient(get_responses=_review_responses(
+        list_cc="knee pain", current_notes={"chief_complaints": ""},
+    ))
+
+    details = (await _review(monkeypatch, fake))["encounter_details"]
+
+    assert "clinical_notes" not in details
+
+
+@pytest.mark.asyncio
+async def test_a_failed_encounter_read_falls_back_to_the_list(monkeypatch) -> None:
+    fake = _FakeAPIClient(
+        get_responses=_review_responses(list_cc="knee pain"),
+        errors={"/encounters/e1": RuntimeError("encounter read down")},
+    )
+
+    details = (await _review(monkeypatch, fake))["encounter_details"]
+
+    assert details["clinical_notes"] == "knee pain"
 
 
 @pytest.mark.asyncio
