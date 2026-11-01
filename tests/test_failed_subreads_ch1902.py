@@ -153,6 +153,22 @@ async def test_a_genuinely_empty_section_stays_an_empty_list(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_a_section_answered_with_a_bare_list_is_read_not_crashed(monkeypatch) -> None:
+    # read_failure counts a bare list as success, so the section helper must
+    # not call .get on it (PR #35 review).
+    responses = _encounter_responses()
+    responses["/patients/p1/lab-orders"] = [
+        {"encounter_id": "e1", "test_names": "CBC"},
+        {"encounter_id": "other", "test_names": "BMP"},
+    ]
+
+    details = (await _review(monkeypatch, _FakeAPIClient(responses)))["encounter_details"]
+
+    assert [o["test_names"] for o in details["lab_orders"]] == ["CBC"]
+    assert "lab_orders_unavailable" not in details
+
+
+@pytest.mark.asyncio
 async def test_a_complete_review_has_no_flags_and_is_ready(monkeypatch) -> None:
     result = await _review(monkeypatch, _FakeAPIClient(_encounter_responses()))
     details = result["encounter_details"]
