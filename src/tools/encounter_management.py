@@ -189,6 +189,12 @@ async def _read_patient_records(client, patient_id, suffix, keys):
         return None, str(e)[:200]
     if reason := read_failure(response):
         return None, reason
+    # read_failure counts a bare list as success, and some endpoints answer
+    # with one, so it is the records themselves, not a dict to look keys up in.
+    if isinstance(response, list):
+        return [r for r in response if isinstance(r, dict)], None
+    if not isinstance(response, dict):
+        return None, f"unexpected response type {type(response).__name__}"
     for key in keys:
         if response.get(key):
             return [r for r in response[key] if isinstance(r, dict)], None
@@ -450,8 +456,8 @@ async def manageEncounter(
                     if facility_id:
                         try:
                             facilities_response = await client.get("/facilities")
-                            if read_failure(facilities_response):
-                                raise RuntimeError(read_failure(facilities_response))
+                            if reason := read_failure(facilities_response):
+                                raise RuntimeError(reason)
                             facility_name = next(
                                 (
                                     f.get("facility_name")
@@ -519,7 +525,7 @@ async def manageEncounter(
                     # {"error": ...} rather than raising, so the old except
                     # blocks almost never ran and a failure became [] (CH-1902).
                     encounter_id_str = str(encounter_id)
-                    encounter_date_str = str(encounter_details["encounter_info"]["encounter_date"] or "").split()[0] if encounter_details["encounter_info"]["encounter_date"] else None
+                    encounter_date_str = str(encounter_details["encounter_info"]["encounter_date"]).split()[0] if encounter_details["encounter_info"]["encounter_date"] else None
                     for key, (label, suffix, response_keys) in _REVIEW_SECTIONS.items():
                         records, reason = await _read_patient_records(client, patient_id, suffix, response_keys)
                         if records is None:
