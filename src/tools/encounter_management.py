@@ -551,7 +551,7 @@ async def manageEncounter(
                 Patient: {encounter_details.get('patient_info', {}).get('name', 'Unknown')} ({encounter_details.get('patient_info', {}).get('record_id', 'No ID')})
                 Date: {encounter_details['encounter_info']['encounter_date']}
                 Provider: {encounter_details['encounter_info']['provider']}
-                Facility: {encounter_details['encounter_info']['facility']}
+                Facility: {encounter_details['encounter_info'].get('facility_name') or encounter_details['encounter_info']['facility']}
                 Status: {encounter_details['encounter_info']['status']}
 
                 Documentation Summary:

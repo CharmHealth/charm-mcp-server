@@ -85,10 +85,13 @@ async def test_review_names_the_facility_and_keeps_its_id(monkeypatch) -> None:
         {"facility_id": "f1", "facility_name": "Ink Inc."},
     ]))
 
-    info = (await _review(monkeypatch, fake))["encounter_details"]["encounter_info"]
+    result = await _review(monkeypatch, fake)
 
+    info = result["encounter_details"]["encounter_info"]
     assert info["facility_name"] == "Ink Inc."
     assert info["facility"] == "f1"
+    # The guidance is what a clinician reads before signing.
+    assert "Facility: Ink Inc." in result["guidance"]
 
 
 @pytest.mark.asyncio
@@ -103,6 +106,7 @@ async def test_a_failed_facilities_read_leaves_the_name_out(monkeypatch) -> None
     info = result["encounter_details"]["encounter_info"]
     assert "facility_name" not in info
     assert info["facility"] == "f1"
+    assert "Facility: f1" in result["guidance"]
 
 
 @pytest.mark.asyncio
