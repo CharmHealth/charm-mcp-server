@@ -319,7 +319,18 @@ class CharmHealthAPIClient:
                     pass
                 return await self._make_request(method, endpoint, params, data, retry_count, auth_retried=True)
             logger.error(f"HTTP error {e.response.status_code} on {method} {clean_endpoint} in {duration:.3f}s")
-            return {"error": f"HTTP {e.response.status_code}: {e.response.text}"}
+            result = {"error": f"HTTP {e.response.status_code}: {e.response.text}"}
+            # The backing API often names the offending field in its own JSON body
+            # (e.g. {"code":2,"error_input":"facility_ids","message":"..."}) — surface
+            # that as a field-keyed error whenever it's present, additively, so a
+            # caller that only checks "error" sees no change in behavior.
+            try:
+                body = e.response.json()
+            except ValueError:
+                body = None
+            if isinstance(body, dict) and body.get("error_input"):
+                result["field_errors"] = {body["error_input"]: body.get("message", "invalid value")}
+            return result
 
         except httpx.RequestError as e:
             # Record failed API call

@@ -252,3 +252,42 @@ async def test_send_balance_reminder_missing_patient_id_returns_clean_error(monk
 
     assert json.loads(str(exc_info.value))["error"] == "patient_id required for send_balance_reminder"
     assert fake.post_calls == []
+
+
+@pytest.mark.asyncio
+async def test_add_procedure_modifiers_are_not_sent_but_are_warned_about(monkeypatch) -> None:
+    """manageEncounterProcedures' request schema (proceduresJSON in
+    security-api-billing.xml) declares a single "modifierParams" key, not
+    modifier_1/2/3/4 — and has no <extrakey> escape hatch, so sending those
+    as top-level keys would 400 with "Extra key found in JSON" (same bug
+    class as managePatientAllergies' comments field). Dropped until the real
+    accepted shape is live-confirmed."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/encounters/e1/procedures": {"procedures": [{"consultation_cpt_map_id": "cpt1"}]},
+    })
+    _patch_client(monkeypatch, fake)
+
+    result = await billing.manageEncounterProcedures(
+        action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=100.0,
+        modifier_1="25", modifier_2="59",
+    )
+
+    _, sent_data = fake.post_calls[0]
+    sent_item = sent_data["procedures"][0]
+    assert "modifier_1" not in sent_item
+    assert "modifier_2" not in sent_item
+    assert "modifier_1/2/3/4" in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_add_procedure_without_modifiers_has_no_warning(monkeypatch) -> None:
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/encounters/e1/procedures": {"procedures": [{"consultation_cpt_map_id": "cpt1"}]},
+    })
+    _patch_client(monkeypatch, fake)
+
+    result = await billing.manageEncounterProcedures(
+        action="add", patient_id="p1", encounter_id="e1", code_id="c1", item_charge=100.0,
+    )
+
+    assert "modifier" not in result["guidance"].lower()

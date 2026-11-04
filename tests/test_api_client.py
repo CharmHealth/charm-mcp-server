@@ -196,3 +196,44 @@ async def test_401_does_not_clear_shared_cache_entry_belonging_to_a_different_re
 
     # Only this client's own cache key should have been touched by its 401 handling.
     assert other_key in CharmHealthAPIClient._shared_token_cache
+
+
+async def test_http_error_with_error_input_body_is_promoted_to_field_errors():
+    """The backing API often names the offending field in its own JSON error
+    body (e.g. {"code":2,"error_input":"facility_ids","message":"..."}) —
+    confirmed live for manageAppointments' facility_ids validation. That
+    should be promoted to a field-keyed `field_errors` dict so a caller (or
+    cortex) can map it back onto a specific form field, in addition to the
+    existing flat `error` string (unchanged, for backward compatibility)."""
+    client = _make_client(access_token="initial-token")
+    await client.ensure_client()
+
+    bad_request = httpx.Response(
+        400,
+        json={"code": 2, "error_input": "facility_ids", "message": "Invalid value passed for facility_ids"},
+        request=httpx.Request("POST", "https://example.test/x"),
+    )
+    client._client.post = AsyncMock(return_value=bad_request)
+
+    result = await client.post("/appointments", data={})
+
+    assert result["error"].startswith("HTTP 400:")
+    assert result["field_errors"] == {"facility_ids": "Invalid value passed for facility_ids"}
+
+
+async def test_http_error_with_non_json_body_has_no_field_errors_key():
+    """A plain-text error body (the common case) must not gain a spurious
+    `field_errors` key, and the existing flat `error` string must be
+    unchanged — this is purely additive."""
+    client = _make_client(access_token="initial-token")
+    await client.ensure_client()
+
+    bad_request = httpx.Response(
+        400, text="scope denied", request=httpx.Request("POST", "https://example.test/x")
+    )
+    client._client.post = AsyncMock(return_value=bad_request)
+
+    result = await client.post("/appointments", data={})
+
+    assert result == {"error": "HTTP 400: scope denied"}
+    assert "field_errors" not in result
