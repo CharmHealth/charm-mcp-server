@@ -693,7 +693,11 @@ async def manageEncounter(
                     
                     # First verify encounter exists and get current status
                     encounter_response = await client.get(f"/soap/encounters/{encounter_id}")
-                    
+                    # A failed read is not "not found": say it failed, so the
+                    # caller retries instead of concluding the encounter is gone.
+                    if reason := read_failure(encounter_response):
+                        return failed_read_result(f"encounter {encounter_id}", reason)
+
                     encounter = encounter_response.get("soap_encounter", {})
                     if not encounter:
                         return {

@@ -414,6 +414,38 @@ async def test_the_practice_overview_flags_a_failed_section(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
+async def test_an_overview_section_answered_with_a_bare_list_is_read(monkeypatch) -> None:
+    # read_failure counts a bare list as success (PR #35 review).
+    fake = _FakeAPIClient({
+        "/facilities": [{"facility_id": "f1"}, {"facility_id": "f2"}],
+        "/members": {"members": []},
+        "/vitals/metrics": {"vitals": []},
+        "/templates": {"templates": []},
+    })
+    _patch(monkeypatch, core_tools, fake)
+
+    result = await core_tools.getPracticeInfo(info_type="overview")
+
+    assert result["facility_count"] == 2
+    assert "facilities_unavailable" not in result
+
+
+@pytest.mark.asyncio
+async def test_a_failed_read_before_signing_is_not_reported_as_not_found(monkeypatch) -> None:
+    fake = _FakeAPIClient(failing=["/soap/encounters/e1"])
+    _patch(monkeypatch, encounter_management, fake)
+
+    with pytest.raises(ToolError) as raised:
+        await encounter_management.manageEncounter(
+            action="sign", patient_id="p1", encounter_id="e1",
+        )
+
+    message = str(raised.value)
+    assert "Could not read encounter e1" in message
+    assert "not found" not in message
+
+
+@pytest.mark.asyncio
 async def test_the_vitals_list_reads_vital_entries(monkeypatch) -> None:
     # The endpoint answers under "vital_entries". Reading only "vitals"
     # reported total_count 0 with the entries sitting next to it.
