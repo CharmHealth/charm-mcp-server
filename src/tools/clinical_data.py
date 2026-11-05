@@ -9,11 +9,12 @@ from pydantic import BaseModel, Field
 class VitalEntry(BaseModel):
     """A single vital sign reading with name, value, and unit."""
     vital_name: str = Field(description="Exact CharmHealth vital name (e.g., 'Height', 'Weight', 'Systolic BP')")
-    vital_value: str = Field(description="The vital value")
+    vital_value: str = Field(description="The vital value, numeric only — no units (put units in vital_unit, not here)")
     vital_unit: str = Field(default="", description="Unit of measurement (e.g., 'ft', 'ins', 'lbs', 'mmHg')")
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
+from common.field_validation import check_icd10
 import logging
 import re
 from telemetry import telemetry, with_tool_metrics
@@ -80,6 +81,9 @@ async def managePatientVitals(
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        vital_value: Numeric value only, no units and no descriptive text (e.g. "120", not "120 mmHg" or "blood pressure high"). Put the unit in vital_unit instead.
     """
     auth = resolve_auth("managePatientVitals")
     
@@ -916,6 +920,9 @@ async def managePatientAllergies(
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        comments: NOT supported on "add" (confirmed against the API's own request schema, which has no comments key and rejects undeclared ones); silently dropped with a WARNING in guidance if provided. Use reactions or managePatientNotes() instead.
     """
     auth = resolve_auth("managePatientAllergies")
     
@@ -975,16 +982,33 @@ async def managePatientAllergies(
                         "date": allergy_date.isoformat(),
                         "status": allergy_status or "Active"
                     }
-                    
-                    if comments:
-                        allergy_data["comments"] = comments
-                    
+
+                    # CONFIRMED against the backend's own request schema
+                    # (addPatientAllergiesJSON in security-api-patients.xml): it
+                    # declares exactly type/allergen/severity/date/status/reactions
+                    # and has no <extrakey> escape hatch, so this jsontemplate
+                    # rejects ANY undeclared key with HTTP 400 "Extra key found in
+                    # JSON" — the whole call fails, not just the extra field.
+                    # "comments" was never one of the declared keys; same bug class
+                    # already found and fixed for managePatientDrugs' medications
+                    # path below (see the comment there, 2026-08-27) — dropped here
+                    # too rather than sending a field the backend has never accepted.
+                    comments_dropped = bool(comments)
+
                     response = await client.post(f"/patients/{patient_id}/allergies", data=allergy_data)
                     if response.get("patient_allergy"):
                         severity_warning = ""
                         if severity.lower() in ["severe"]:
                             severity_warning = "SEVERE ALLERGY ALERT: This will trigger warnings during prescribing."
-                        response["guidance"] = f"Allergy to '{allergen}' documented successfully.{severity_warning} All providers will see this allergy alert when prescribing medications."
+                        guidance = f"Allergy to '{allergen}' documented successfully.{severity_warning} All providers will see this allergy alert when prescribing medications."
+                        if comments_dropped:
+                            guidance += (
+                                " WARNING: comments was provided but NOT sent — this field "
+                                "isn't supported on allergy add (the API's request schema has no "
+                                "such key and rejects undeclared ones). Document this detail "
+                                "elsewhere, e.g. reactions or a clinical note via managePatientNotes()."
+                            )
+                        response["guidance"] = guidance
                     return strip_empty_values(response)
                     
                 case "update":
@@ -1088,6 +1112,9 @@ async def managePatientDiagnoses(
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        diagnosis_code: When code_type="ICD10": one letter, two digits, optionally followed by "." and 1-4 alphanumeric characters, uppercase (e.g. "L23.9", "S72.001A", or "L239"). SNOMED codes are numeric and not format-checked here.
     """
     auth = resolve_auth("managePatientDiagnoses")
     
@@ -1160,7 +1187,18 @@ async def managePatientDiagnoses(
                             "error": "Missing required fields for diagnosis",
                             "guidance": "For diagnoses, provide: diagnosis_name, diagnosis_code, and code_type (e.g., 'ICD10'). This ensures proper medical coding and billing."
                         }
-                    
+
+                    # SNOMED codes are numeric and not format-checked here — only
+                    # ICD-10 has a confirmed regex at the backing REST layer.
+                    if code_type == "ICD10":
+                        diagnosis_code, code_err = check_icd10(diagnosis_code)
+                        if code_err:
+                            return {
+                                "error": "Invalid diagnosis_code format",
+                                "field_errors": {"diagnosis_code": code_err},
+                                "guidance": "Provide a valid ICD-10 code (e.g., 'L23.9') or use code_type='SNOMED' for a SNOMED code."
+                            }
+
                     diagnosis_data = [{
                         "name": diagnosis_name,
                         "code": diagnosis_code,
