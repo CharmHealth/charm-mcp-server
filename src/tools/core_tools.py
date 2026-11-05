@@ -405,7 +405,12 @@ async def getPracticeInfo(
                             result[f"{key}_unavailable"] = True
                             unavailable.append(key)
                             continue
-                        items = section_response.get(response_key) or []
+                        # read_failure counts a bare list as success, and
+                        # some endpoints answer with one.
+                        if isinstance(section_response, list):
+                            items = section_response
+                        else:
+                            items = section_response.get(response_key) or []
                         if key == "providers":
                             items = _add_provider_name(items)
                         result[key] = items
