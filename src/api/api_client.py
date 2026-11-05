@@ -328,8 +328,9 @@ class CharmHealthAPIClient:
                 body = e.response.json()
             except ValueError:
                 body = None
-            if isinstance(body, dict) and body.get("error_input"):
-                result["field_errors"] = {body["error_input"]: body.get("message", "invalid value")}
+            error_input = body.get("error_input") if isinstance(body, dict) else None
+            if isinstance(error_input, str) and error_input:
+                result["field_errors"] = {error_input: body.get("message", "invalid value")}
             return result
 
         except httpx.RequestError as e:

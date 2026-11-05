@@ -43,6 +43,14 @@ def test_phone_empty_or_none_passes_through_untouched() -> None:
     assert check_phone("") == ("", None)
 
 
+def test_phone_international_with_dashes_is_accepted() -> None:
+    """The 7-15 length bound is on digit count, not on the cleaned string's
+    character count — '+' and '-' must not count against it."""
+    cleaned, err = check_phone("+44-20-7946-0958")
+    assert err is None
+    assert cleaned == "+44-20-7946-0958"
+
+
 def test_email_is_lowercased() -> None:
     cleaned, err = check_email("JOHN.DOE@EXAMPLE.COM")
     assert err is None
@@ -51,6 +59,17 @@ def test_email_is_lowercased() -> None:
 
 def test_email_malformed_is_rejected() -> None:
     cleaned, err = check_email("not-an-email")
+    assert err is not None
+
+
+def test_email_with_subdomain_is_accepted() -> None:
+    cleaned, err = check_email("jo@cs.stanford.edu")
+    assert err is None
+    assert cleaned == "jo@cs.stanford.edu"
+
+
+def test_email_with_empty_domain_label_is_rejected() -> None:
+    cleaned, err = check_email("a@.com")
     assert err is not None
 
 
@@ -92,6 +111,14 @@ def test_icd10_seventh_character_extension_is_accepted() -> None:
     cleaned, err = check_icd10("s72.001a")
     assert err is None
     assert cleaned == "S72.001A"
+
+
+def test_icd10_without_dot_is_accepted() -> None:
+    """Undotted ICD-10 codes (e.g. from claims/billing exports) are common
+    and must not be rejected just because the '.' was left out."""
+    cleaned, err = check_icd10("l239")
+    assert err is None
+    assert cleaned == "L239"
 
 
 def test_zip_code_not_format_checked_for_non_us_country() -> None:

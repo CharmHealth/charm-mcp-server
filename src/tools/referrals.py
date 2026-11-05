@@ -333,8 +333,9 @@ async def manageReferrals(
     diagnoses / insurance accept either a native JSON array of objects or a
     JSON-encoded string of one, e.g. diagnoses=[{"name": "...", "code": "...", "id": "..."}]
     or insurance=[{"name": "...", "id": "..."}]. Each diagnosis "code" should be a
-    valid ICD-10 code (one letter, two digits, optional "." + 1-4 digits, e.g.
-    "L23.9") unless the referral is using a different coding system — this tool
+    valid ICD-10 code (one letter, two digits, optionally followed by "." and
+    1-4 alphanumeric characters, e.g. "L23.9", "S72.001A", or "L239") unless
+    the referral is using a different coding system — this tool
     does not reformat or reject malformed codes here, so get it right before calling.
 
     chartnote_ids / lab_ids / document_ids / image_ids / growth_ids are comma-separated

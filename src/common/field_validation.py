@@ -14,10 +14,10 @@ against the real backend pattern — rejecting only genuinely invalid content
 import re
 from typing import Optional, Tuple
 
-PHONE_PATTERN = re.compile(r"^[0-9+-]{7,15}$")
-EMAIL_PATTERN = re.compile(r"^[\w]([\w\-.+']*)@([\w-]*)(\.[a-zA-Z]{2,22}(\.[a-zA-Z]{2}){0,2})$")
+PHONE_PATTERN = re.compile(r"^[0-9+-]+$")
+EMAIL_PATTERN = re.compile(r"^[\w]([\w\-.+']*)@([\w-]+\.)+[a-zA-Z]{2,22}$")
 ZIP_PATTERN = re.compile(r"^\d{5}(-\d{4})?$")
-ICD10_PATTERN = re.compile(r"^[A-Za-z]\d{2}(\.[A-Za-z0-9]{1,4})?$")
+ICD10_PATTERN = re.compile(r"^[A-Za-z]\d{2}(\.?[A-Za-z0-9]{1,4})?$")
 
 
 def normalize_phone(value: str) -> str:
@@ -36,7 +36,8 @@ def check_phone(value: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     if not value:
         return value, None
     cleaned = normalize_phone(value)
-    if not PHONE_PATTERN.match(cleaned):
+    digit_count = len(re.sub(r"[^0-9]", "", cleaned))
+    if not PHONE_PATTERN.match(cleaned) or not (7 <= digit_count <= 15):
         return cleaned, "must be 7-15 digits, optionally with + or -"
     return cleaned, None
 
@@ -69,5 +70,5 @@ def check_icd10(value: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
         return value, None
     cleaned = value.strip().upper()
     if not ICD10_PATTERN.match(cleaned):
-        return cleaned, "must be ICD-10 format: one letter, two digits, optional '.' + 1-4 digits (e.g. L23.9)"
+        return cleaned, "must be ICD-10 format: one letter, two digits, optionally followed by '.' and 1-4 alphanumeric characters (e.g. L23.9, S72.001A, or L239)"
     return cleaned, None

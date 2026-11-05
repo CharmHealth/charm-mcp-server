@@ -237,3 +237,25 @@ async def test_http_error_with_non_json_body_has_no_field_errors_key():
 
     assert result == {"error": "HTTP 400: scope denied"}
     assert "field_errors" not in result
+
+
+async def test_http_error_with_non_string_error_input_has_no_field_errors_key():
+    """`error_input` can come back as a list (e.g. multiple offending fields).
+    Keying a dict on it would raise `TypeError: unhashable type`, which would
+    propagate out of `_make_request` and mask the real HTTP error for every
+    caller — instead it must be ignored, leaving the base `error` string
+    intact."""
+    client = _make_client(access_token="initial-token")
+    await client.ensure_client()
+
+    bad_request = httpx.Response(
+        400,
+        json={"code": 2, "error_input": ["phone", "email"], "message": "Invalid values"},
+        request=httpx.Request("POST", "https://example.test/x"),
+    )
+    client._client.post = AsyncMock(return_value=bad_request)
+
+    result = await client.post("/appointments", data={})
+
+    assert result["error"].startswith("HTTP 400:")
+    assert "field_errors" not in result

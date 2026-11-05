@@ -201,7 +201,7 @@ async def managePatient(
             return {
                 "error": "One or more fields failed format validation",
                 "field_errors": field_errors,
-                "guidance": "Fix the listed field(s) and retry. Phone: digits, +, and - only (7-15 characters). Email: local@domain.tld. ZIP: 5 digits or ZIP+4.",
+                "guidance": "Fix the listed field(s) and retry. Phone: digits, +, and - only (7-15 digits). Email: local@domain.tld. ZIP: 5 digits or ZIP+4.",
             }
 
     async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
@@ -290,13 +290,15 @@ async def managePatient(
                         if district:
                             patient_data["address"]["district"] = district
                     
-                    # Contact information
+                    # Contact information (already format-validated above; dashes
+                    # are stripped for storage so a later phone search, which
+                    # strips dashes from its query, still matches by substring)
                     if phone:
-                        patient_data["mobile"] = phone
+                        patient_data["mobile"] = phone.replace("-", "")
                     if home_phone:
-                        patient_data["home_phone"] = home_phone
+                        patient_data["home_phone"] = home_phone.replace("-", "")
                     if work_phone:
-                        patient_data["work_phone"] = work_phone
+                        patient_data["work_phone"] = work_phone.replace("-", "")
                     if work_phone_extn:
                         patient_data["work_phone_extn"] = work_phone_extn
                     if email:
@@ -500,13 +502,15 @@ async def managePatient(
                     if record_id:
                         patient_data["record_id"] = record_id
                     
-                    # Contact information (already normalized above)
+                    # Contact information (already format-validated above; dashes
+                    # are stripped for storage so a later phone search, which
+                    # strips dashes from its query, still matches by substring)
                     if phone:
-                        patient_data["mobile"] = phone
+                        patient_data["mobile"] = phone.replace("-", "")
                     if home_phone:
-                        patient_data["home_phone"] = home_phone
+                        patient_data["home_phone"] = home_phone.replace("-", "")
                     if work_phone:
-                        patient_data["work_phone"] = work_phone
+                        patient_data["work_phone"] = work_phone.replace("-", "")
                     if work_phone_extn:
                         patient_data["work_phone_extn"] = work_phone_extn
                     if primary_phone:

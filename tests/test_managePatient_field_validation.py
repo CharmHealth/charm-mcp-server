@@ -48,7 +48,9 @@ async def test_create_patient_phone_with_parens_is_normalized_before_the_rest_ca
 
     assert "error" not in result
     _, sent_data = fake.post_calls[0]
-    assert sent_data["mobile"] == "555014-7823"
+    # Stored digits-only (dashes stripped) so findPatients' dash-stripped
+    # phone search can still match it by substring.
+    assert sent_data["mobile"] == "5550147823"
 
 
 @pytest.mark.asyncio

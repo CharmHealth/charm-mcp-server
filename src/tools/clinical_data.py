@@ -1114,7 +1114,7 @@ async def managePatientDiagnoses(
     </instructions>
 
     Args:
-        diagnosis_code: When code_type="ICD10": one letter, two digits, optional "." + 1-4 digits, uppercase (e.g. "L23.9"). SNOMED codes are numeric and not format-checked here.
+        diagnosis_code: When code_type="ICD10": one letter, two digits, optionally followed by "." and 1-4 alphanumeric characters, uppercase (e.g. "L23.9", "S72.001A", or "L239"). SNOMED codes are numeric and not format-checked here.
     """
     auth = resolve_auth("managePatientDiagnoses")
     
