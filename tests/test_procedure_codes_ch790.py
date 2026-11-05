@@ -274,15 +274,6 @@ async def test_add_procedure_invalid_place_of_service_rejected(monkeypatch) -> N
 
 @pytest.mark.asyncio
 async def test_add_procedure_with_modifiers_and_diagnosis_links(monkeypatch) -> None:
-    """modifier_1 is NOT sent as of the extra-key fix: proceduresJSON
-    (security-api-billing.xml) declares a single "modifierParams" key, not
-    modifier_1/2/3/4, and has no <extrakey> escape hatch, so the old
-    behavior here (asserting modifier_1 went through as a flat key) was
-    itself exercising a request shape the real schema would reject with
-    "Extra key found in JSON". See test_billing.py's
-    test_add_procedure_modifiers_are_not_sent_but_are_warned_about for the
-    dedicated coverage; this test now only asserts related_diagnosis_ids,
-    which is unaffected."""
     fake = _FakeAPIClient(post_responses={
         "/patients/p1/encounters/e1/procedures": {"procedures": []},
     })
@@ -295,7 +286,7 @@ async def test_add_procedure_with_modifiers_and_diagnosis_links(monkeypatch) -> 
 
     _, sent_data = fake.post_calls[0]
     procedure_item = sent_data["procedures"][0]
-    assert "modifier_1" not in procedure_item
+    assert procedure_item["modifier_1"] == "25"
     assert procedure_item["related_diagnosis_ids"] == ["d1", "d2"]
 
 

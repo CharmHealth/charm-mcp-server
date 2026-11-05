@@ -309,9 +309,9 @@ async def manageEncounterProcedures(
     - "list": List procedures already attached to an encounter (requires patient_id, encounter_id).
     - "add": Attach a new procedure to the encounter (requires patient_id, encounter_id, code_id,
       item_charge). item_quantity defaults to 1. place_of_service defaults to "11" (Office) —
-      valid values are "01"-"62", "65", "71", "72", "81", "99". related_diagnosis_ids (a
-      comma-separated string or a native array of diagnosis IDs) is optional. modifier_1-4
-      are accepted but NOT currently sent to the API — see Args below.
+      valid values are "01"-"62", "65", "71", "72", "81", "99". modifier_1-4 and
+      related_diagnosis_ids (a comma-separated string or a native array of diagnosis IDs)
+      is optional.
     - "update": Modify an already-attached procedure (requires patient_id, encounter_id,
       consultation_cpt_map_id — the ID returned by "list"/"add" — plus whichever fields are
       changing). Only the fields you pass are changed; item_quantity and place_of_service
@@ -326,12 +326,6 @@ async def manageEncounterProcedures(
     When required parameters are missing, ask the user to provide the specific values rather
     than proceeding with defaults or auto-generated values.
     </instructions>
-
-    Args:
-        modifier_1: NOT currently sent to the API — this endpoint's request schema doesn't declare modifier_1/2/3/4 as keys and rejects undeclared ones (unconfirmed live; found by reading the schema). Accepted here but silently dropped with a WARNING in guidance if provided.
-        modifier_2: Same as modifier_1 — not currently sent.
-        modifier_3: Same as modifier_1 — not currently sent.
-        modifier_4: Same as modifier_1 — not currently sent.
     """
     auth = resolve_auth("manageEncounterProcedures")
 
@@ -440,22 +434,14 @@ async def manageEncounterProcedures(
                         procedure_item["code_id"] = code_id
                     if item_charge is not None:
                         procedure_item["item_charge"] = item_charge
-                    # NOT sent: the request schema for this endpoint (proceduresJSON
-                    # in security-api-billing.xml) declares a single "modifierParams"
-                    # key, not four separate modifier_1/2/3/4 keys, and has no
-                    # <extrakey> escape hatch — so sending modifier_1..4 as top-level
-                    # keys should 400 with "Extra key found in JSON" (same bug class
-                    # as managePatientAllergies' comments field; see that tool's fix
-                    # for the general mechanism). Found by reading the schema, not by
-                    # a live 400 — the backend logic that actually sets MODIFIER1-4
-                    # (InvoicesAPIUtil.addOrUpdateCPTRows) still reads modifier_1..4
-                    # flat, so the declared schema and the code may have drifted apart
-                    # (this repo has already hit that exact drift once, for
-                    # medications' "comments"/"internal_comments" — see
-                    # managePatientDrugs). Dropped here until someone live-confirms
-                    # the real accepted shape; re-enable once that's known rather than
-                    # guessing a second time.
-                    modifiers_dropped = bool(modifier_1 or modifier_2 or modifier_3 or modifier_4)
+                    if modifier_1:
+                        procedure_item["modifier_1"] = modifier_1
+                    if modifier_2:
+                        procedure_item["modifier_2"] = modifier_2
+                    if modifier_3:
+                        procedure_item["modifier_3"] = modifier_3
+                    if modifier_4:
+                        procedure_item["modifier_4"] = modifier_4
                     if claim_comments:
                         procedure_item["claim_comments"] = claim_comments
                     if related_diagnosis_ids:
@@ -508,15 +494,7 @@ async def manageEncounterProcedures(
                         if new_id is not None and str(new_id).strip():
                             result["consultation_cpt_map_id"] = str(new_id)
 
-                    guidance = f"Procedure {'added to' if action == 'add' else 'updated on'} the encounter. Use action='list' to see the full current set, or action='delete' with consultation_cpt_map_id to remove one."
-                    if modifiers_dropped:
-                        guidance += (
-                            " WARNING: modifier_1/2/3/4 was provided but NOT sent — this "
-                            "endpoint's request schema doesn't declare those keys and rejects "
-                            "undeclared ones, so sending them risked failing the whole call. "
-                            "Modifiers are not currently supported through this tool."
-                        )
-                    result["guidance"] = guidance
+                    result["guidance"] = f"Procedure {'added to' if action == 'add' else 'updated on'} the encounter. Use action='list' to see the full current set, or action='delete' with consultation_cpt_map_id to remove one."
                     return strip_empty_values(result)
 
                 case "delete":
