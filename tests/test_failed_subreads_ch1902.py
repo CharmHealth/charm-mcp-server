@@ -208,6 +208,22 @@ async def test_a_failed_chief_complaint_read_with_no_signed_copy_is_still_flagge
 
 
 @pytest.mark.asyncio
+async def test_nothing_written_is_read_but_a_reply_without_notes_is_flagged(monkeypatch) -> None:
+    # On ehr2 (2026-11-05, all 27 encounters) an encounter with no chief
+    # complaint still answers with the notes dict and an empty string. A
+    # reply with no notes dict at all is a shape we no longer understand.
+    empty = _encounter_responses(signed_copy="", current_cc="")
+    details = (await _review(monkeypatch, _FakeAPIClient(empty)))["encounter_details"]
+    assert "clinical_notes_unavailable" not in details
+    assert "clinical_notes" not in details
+
+    no_notes = _encounter_responses(signed_copy="")
+    no_notes["/encounters/e1"] = {"encounter": {}}
+    details = (await _review(monkeypatch, _FakeAPIClient(no_notes)))["encounter_details"]
+    assert details["clinical_notes_unavailable"] is True
+
+
+@pytest.mark.asyncio
 async def test_failed_facility_and_patient_reads_are_flagged(monkeypatch) -> None:
     fake = _FakeAPIClient(_encounter_responses(), failing=["/facilities", "/patients/p1"])
 
