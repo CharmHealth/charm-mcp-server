@@ -17,9 +17,12 @@ Covers two fixes:
 
 from __future__ import annotations
 
+import datetime
 import logging
 
 import pytest
+import json
+
 from fastmcp.exceptions import ToolError
 
 from tools import clinical_data
@@ -309,3 +312,91 @@ async def test_discontinue_medication_preserves_explicit_dispense_zero(monkeypat
 
     _, sent_data = fake.put_calls[0]
     assert sent_data["dispense"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_add_diagnosis_icd10_code_is_uppercased_before_sending(monkeypatch) -> None:
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/diagnoses": {"patient_diagnoses": [{"id": "d1"}]},
+    })
+    _patch_client(monkeypatch, fake)
+
+    await clinical_data.managePatientDiagnoses(
+        action="add", patient_id="p1", diagnosis_name="Hypertension",
+        diagnosis_code="l23.9", code_type="ICD10",
+    )
+
+    _, sent_data = fake.post_calls[0]
+    assert sent_data[0]["code"] == "L23.9"
+
+
+@pytest.mark.asyncio
+async def test_add_diagnosis_malformed_icd10_code_is_rejected_without_calling_api(monkeypatch) -> None:
+    fake = _FakeAPIClient()
+    _patch_client(monkeypatch, fake)
+
+    with pytest.raises(ToolError) as exc_info:
+        await clinical_data.managePatientDiagnoses(
+            action="add", patient_id="p1", diagnosis_name="Hypertension",
+            diagnosis_code="blood pressure high", code_type="ICD10",
+        )
+
+    assert "diagnosis_code" in json.loads(str(exc_info.value))["field_errors"]
+    assert fake.post_calls == []
+
+
+@pytest.mark.asyncio
+async def test_add_diagnosis_snomed_code_is_not_format_checked(monkeypatch) -> None:
+    """SNOMED codes are numeric, not ICD-10 shaped — only code_type='ICD10'
+    gets the ICD-10 regex check."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/diagnoses": {"patient_diagnoses": [{"id": "d1"}]},
+    })
+    _patch_client(monkeypatch, fake)
+
+    result = await clinical_data.managePatientDiagnoses(
+        action="add", patient_id="p1", diagnosis_name="Hypertension",
+        diagnosis_code="38341003", code_type="SNOMED",
+    )
+
+    assert "field_errors" not in result
+    _, sent_data = fake.post_calls[0]
+    assert sent_data[0]["code"] == "38341003"
+
+
+@pytest.mark.asyncio
+async def test_add_allergy_comments_is_not_sent_but_is_warned_about(monkeypatch) -> None:
+    """addPatientAllergiesJSON (security-api-patients.xml) declares exactly
+    type/allergen/severity/date/status/reactions and has no <extrakey>
+    escape hatch, so a "comments" key 400s the whole call with "Extra key
+    found in JSON" — confirmed against the real backend schema. Same bug
+    class already fixed once for managePatientDrugs' medications path."""
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/allergies": {"patient_allergy": {"id": "a1"}},
+    })
+    _patch_client(monkeypatch, fake)
+
+    result = await clinical_data.managePatientAllergies(
+        action="add", patient_id="p1", allergen="Penicillin", allergy_type="Medication",
+        severity="Moderate", reactions="Rash", allergy_date=datetime.date(2025, 1, 1),
+        comments="Patient reported this during intake",
+    )
+
+    _, sent_data = fake.post_calls[0]
+    assert "comments" not in sent_data
+    assert "comments was provided but NOT sent" in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_add_allergy_without_comments_has_no_warning(monkeypatch) -> None:
+    fake = _FakeAPIClient(post_responses={
+        "/patients/p1/allergies": {"patient_allergy": {"id": "a1"}},
+    })
+    _patch_client(monkeypatch, fake)
+
+    result = await clinical_data.managePatientAllergies(
+        action="add", patient_id="p1", allergen="Penicillin", allergy_type="Medication",
+        severity="Moderate", reactions="Rash", allergy_date=datetime.date(2025, 1, 1),
+    )
+
+    assert "comments" not in result["guidance"]

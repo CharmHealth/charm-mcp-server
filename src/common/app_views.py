@@ -31,6 +31,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from common.field_validation import decode_boolean_status
 from prefab_ui.components import (
     Badge,
     Card,
@@ -627,15 +628,12 @@ def _decode_status(value: Any) -> str:
     supplements use "1"/"0" (NoEHR reads it as `SupplementItem.isCurrentlyActive
     == (status == "1")`) and allergies do the same when `display_status` is
     absent. Rendering the raw value puts a badge or a chip reading "1" on the
-    card, which states nothing. Any other bare number is dropped for the same
-    reason — a number we cannot name is not a status.
+    card, which states nothing. The actual decode is shared with the
+    write-side translation in clinical_data.py's managePatientAllergies update
+    (`decode_boolean_status`), so the real-bool/int edge case only needs
+    fixing in one place.
     """
-    raw = str(value or "").strip()
-    if raw in ("1", "true", "True"):
-        return "Active"
-    if raw in ("0", "false", "False"):
-        return "Inactive"
-    return "" if raw.isdigit() else raw
+    return decode_boolean_status(value)
 
 
 def _status_of(record: Dict[str, Any], *keys: str) -> str:

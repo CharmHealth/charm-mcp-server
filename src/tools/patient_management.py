@@ -6,6 +6,7 @@ from datetime import date
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
+from common.field_validation import check_phone, check_email, check_zip_code
 import logging
 from telemetry import telemetry, with_tool_metrics
 
@@ -158,9 +159,54 @@ async def managePatient(
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        phone: Digits, +, and - only — no spaces, parentheses, or extensions. E.g. "5550147823" or "555-014-7823". Parentheses/spaces are stripped automatically, but letters or the wrong digit count are rejected.
+        home_phone: Same format as phone.
+        work_phone: Same format as phone.
+        emergency_contact_phone: Same format as phone.
+        email: Standard email address format (local@domain.tld).
+        zip_code: For country="US" (the default), a 5-digit ZIP or ZIP+4 (#####-####). Not format-checked for other countries.
+        state: 2-letter USPS state code.
+        country: ISO-3166 alpha-2 country code (not free text).
+        date_of_birth: ISO 8601 date, YYYY-MM-DD. Resolve relative phrasing ("yesterday", "20 years ago") to an absolute date before calling.
+        patient_id: Identifies the patient (returned by findPatients() or a prior managePatient("create")). Required for "update"/"activate"/"deactivate".
+        record_id: The patient's own internal record id (distinct from patient_id). Only needed if you already have it from a prior read; "update" now falls back to the patient's existing record_id automatically when omitted.
     """
     auth = resolve_auth("managePatient")
-    
+
+    if action in ("create", "update"):
+        # Normalize liberally-accepted punctuation (parens/spaces/dots a user
+        # naturally says out loud) before the backing REST API's stricter
+        # regex ever sees it, then reject only genuinely invalid content.
+        field_errors: Dict[str, str] = {}
+        checks = (
+            ("phone", phone, check_phone),
+            ("home_phone", home_phone, check_phone),
+            ("work_phone", work_phone, check_phone),
+            ("emergency_contact_phone", emergency_contact_phone, check_phone),
+            ("email", email, check_email),
+            ("zip_code", zip_code, lambda v: check_zip_code(v, country)),
+        )
+        validated = {}
+        for name, value, checker in checks:
+            validated[name], err = checker(value)
+            if err:
+                field_errors[name] = err
+        phone = validated["phone"]
+        home_phone = validated["home_phone"]
+        work_phone = validated["work_phone"]
+        emergency_contact_phone = validated["emergency_contact_phone"]
+        email = validated["email"]
+        zip_code = validated["zip_code"]
+
+        if field_errors:
+            return {
+                "error": "One or more fields failed format validation",
+                "field_errors": field_errors,
+                "guidance": "Fix the listed field(s) and retry. Phone: digits, +, and - only (7-15 digits). Email: local@domain.tld. ZIP: 5 digits or ZIP+4.",
+            }
+
     async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             match action:
@@ -247,13 +293,15 @@ async def managePatient(
                         if district:
                             patient_data["address"]["district"] = district
                     
-                    # Contact information
+                    # Contact information (already format-validated above; dashes
+                    # are stripped for storage so a later phone search, which
+                    # strips dashes from its query, still matches by substring)
                     if phone:
-                        patient_data["mobile"] = phone
+                        patient_data["mobile"] = phone.replace("-", "")
                     if home_phone:
-                        patient_data["home_phone"] = home_phone
+                        patient_data["home_phone"] = home_phone.replace("-", "")
                     if work_phone:
-                        patient_data["work_phone"] = work_phone
+                        patient_data["work_phone"] = work_phone.replace("-", "")
                     if work_phone_extn:
                         patient_data["work_phone_extn"] = work_phone_extn
                     if email:
@@ -398,7 +446,8 @@ async def managePatient(
                         patient_data["last_name"] = last_name or current_data.get("last_name")
                         patient_data["gender"] = gender or current_data.get("gender")
                         patient_data["dob"] = date_of_birth.isoformat() if date_of_birth else current_data.get("dob")
-                        
+                        patient_data["record_id"] = record_id or current_data.get("record_id")
+
                         # Handle facilities requirement
                         if facility_ids:
                             patient_data["facilities"] = [{"facility_id": int(fid)} for fid in facility_ids.split(",")]
@@ -457,7 +506,9 @@ async def managePatient(
                     if record_id:
                         patient_data["record_id"] = record_id
                     
-                    # Contact information
+                    # Contact information (already format-validated above; dashes
+                    # are stripped for storage so a later phone search, which
+                    # strips dashes from its query, still matches by substring)
                     if phone:
                         patient_data["mobile"] = phone.replace("-", "")
                     if home_phone:
@@ -467,7 +518,7 @@ async def managePatient(
                     if work_phone_extn:
                         patient_data["work_phone_extn"] = work_phone_extn
                     if primary_phone:
-                        patient_data["primary_phone"] = primary_phone.replace("-", "")
+                        patient_data["primary_phone"] = primary_phone
                     if email:
                         patient_data["email"] = email
                     
@@ -885,7 +936,7 @@ async def reviewPatientHistory(
                     "facility_ids": "ALL"
                 })
                 patient_summary["upcoming_appointments"] = appointments_response.get("appointments", [])
-            
+
             # Add clinical insights
             insights = []
             

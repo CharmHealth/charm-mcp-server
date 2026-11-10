@@ -344,10 +344,16 @@ def test_supplement_status_is_decoded_from_its_numeric_flag() -> None:
     "raw,expected",
     [("1", "Active"), ("0", "Inactive"), ("true", "Active"), ("false", "Inactive"),
      ("Active", "Active"), ("Resolved", "Resolved"),
+     # Word-shaped statuses from appointments/diagnoses/recalls pass through
+     # unchanged — only a genuinely boolean-shaped value gets decoded.
+     ("Confirmed", "Confirmed"), ("Completed", "Completed"), ("In-progress", "In-progress"),
      # A number we cannot name is not a status — better absent than shown.
-     ("7", ""), ("", "")],
+     ("7", ""), ("", ""),
+     # Real bool/int (as opposed to the string "1"/"0") must decode the same
+     # way, not fall through to "" the way `value or ""` used to.
+     (True, "Active"), (False, "Inactive"), (1, "Active"), (0, "Inactive")],
 )
-def test_numeric_status_flags_are_decoded_or_dropped(raw: str, expected: str) -> None:
+def test_numeric_status_flags_are_decoded_or_dropped(raw: object, expected: str) -> None:
     assert app_views._decode_status(raw) == expected
 
 

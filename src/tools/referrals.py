@@ -332,7 +332,11 @@ async def manageReferrals(
 
     diagnoses / insurance accept either a native JSON array of objects or a
     JSON-encoded string of one, e.g. diagnoses=[{"name": "...", "code": "...", "id": "..."}]
-    or insurance=[{"name": "...", "id": "..."}].
+    or insurance=[{"name": "...", "id": "..."}]. Each diagnosis "code" should be a
+    valid ICD-10 code (one letter, two digits, optionally followed by "." and
+    1-4 alphanumeric characters, e.g. "L23.9", "S72.001A", or "L239") unless
+    the referral is using a different coding system — this tool
+    does not reformat or reject malformed codes here, so get it right before calling.
 
     chartnote_ids / lab_ids / document_ids / image_ids / growth_ids are comma-separated
     id strings (e.g. "123,456"), matching the real API's expected format.
@@ -340,6 +344,10 @@ async def manageReferrals(
     When required parameters are missing, ask the user to provide the specific values
     rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        referral_id: Identifies one specific referral record, for "get"/"update"/"respond" only — from this tool's own "list"/"get"/"create" output. Never reuse an encounter_id or another tool's record_id here.
+        encounter_id: The encounter this referral is tied to (related_encounter_id) — from manageEncounter()'s own output. Not interchangeable with referral_id.
     """
     auth = resolve_auth("manageReferrals")
 

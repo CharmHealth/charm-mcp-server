@@ -218,6 +218,7 @@ async def manageAppointments(
                     
                 case "reschedule":
                     # Auto-fill missing fields from the existing appointment
+                    autofill_error: Optional[str] = None
                     if appointment_id and (not patient_id or not facility_id or not provider_id or not visit_type_id):
                         try:
                             appt_response = await client.get(f"/appointment/{appointment_id}")
@@ -230,14 +231,38 @@ async def manageAppointments(
                                     visit_type_id = int(appt["visit_type_id"])
                                 if mode == "In Person" and appt.get("appointment_type"):
                                     mode = appt["appointment_type"]
+                            else:
+                                autofill_error = f"GET /appointment/{appointment_id} returned no appointment data"
                         except Exception as e:
                             logger.warning(f"Could not auto-fill reschedule fields from appointment {appointment_id}: {e}")
+                            autofill_error = str(e)
 
-                    required = [appointment_id, facility_id, patient_id, provider_id, appointment_date, appointment_time]
-                    if not all(required):
+                    # Name only the fields actually missing, not every possible one —
+                    # a generic "provide: a, b, c, d, e, f" error gave the caller
+                    # nothing to act on and made two live failures indistinguishable
+                    # from each other (CH-1954 tracker #7). Mirrors the fix already
+                    # applied to managePatientAllergies' equivalent check.
+                    missing = [
+                        name for name, value in {
+                            "appointment_id": appointment_id,
+                            "facility_id": facility_id,
+                            "patient_id": patient_id,
+                            "provider_id": provider_id,
+                            "appointment_date": appointment_date,
+                            "appointment_time": appointment_time,
+                        }.items() if not value
+                    ]
+                    if missing:
+                        guidance = f"Provide: {', '.join(missing)}."
+                        if autofill_error and any(f in missing for f in ("facility_id", "patient_id", "provider_id")):
+                            guidance += (
+                                f" Auto-fill from the existing appointment was attempted "
+                                f"(appointment_id={appointment_id}) but failed: {autofill_error}. "
+                                "Verify the appointment_id is correct, or supply these fields explicitly."
+                            )
                         return {
-                            "error": "Missing required fields for rescheduling",
-                            "guidance": "For rescheduling, provide: appointment_id, facility_id, patient_id, provider_id, appointment_date, appointment_time"
+                            "error": f"Missing required fields for rescheduling: {', '.join(missing)}",
+                            "guidance": guidance,
                         }
 
                     # Build reschedule data (IDs must be integers, matching CharmHealth API Long type)

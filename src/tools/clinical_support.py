@@ -6,6 +6,7 @@ from datetime import date
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
+from common.field_validation import check_email
 import asyncio
 import json
 import logging
@@ -71,6 +72,9 @@ async def managePatientNotes(
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        record_id: Identifies one specific note, for "update"/"delete" only — must come from this tool's own "list" output. Never reuse an id from another tool here.
     """
     auth = resolve_auth("managePatientNotes")
     
@@ -158,7 +162,8 @@ async def managePatientRecalls(
     action: Literal["add", "list", "update", "delete"],
     patient_id: str,
     record_id: Optional[str] = None,
-    
+    patient_recall_id: Optional[str] = None,  # alias: this tool's own "list" output names the id this way, not record_id (CH-1954 tracker #5)
+
     # Recall fields
     recall_type: Optional[str] = None,
     provider_id: Optional[str] = None,
@@ -211,8 +216,14 @@ async def managePatientRecalls(
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        record_id: Identifies one specific recall, for "update"/"delete" only — the value of that row's own "record_id" field from this tool's "list" output. Never reuse an encounter_id or another tool's record_id here.
+        patient_recall_id: Same purpose as record_id — this tool's own "list" output actually names each row's id "patient_recall_id", not "record_id"; pass whichever one you read off the row, they're equivalent.
+        encounter_id: Identifies the encounter a recall is tied to, if any — from manageEncounter()'s own output. Not interchangeable with record_id.
     """
     auth = resolve_auth("managePatientRecalls")
+    record_id = record_id or patient_recall_id
     
     async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
@@ -404,9 +415,21 @@ async def managePatientFiles(
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        email: Standard email address format (local@domain.tld), required for "send_phr_invite".
     """
     auth = resolve_auth("managePatientFiles")
-    
+
+    if action == "send_phr_invite" and email:
+        email, email_err = check_email(email)
+        if email_err:
+            return {
+                "error": "One or more fields failed format validation",
+                "field_errors": {"email": email_err},
+                "guidance": "Fix the listed field(s) and retry. Email: local@domain.tld.",
+            }
+
     async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             match action:
@@ -757,6 +780,12 @@ async def managePatientLabs(
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        group_id: Identifies one lab result group, for "get_details" only — from this tool's own "list" output.
+        lab_order_id: Identifies one lab order — either from this tool's own "list_orders" output, or to add tests to an existing open order on "order".
+        lab_record_id: Identifies one catalog test entry, for "order"/"test_questions" only — from this tool's own "search_tests" output. Never a lab_order_id or group_id.
+        encounter_id: Identifies the encounter a lab order is tied to — from manageEncounter()'s own output. Not interchangeable with the lab-specific ids above.
     """
     auth = resolve_auth("managePatientLabs")
     
