@@ -251,6 +251,9 @@ async def manageEncounter(
     
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        encounter_id: Identifies the encounter itself — the id returned by this tool's own "create"/"list" output. Never reuse a different kind of id (e.g. an appointment_id or a record_id from another tool) in its place.
     """
     auth = resolve_auth("manageEncounter")
 

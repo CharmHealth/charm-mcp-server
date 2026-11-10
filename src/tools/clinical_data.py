@@ -14,7 +14,7 @@ class VitalEntry(BaseModel):
 from api import CharmHealthAPIClient
 from common.utils import build_params_from_locals, strip_empty_values
 from common.filtering import filter_items
-from common.field_validation import check_icd10
+from common.field_validation import check_icd10, decode_boolean_status
 import logging
 import re
 from telemetry import telemetry, with_tool_metrics
@@ -84,6 +84,8 @@ async def managePatientVitals(
 
     Args:
         vital_value: Numeric value only, no units and no descriptive text (e.g. "120", not "120 mmHg" or "blood pressure high"). Put the unit in vital_unit instead.
+        encounter_id: Identifies the encounter the vitals are recorded against — from manageEncounter()'s own output. Not interchangeable with record_id.
+        record_id: Identifies one specific vital record, for "update" only — must come from this tool's own "list" output. Never reuse an encounter_id or another tool's record_id here.
     """
     auth = resolve_auth("managePatientVitals")
     
@@ -383,6 +385,8 @@ async def managePatientDrugs(
     patient_id: str,
     substance_type: Literal["medication", "supplement", "vitamin"] = "medication",
     record_id: Optional[str] = None,
+    patient_medication_id: Optional[str] = None,  # alias: this tool's own "list" output names a medication row's id this way, not record_id (CH-1954 tracker #5)
+    patient_supplement_id: Optional[str] = None,  # alias: same, for substance_type="supplement"/"vitamin" rows
 
     # Common drug fields
     drug_name: Optional[str] = None,
@@ -450,9 +454,16 @@ async def managePatientDrugs(
 
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        record_id: Identifies one specific drug/supplement record, for "update"/"discontinue" only — the value of that row's own "record_id" field from this tool's "list" output. Never reuse an encounter_id or another tool's record_id here.
+        patient_medication_id: Same purpose as record_id, for substance_type="medication" — this tool's own "list" output actually names a medication row's id "patient_medication_id", not "record_id"; pass whichever one you read off the row, they're equivalent.
+        patient_supplement_id: Same purpose as record_id, for substance_type="supplement"/"vitamin" rows.
+        encounter_id: Identifies the encounter a "prescribe" is written during — from manageEncounter()'s own output. Not interchangeable with record_id.
     """
     auth = resolve_auth("managePatientDrugs")
-    
+    record_id = record_id or patient_medication_id or patient_supplement_id
+
     async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             # Safety check: Review allergies before prescribing. Built here (once,
@@ -875,7 +886,8 @@ async def managePatientAllergies(
     action: Literal["add", "list", "update", "delete"],
     patient_id: str,
     record_id: Optional[str] = None,
-    
+    patient_allergy_id: Optional[str] = None,  # alias: this tool's own "list" output names the id this way, not record_id (CH-1954 tracker #5)
+
     # Allergy fields
     allergen: Optional[str] = None,
     allergy_type: Optional[str] = None,
@@ -904,7 +916,7 @@ async def managePatientAllergies(
     Actions:
     - "add": Document new allergy (requires allergen, allergy_type, severity, reactions, allergy_date)
     - "list": Show all patient allergies (optionally filter by severity/type)
-    - "update": Modify existing allergy (requires record_id, allergen, allergy_type, severity, allergy_status — use action='list' first to get current values, then pass all required fields with your changes)
+    - "update": Modify existing allergy (requires record_id + whichever fields are changing — any field you omit keeps its current value, fetched automatically)
     - "delete": Remove allergy record (requires record_id)
     
     Safety critical: Always check allergies before prescribing medications.
@@ -923,9 +935,12 @@ async def managePatientAllergies(
 
     Args:
         comments: NOT supported on "add" (confirmed against the API's own request schema, which has no comments key and rejects undeclared ones); silently dropped with a WARNING in guidance if provided. Use reactions or managePatientNotes() instead.
+        record_id: Identifies one specific allergy record, for "update"/"delete" only — the value of that row's own "record_id" field from this tool's "list" output. Never reuse an encounter_id or another tool's record_id here.
+        patient_allergy_id: Same purpose as record_id — this tool's own "list" output actually names each row's id "patient_allergy_id", not "record_id"; pass whichever one you read off the row, they're equivalent.
     """
     auth = resolve_auth("managePatientAllergies")
-    
+    record_id = record_id or patient_allergy_id
+
     async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             match action:
@@ -1012,29 +1027,58 @@ async def managePatientAllergies(
                     return strip_empty_values(response)
                     
                 case "update":
-                    missing = [k for k, v in {
-                        "record_id": record_id,
-                        "allergen": allergen,
-                        "allergy_type": allergy_type,
-                        "severity": severity,
-                        "allergy_status": allergy_status,
-                        "allergy_date": allergy_date,
-                    }.items() if v is None or v == ""] + (
-                        ["reactions"] if reactions is None else []
-                    )
-                    if missing:
+                    if not record_id:
                         return {
-                            "error": f"Missing required fields for update: {', '.join(missing)}",
-                            "guidance": "Use action='list' first to get current allergy values, then pass all required fields: record_id, allergen, allergy_type, severity, allergy_status, reactions (pass empty string if no reactions), allergy_date (observed_on from list)."
+                            "error": "record_id required for updates",
+                            "guidance": "Use action='list' to find the allergy record_id first."
                         }
 
+                    # GET current record and merge-fill whatever the caller didn't
+                    # explicitly supply — mirrors managePatientDrugs' update branch
+                    # (clinical_data.py ~line 726), which already solves this; the
+                    # old flat required-field check pushed the full burden of
+                    # resupplying every unchanged field onto the caller (CH-1954
+                    # tracker #6).
+                    current_resp = await client.get(f"/patients/{patient_id}/allergies")
+                    current_allergies = current_resp.get("allergies", [])
+                    current_allergy = next(
+                        (a for a in current_allergies if str(a.get("patient_allergy_id") or a.get("record_id")) == str(record_id)),
+                        None,
+                    )
+                    if not current_allergy:
+                        return {
+                            "error": f"Allergy record {record_id} not found",
+                            "guidance": "Use action='list' to verify the record_id exists for this patient."
+                        }
+
+                    # Raw list-output shape (confirmed via tests/test_app_views.py):
+                    # "type" not "allergy_type", "observed_on" not "date", and
+                    # "reactions" is a list of strings there but a single
+                    # string on the write side. "status"/"display_status" need
+                    # more than a key rename: they're a raw boolean-shaped flag
+                    # ("1"/"0", "true"/"false" — confirmed live, CH-1954 tracker
+                    # #9), not the write side's "Active"/"Inactive" enum word.
+                    # decode_boolean_status (common/field_validation.py) is the
+                    # same translation common/app_views.py's _decode_status uses
+                    # for display (allergy_list_view checks "display_status"
+                    # then "status", same precedence used here) — shared rather
+                    # than re-copied so the decode only needs fixing once.
+                    _current_reactions = current_allergy.get("reactions")
+                    if isinstance(_current_reactions, list):
+                        _current_reactions = ", ".join(str(r) for r in _current_reactions)
+
+                    _display_status = current_allergy.get("display_status")
+                    _current_status = decode_boolean_status(
+                        _display_status if _display_status not in (None, "") else current_allergy.get("status")
+                    )
+
                     update_data = {
-                        "allergen": allergen,
-                        "type": allergy_type,
-                        "severity": severity,
-                        "status": allergy_status,
-                        "reactions": reactions,
-                        "date": allergy_date.isoformat(),
+                        "allergen": allergen or current_allergy.get("allergen", ""),
+                        "type": allergy_type or current_allergy.get("type") or current_allergy.get("allergy_type", ""),
+                        "severity": severity or current_allergy.get("severity", ""),
+                        "status": allergy_status or _current_status,
+                        "reactions": reactions if reactions is not None else (_current_reactions or ""),
+                        "date": allergy_date.isoformat() if allergy_date else (current_allergy.get("observed_on") or current_allergy.get("date", "")),
                     }
 
                     response = await client.put(f"/patients/{patient_id}/allergies/{record_id}", data=update_data)
@@ -1067,8 +1111,9 @@ async def managePatientDiagnoses(
     action: Literal["add", "list", "update", "delete"],
     patient_id: str,
     record_id: Optional[str] = None,
-    
-    # Diagnosis fields  
+    patient_diagnosis_id: Optional[str] = None,  # alias: this tool's own "list" output names the id this way, not record_id (CH-1954 tracker #5)
+
+    # Diagnosis fields
     diagnosis_name: Optional[str] = None,
     diagnosis_code: Optional[str] = None,
     code_type: Optional[Literal["ICD10", "SNOMED"]] = None,
@@ -1115,9 +1160,13 @@ async def managePatientDiagnoses(
 
     Args:
         diagnosis_code: When code_type="ICD10": one letter, two digits, optionally followed by "." and 1-4 alphanumeric characters, uppercase (e.g. "L23.9", "S72.001A", or "L239"). SNOMED codes are numeric and not format-checked here.
+        record_id: Identifies one specific diagnosis record, for "update"/"delete" only — the value of that row's own "record_id" field from this tool's "list" output. Never reuse an encounter_id or another tool's record_id here (this is the exact mix-up that previously deleted the wrong record).
+        patient_diagnosis_id: Same purpose as record_id — this tool's own "list" output actually names each row's id "patient_diagnosis_id", not "record_id"; pass whichever one you read off the row, they're equivalent.
+        encounter_id: Identifies the encounter a diagnosis is tied to — from manageEncounter()'s own output. Not interchangeable with record_id.
     """
     auth = resolve_auth("managePatientDiagnoses")
-    
+    record_id = record_id or patient_diagnosis_id
+
     async with CharmHealthAPIClient(**auth.client_kwargs()) as client:
         try:
             match action:

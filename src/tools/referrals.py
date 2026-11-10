@@ -344,6 +344,10 @@ async def manageReferrals(
     When required parameters are missing, ask the user to provide the specific values
     rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        referral_id: Identifies one specific referral record, for "get"/"update"/"respond" only — from this tool's own "list"/"get"/"create" output. Never reuse an encounter_id or another tool's record_id here.
+        encounter_id: The encounter this referral is tied to (related_encounter_id) — from manageEncounter()'s own output. Not interchangeable with referral_id.
     """
     auth = resolve_auth("manageReferrals")
 

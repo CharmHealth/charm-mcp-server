@@ -330,7 +330,14 @@ class CharmHealthAPIClient:
                 body = None
             error_input = body.get("error_input") if isinstance(body, dict) else None
             if isinstance(error_input, str) and error_input:
-                result["field_errors"] = {error_input: body.get("message", "invalid value")}
+                # error_input can itself be a comma-separated list of field names
+                # (e.g. "facility_id,patient_id") when more than one field is
+                # offending — split so each gets its own field_errors key instead
+                # of one unmatchable compound key.
+                message = body.get("message", "invalid value")
+                fields = [f.strip() for f in error_input.split(",") if f.strip()]
+                if fields:
+                    result["field_errors"] = {field: message for field in fields}
             return result
 
         except httpx.RequestError as e:

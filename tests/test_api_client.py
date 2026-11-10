@@ -239,6 +239,29 @@ async def test_http_error_with_non_json_body_has_no_field_errors_key():
     assert "field_errors" not in result
 
 
+async def test_http_error_with_comma_separated_error_input_splits_into_fields():
+    """error_input can name more than one offending field as a comma-separated
+    string (as opposed to a list, which is handled separately above) — each
+    one should get its own field_errors key rather than one compound,
+    unmatchable key."""
+    client = _make_client(access_token="initial-token")
+    await client.ensure_client()
+
+    bad_request = httpx.Response(
+        400,
+        json={"code": 2, "error_input": "facility_id,patient_id", "message": "Invalid values"},
+        request=httpx.Request("POST", "https://example.test/x"),
+    )
+    client._client.post = AsyncMock(return_value=bad_request)
+
+    result = await client.post("/appointments", data={})
+
+    assert result["field_errors"] == {
+        "facility_id": "Invalid values",
+        "patient_id": "Invalid values",
+    }
+
+
 async def test_http_error_with_non_string_error_input_has_no_field_errors_key():
     """`error_input` can come back as a list (e.g. multiple offending fields).
     Keying a dict on it would raise `TypeError: unhashable type`, which would

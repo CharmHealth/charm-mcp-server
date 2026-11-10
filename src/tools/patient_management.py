@@ -170,6 +170,8 @@ async def managePatient(
         state: 2-letter USPS state code.
         country: ISO-3166 alpha-2 country code (not free text).
         date_of_birth: ISO 8601 date, YYYY-MM-DD. Resolve relative phrasing ("yesterday", "20 years ago") to an absolute date before calling.
+        patient_id: Identifies the patient (returned by findPatients() or a prior managePatient("create")). Required for "update"/"activate"/"deactivate".
+        record_id: The patient's own internal record id (distinct from patient_id). Only needed if you already have it from a prior read; "update" now falls back to the patient's existing record_id automatically when omitted.
     """
     auth = resolve_auth("managePatient")
 
@@ -178,24 +180,25 @@ async def managePatient(
         # naturally says out loud) before the backing REST API's stricter
         # regex ever sees it, then reject only genuinely invalid content.
         field_errors: Dict[str, str] = {}
-        phone, err = check_phone(phone)
-        if err:
-            field_errors["phone"] = err
-        home_phone, err = check_phone(home_phone)
-        if err:
-            field_errors["home_phone"] = err
-        work_phone, err = check_phone(work_phone)
-        if err:
-            field_errors["work_phone"] = err
-        emergency_contact_phone, err = check_phone(emergency_contact_phone)
-        if err:
-            field_errors["emergency_contact_phone"] = err
-        email, err = check_email(email)
-        if err:
-            field_errors["email"] = err
-        zip_code, err = check_zip_code(zip_code, country)
-        if err:
-            field_errors["zip_code"] = err
+        checks = (
+            ("phone", phone, check_phone),
+            ("home_phone", home_phone, check_phone),
+            ("work_phone", work_phone, check_phone),
+            ("emergency_contact_phone", emergency_contact_phone, check_phone),
+            ("email", email, check_email),
+            ("zip_code", zip_code, lambda v: check_zip_code(v, country)),
+        )
+        validated = {}
+        for name, value, checker in checks:
+            validated[name], err = checker(value)
+            if err:
+                field_errors[name] = err
+        phone = validated["phone"]
+        home_phone = validated["home_phone"]
+        work_phone = validated["work_phone"]
+        emergency_contact_phone = validated["emergency_contact_phone"]
+        email = validated["email"]
+        zip_code = validated["zip_code"]
 
         if field_errors:
             return {
@@ -443,7 +446,8 @@ async def managePatient(
                         patient_data["last_name"] = last_name or current_data.get("last_name")
                         patient_data["gender"] = gender or current_data.get("gender")
                         patient_data["dob"] = date_of_birth.isoformat() if date_of_birth else current_data.get("dob")
-                        
+                        patient_data["record_id"] = record_id or current_data.get("record_id")
+
                         # Handle facilities requirement
                         if facility_ids:
                             patient_data["facilities"] = [{"facility_id": int(fid)} for fid in facility_ids.split(",")]
@@ -932,7 +936,7 @@ async def reviewPatientHistory(
                     "facility_ids": "ALL"
                 })
                 patient_summary["upcoming_appointments"] = appointments_response.get("appointments", [])
-            
+
             # Add clinical insights
             insights = []
             
