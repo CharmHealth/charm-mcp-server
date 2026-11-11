@@ -158,6 +158,91 @@ def _describe_soap_note_source(encounter_details: dict) -> str:
     return "SOAP Note: no entries or free-text notes documented on this encounter."
 
 
+async def _fetch_encounter_detail(client, encounter_id):
+    """The raw encounter payload from GET /encounters/{id} — vitals,
+    diagnoses, medications, supplements, lab orders, injections, vaccines,
+    image orders, addendums, handouts, follow-up items and clinical notes
+    all come from this one call, confirmed live against the real backend's
+    APIRequestByGet.xml routing GET /encounters/(\\d+) to
+    ChartsAPIHandler.fetchChartNoteDetails.
+
+    That handler scopes each of these to the real encounter_id server-side
+    via an actual join (e.g. fetchMedicationListForPatients filters on
+    ConsultationMedicationMap.CONSULTATION_ID = encounterId, not a date
+    heuristic) — the same evidentiary guarantee CH-1352 enforced
+    client-side against the old /patients/{id}/medications-based
+    implementation, now done authoritatively server-side. This replaces
+    that implementation's five separate per-field over-fetch-then-filter
+    calls (vitals/diagnoses/medications/supplements/lab-orders).
+
+    Returns None only when the read failed or the response doesn't have the
+    expected shape — mirrors _fetch_soap_encounter's contract. Callers must
+    never read None as "nothing here"; see clinical_data_unavailable.
+    """
+    try:
+        response = await client.get(f"/encounters/{encounter_id}")
+    except Exception as e:
+        logger.warning(f"Could not fetch encounter detail: {e}")
+        return None
+    if isinstance(response, dict) and response.get("error"):
+        return None
+    encounter_detail = response.get("encounter") if isinstance(response, dict) else None
+    if not isinstance(encounter_detail, dict):
+        return None
+    return encounter_detail
+
+
+# The EHR's own encounter["notes"] field names from GET /encounters/{id}
+# (confirmed live) — a different, free-text intake/history note from the
+# SOAP note (soap_notes above, sourced from /soap/encounters/{id}). Kept as
+# the EHR's own names, same rationale as _SOAP_NOTE_FIELDS: don't rename a
+# response contract field for readability.
+_CLINICAL_NOTE_FIELDS = (
+    "chief_complaints",
+    "symptoms",
+    "history_of_present_illness",
+    "past_medical_history",
+    "family_and_social_history",
+    "family_history",
+    "social_history",
+    "physical_examination",
+    "review_of_systems",
+    "assessment_notes",
+    "treatment_notes",
+    "follow_up_appointment",
+    "instructions",
+    "diets",
+    "life_style",
+    "nurse_notes",
+    "self_notes",
+)
+
+
+def _extract_clinical_notes(encounter_detail: dict) -> dict:
+    """clinical_notes: the EHR's field names, raw strings (HTML included),
+    omitting fields that are null or empty. Mirrors _extract_soap_notes'
+    contract for the separate SOAP note object.
+    """
+    notes = encounter_detail.get("notes")
+    if not isinstance(notes, dict):
+        return {}
+    return {field: notes[field] for field in _CLINICAL_NOTE_FIELDS if notes.get(field)}
+
+
+def _describe_clinical_notes_source(encounter_details: dict) -> str:
+    """One line for the review guidance about this encounter's chief-complaint/
+    history note text — same invariant as _describe_soap_note_source, since
+    this now shares a fetch with vitals/diagnoses/medications/supplements/labs."""
+    if encounter_details.get("clinical_data_unavailable"):
+        return (
+            "Clinical Notes: could not be read just now. Don't assume nothing is "
+            "documented — retry the review before relying on this for a guardrail check."
+        )
+    if encounter_details.get("clinical_notes"):
+        return "Clinical Notes: present (see clinical_notes)."
+    return "Clinical Notes: none documented on this encounter."
+
+
 def _next_template_position(templates) -> int:
     """The first position after every existing template, deleted ones included.
 
@@ -394,96 +479,58 @@ async def manageEncounter(
                         encounter_details["soap_entries"] = _extract_soap_entries(soap_encounter)
                         encounter_details["soap_notes"] = _extract_soap_notes(soap_encounter)
 
-                    # Get vitals for this encounter
-                    try:
-                        vitals_response = await client.get(f"/patients/{patient_id}/vitals")
-                        all_vitals = vitals_response.get("vital_entries", [])
-                        encounter_details["vitals"] = [
-                            v for v in all_vitals 
-                            if v.get("encounter_id") == encounter_id
-                        ]
-                    except Exception as e:
-                        logger.error(f"Error fetching vitals: {e}")
-                        encounter_details["vitals"] = []
+                    # Vitals/diagnoses/medications/supplements/lab orders/
+                    # injections/vaccines/image orders/addendums/handouts/
+                    # follow-up/clinical notes — one direct, server-scoped
+                    # fetch instead of five separate per-field
+                    # over-fetch-then-filter calls. Same "failed read must
+                    # not look like nothing documented" invariant as the
+                    # SOAP read above, now covering this whole bundle since
+                    # they share one fetch — see _fetch_encounter_detail's
+                    # docstring for why this is safe (the backend scopes
+                    # each of these by a real encounter_id join, not a date
+                    # heuristic).
+                    encounter_detail = await _fetch_encounter_detail(client, encounter_id)
+                    if encounter_detail is None:
+                        encounter_details["clinical_data_unavailable"] = True
+                    else:
+                        encounter_details["vitals"] = (encounter_detail.get("vital_entry") or {}).get("vitals", [])
+                        encounter_details["diagnoses"] = encounter_detail.get("diagnoses", [])
+                        encounter_details["medications"] = encounter_detail.get("medications", [])
+                        encounter_details["supplements"] = encounter_detail.get("supplements", [])
+                        encounter_details["lab_orders"] = (encounter_detail.get("lab_order") or {}).get("order_tests", [])
+                        encounter_details["injections"] = encounter_detail.get("injections", [])
+                        encounter_details["vaccines"] = encounter_detail.get("vaccines", [])
+                        encounter_details["image_orders"] = encounter_detail.get("image_orders", [])
+                        encounter_details["addendums"] = encounter_detail.get("addendums", [])
+                        encounter_details["handouts"] = encounter_detail.get("handouts", [])
+                        encounter_details["follow_up"] = encounter_detail.get("follow_up", [])
+                        encounter_details["clinical_notes"] = _extract_clinical_notes(encounter_detail)
 
-                    # Get diagnoses for this encounter
-                    try:
-                        diagnoses_response = await client.get(f"/patients/{patient_id}/diagnoses")
-                        all_diagnoses = diagnoses_response.get("patient_diagnoses", [])
-                        encounter_details["diagnoses"] = [
-                            d for d in all_diagnoses 
-                            if str(d.get("encounter_id")) == str(encounter_id)
-                        ]
-                    except Exception as e:
-                        logger.error(f"Error fetching diagnoses: {e}")
-                        encounter_details["diagnoses"] = []
-
-                    # Get medications for this encounter
-                    try:
-                        medications_response = await client.get(f"/patients/{patient_id}/medications")
-                        all_medications = medications_response.get("medications", [])
-                        
-                        # Try to filter by encounter_id first
-                        encounter_meds = [
-                            m for m in all_medications
-                            if str(m.get("encounter_id")) == str(encounter_id) and m.get("encounter_id")
-                        ]
-
-                        encounter_details["medications"] = encounter_meds
-                    except Exception as e:
-                        logger.error(f"Error fetching medications: {e}")
-                        encounter_details["medications"] = []
-                    
-                    # Get supplements for this encounter
-                    try:
-                        supps_response = await client.get(f"/patients/{patient_id}/supplements")
-                        all_supps = supps_response.get("supplements", []) or []
-                        encounter_supps = [
-                            s for s in all_supps
-                            if str(s.get("encounter_id")) == str(encounter_id) and s.get("encounter_id")
-                        ]
-                        if not encounter_supps and encounter_details["encounter_info"]["encounter_date"]:
-                            encounter_date_str = encounter_details["encounter_info"]["encounter_date"].split()[0] if encounter_details["encounter_info"]["encounter_date"] else None
-                            if encounter_date_str:
-                                encounter_supps = [
-                                    s for s in all_supps
-                                    if s.get("start_date") == encounter_date_str
-                                ]
-                        encounter_details["supplements"] = encounter_supps
-                    except Exception as e:
-                        logger.error(f"Error fetching supplements: {e}")
-                        encounter_details["supplements"] = []
-
-                    # Get lab orders for this encounter
-                    try:
-                        labs_response = await client.get(f"/patients/{patient_id}/lab-orders")
-                        all_labs = labs_response.get("lab_orders", []) or []
-                        encounter_labs = [
-                            l for l in all_labs
-                            if str(l.get("encounter_id")) == str(encounter_id) and l.get("encounter_id")
-                        ]
-                        encounter_details["lab_orders"] = encounter_labs
-                    except Exception as e:
-                        logger.error(f"Error fetching lab orders: {e}")
-                        encounter_details["lab_orders"] = []
-
-                    # Get clinical notes
-                    clinical_notes = found_encounter.get("chief_complaints")
-                    if clinical_notes:
-                        encounter_details["clinical_notes"] = clinical_notes
-                    
                     # Create summary for review
                     summary_items = []
-                    if encounter_details["vitals"]:
+                    if encounter_details.get("vitals"):
                         summary_items.append(f"✓ {len(encounter_details['vitals'])} vital sign(s) recorded")
-                    if encounter_details["diagnoses"]:
+                    if encounter_details.get("diagnoses"):
                         summary_items.append(f"✓ {len(encounter_details['diagnoses'])} diagnosis/diagnoses documented")
-                    if encounter_details["medications"]:
+                    if encounter_details.get("medications"):
                         summary_items.append(f"✓ {len(encounter_details['medications'])} medication(s) prescribed/reviewed")
                     if encounter_details.get("supplements"):
                         summary_items.append(f"✓ {len(encounter_details['supplements'])} supplement(s) documented")
                     if encounter_details.get("lab_orders"):
                         summary_items.append(f"✓ {len(encounter_details['lab_orders'])} lab order(s)")
+                    if encounter_details.get("injections"):
+                        summary_items.append(f"✓ {len(encounter_details['injections'])} injection(s)")
+                    if encounter_details.get("vaccines"):
+                        summary_items.append(f"✓ {len(encounter_details['vaccines'])} vaccine(s)")
+                    if encounter_details.get("image_orders"):
+                        summary_items.append(f"✓ {len(encounter_details['image_orders'])} imaging order(s)")
+                    if encounter_details.get("addendums"):
+                        summary_items.append(f"✓ {len(encounter_details['addendums'])} addendum(s)")
+                    if encounter_details.get("handouts"):
+                        summary_items.append(f"✓ {len(encounter_details['handouts'])} handout(s) given")
+                    if encounter_details.get("follow_up"):
+                        summary_items.append(f"✓ {len(encounter_details['follow_up'])} follow-up item(s)")
                     if encounter_details.get("clinical_notes"):
                         summary_items.append("✓ Clinical notes documented")
                     soap_entry_count = len(encounter_details.get("soap_entries") or [])
@@ -516,6 +563,7 @@ async def manageEncounter(
 
                 {_describe_attached_templates(encounter_details)}
                 {_describe_soap_note_source(encounter_details)}
+                {_describe_clinical_notes_source(encounter_details)}
 
                 {'SIGNED: This encounter is already signed.' if is_signed else f'''
                 IMPORTANT: Review all details above carefully. Once signed, this encounter becomes legally binding and cannot be modified.
@@ -545,6 +593,11 @@ async def manageEncounter(
                     if soap_encounter is not None:
                         review_response["encounter_details"]["soap_notes"] = encounter_details["soap_notes"]
                         review_response["encounter_details"]["soap_entries"] = encounter_details["soap_entries"]
+                    # Same reinsertion, same reason — clinical_notes == {} on a
+                    # successful-but-empty read must stay present and
+                    # distinguishable from clinical_data_unavailable.
+                    if encounter_detail is not None:
+                        review_response["encounter_details"]["clinical_notes"] = encounter_details["clinical_notes"]
                     return review_response
             
                 case "sign":

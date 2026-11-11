@@ -56,7 +56,13 @@ def _base_responses(soap=None, encounter_date="2026-09-21", medications=None):
             "chart_type": "SOAP",
         }]},
         "/patients/p1": {"patient": {"first_name": "Amy", "last_name": "Test"}},
-        "/patients/p1/medications": {"medications": medications or []},
+        # Vitals/diagnoses/medications/supplements/lab-orders/clinical_notes
+        # all now come from this one call (confirmed against
+        # ChartsAPIHandler.fetchChartNoteDetails) instead of five separate
+        # /patients/{id}/<field> fetches — see the "medication date-fallback
+        # removal" tests below for why trusting this response wholesale is
+        # safe: the backend already scopes it by a real encounter_id join.
+        "/encounters/e1": {"encounter": {"medications": medications or []}},
     }
     if soap is not None:
         responses["/soap/encounters/e1"] = soap
@@ -257,39 +263,195 @@ async def test_soap_fetch_exception_also_sets_unavailable(monkeypatch) -> None:
     assert "error" not in result
 
 
-# ── medication date-fallback removal ────────────────────────────────────
+# ── clinical_notes source — same invariant, same pattern, mirrored exactly
+# for the GET /encounters/{id} fetch that now also supplies vitals/diagnoses/
+# medications/supplements/lab_orders alongside clinical_notes.
 
 
 @pytest.mark.asyncio
-async def test_medications_no_longer_fall_back_to_date_matching(monkeypatch) -> None:
-    """A medication without this encounter's encounter_id used to be pulled
-    in anyway if its date_of_entry/start_date matched the encounter's date.
-    Per the CH-1352 evidence model, a date match isn't a real encounter_id
-    and must not be reported as belonging to this encounter."""
-    same_day_but_different_encounter = {
-        "drug_name": "Sertraline", "encounter_id": "other-encounter",
-        "date_of_entry": "2026-09-21", "start_date": "2026-09-21",
+async def test_review_surfaces_clinical_notes(monkeypatch) -> None:
+    responses = _base_responses(soap={"soap_encounter": {"entries": [], "notes": {}}})
+    responses["/encounters/e1"] = {"encounter": {
+        "medications": [],
+        "notes": {
+            "chief_complaints": "<div>Persistent worry.</div>",
+            "symptoms": "<div>Restlessness.</div>",
+            "history_of_present_illness": None,
+            "past_medical_history": "",
+        },
+    }}
+    fake = _FakeAPIClient(get_responses=responses)
+
+    result = await _review(monkeypatch, fake)
+
+    details = result["encounter_details"]
+    assert details["clinical_notes"] == {
+        "chief_complaints": "<div>Persistent worry.</div>",
+        "symptoms": "<div>Restlessness.</div>",
     }
-    fake = _FakeAPIClient(get_responses=_base_responses(
-        soap={"soap_encounter": {"entries": [], "notes": {}}},
-        encounter_date="2026-09-21",
-        medications=[same_day_but_different_encounter],
-    ))
-
-    result = await _review(monkeypatch, fake)
-
-    assert result["encounter_details"]["medications"] == []
+    assert "clinical_data_unavailable" not in details
+    assert "Clinical Notes: present" in result["guidance"]
 
 
 @pytest.mark.asyncio
-async def test_medications_still_match_by_real_encounter_id(monkeypatch) -> None:
-    this_encounter_med = {"drug_name": "Sertraline", "encounter_id": "e1"}
-    other_encounter_med = {"drug_name": "Ibuprofen", "encounter_id": "e2"}
+async def test_empty_clinical_data_still_present_on_success(monkeypatch) -> None:
+    """Same invariant as test_empty_entries_and_notes_still_present_on_success:
+    a genuinely empty clinical_notes must survive strip_empty_values and stay
+    distinguishable from clinical_data_unavailable."""
+    responses = _base_responses(soap={"soap_encounter": {"entries": [], "notes": {}}})
+    responses["/encounters/e1"] = {"encounter": {
+        "vital_entry": {"vitals": []}, "diagnoses": [], "medications": [],
+        "supplements": [], "lab_order": {"order_tests": []}, "notes": {},
+    }}
+    fake = _FakeAPIClient(get_responses=responses)
+
+    result = await _review(monkeypatch, fake)
+
+    details = result["encounter_details"]
+    assert details["vitals"] == []
+    assert details["clinical_notes"] == {}
+    assert "clinical_data_unavailable" not in details
+
+
+@pytest.mark.asyncio
+async def test_failed_encounter_detail_read_sets_clinical_data_unavailable(monkeypatch) -> None:
+    """A failed read must never look like nothing documented — same invariant
+    as the SOAP note above, now covering this whole bundle since they share
+    one fetch."""
+    responses = _base_responses(soap={"soap_encounter": {"entries": [], "notes": {}}})
+    responses["/encounters/e1"] = {"error": "HTTP 503: Service Unavailable"}
+    fake = _FakeAPIClient(get_responses=responses)
+
+    result = await _review(monkeypatch, fake)
+
+    details = result["encounter_details"]
+    assert details["clinical_data_unavailable"] is True
+    for key in (
+        "vitals", "diagnoses", "medications", "supplements", "lab_orders",
+        "injections", "vaccines", "image_orders", "addendums", "handouts",
+        "follow_up", "clinical_notes",
+    ):
+        assert key not in details
+    assert "could not be read just now" in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_encounter_detail_fetch_exception_also_sets_unavailable(monkeypatch) -> None:
+    fake = _FakeAPIClient(
+        get_responses=_base_responses(soap={"soap_encounter": {"entries": [], "notes": {}}}),
+        errors={"/encounters/e1": RuntimeError("boom")},
+    )
+
+    result = await _review(monkeypatch, fake)
+
+    assert result["encounter_details"]["clinical_data_unavailable"] is True
+    assert "error" not in result
+
+
+# ── medication sourcing: client-side filtering retired, server trusted ──
+#
+# Superseded by the single-call rewrite: medications/diagnoses/vitals/
+# supplements/lab_orders now all come from GET /encounters/{id}
+# (ChartsAPIHandler.fetchChartNoteDetails) instead of /patients/{id}/medications
+# filtered client-side by encounter_id. The date-matching fallback these two
+# tests originally guarded against doesn't exist to regress anymore — there
+# is no client-side filtering logic left at all. The CH-1352 evidence model
+# (a medication must carry a real encounter_id to count as belonging to this
+# encounter, never a date match) is instead enforced authoritatively
+# server-side: fetchMedicationListForPatients joins on
+# ConsultationMedicationMap.CONSULTATION_ID = encounterId, a real foreign-key
+# relationship, not a heuristic (confirmed in ChartsAPIHandler.java). So the
+# only thing left to test here is that the response's medications are passed
+# through as-is, trusting that join.
+
+
+@pytest.mark.asyncio
+async def test_medications_come_from_the_single_encounter_fetch(monkeypatch) -> None:
+    med = {"drug_name": "Sertraline", "encounter_id": "e1"}
     fake = _FakeAPIClient(get_responses=_base_responses(
         soap={"soap_encounter": {"entries": [], "notes": {}}},
-        medications=[this_encounter_med, other_encounter_med],
+        medications=[med],
     ))
 
     result = await _review(monkeypatch, fake)
 
-    assert result["encounter_details"]["medications"] == [this_encounter_med]
+    assert result["encounter_details"]["medications"] == [med]
+    assert "/patients/p1/medications" not in fake.get_calls
+
+
+# ── injections/vaccines/image_orders/addendums/handouts/follow_up — the
+# same single GET /encounters/{id} fetch also carries these, confirmed live
+# against the real backend. Passed through as-is, same trust as medications
+# above.
+
+
+@pytest.mark.asyncio
+async def test_review_surfaces_the_remaining_encounter_detail_categories(monkeypatch) -> None:
+    injection = {"drug_name": "Vitamin B12"}
+    vaccine = {"vaccine_name": "Influenza"}
+    image_order = {"test_name": "Chest X-ray"}
+    addendum = {"addendum_text": "Clarified dosage."}
+    handout = {"handout_name": "GAD patient education"}
+    follow_up_item = {"follow_up_notes": "Return in 4 weeks"}
+    responses = _base_responses(soap={"soap_encounter": {"entries": [], "notes": {}}})
+    responses["/encounters/e1"] = {"encounter": {
+        "medications": [],
+        "injections": [injection],
+        "vaccines": [vaccine],
+        "image_orders": [image_order],
+        "addendums": [addendum],
+        "handouts": [handout],
+        "follow_up": [follow_up_item],
+        "notes": {},
+    }}
+    fake = _FakeAPIClient(get_responses=responses)
+
+    result = await _review(monkeypatch, fake)
+
+    details = result["encounter_details"]
+    assert details["injections"] == [injection]
+    assert details["vaccines"] == [vaccine]
+    assert details["image_orders"] == [image_order]
+    assert details["addendums"] == [addendum]
+    assert details["handouts"] == [handout]
+    assert details["follow_up"] == [follow_up_item]
+    assert "1 injection(s)" in "\n".join(result["summary"])
+    assert "1 vaccine(s)" in "\n".join(result["summary"])
+    assert "1 imaging order(s)" in "\n".join(result["summary"])
+    assert "1 addendum(s)" in "\n".join(result["summary"])
+    assert "1 handout(s) given" in "\n".join(result["summary"])
+    assert "1 follow-up item(s)" in "\n".join(result["summary"])
+
+
+@pytest.mark.asyncio
+async def test_review_surfaces_the_expanded_clinical_note_fields(monkeypatch) -> None:
+    responses = _base_responses(soap={"soap_encounter": {"entries": [], "notes": {}}})
+    responses["/encounters/e1"] = {"encounter": {
+        "medications": [],
+        "notes": {
+            "chief_complaints": "<div>Persistent worry.</div>",
+            "assessment_notes": "Meets criteria for GAD.",
+            "treatment_notes": "Psychoeducation provided.",
+            "review_of_systems": "Negative except as noted.",
+            "follow_up_appointment": "4 weeks",
+            "instructions": "Continue worry-time technique.",
+            "diets": "",
+            "life_style": None,
+            "nurse_notes": "Vitals stable.",
+            "self_notes": "Private provider note.",
+        },
+    }}
+    fake = _FakeAPIClient(get_responses=responses)
+
+    result = await _review(monkeypatch, fake)
+
+    assert result["encounter_details"]["clinical_notes"] == {
+        "chief_complaints": "<div>Persistent worry.</div>",
+        "assessment_notes": "Meets criteria for GAD.",
+        "treatment_notes": "Psychoeducation provided.",
+        "review_of_systems": "Negative except as noted.",
+        "follow_up_appointment": "4 weeks",
+        "instructions": "Continue worry-time technique.",
+        "nurse_notes": "Vitals stable.",
+        "self_notes": "Private provider note.",
+    }

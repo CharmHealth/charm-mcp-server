@@ -176,11 +176,11 @@ async def test_manage_encounter_review_adds_provider_name(monkeypatch) -> None:
              "is_approved": "true"},
         ]},
         "/patients/p1": {"patient": {"patient_id": "p1"}},
-        "/patients/p1/vitals": {"vital_entries": []},
-        "/patients/p1/diagnoses": {"diagnoses": []},
-        "/patients/p1/medications": {"medications": []},
-        "/patients/p1/supplements": {"supplements": []},
-        "/patients/p1/lab-orders": {"lab_orders": []},
+        "/soap/encounters/e1": {"soap_encounter": {"templates": [], "entries": [], "notes": {}}},
+        "/encounters/e1": {"encounter": {
+            "vital_entry": {"vitals": []}, "diagnoses": [], "medications": [],
+            "supplements": [], "lab_order": {"order_tests": []}, "notes": {},
+        }},
     })
     _patch_client(monkeypatch, encounter_management, fake)
 
