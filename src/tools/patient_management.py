@@ -398,7 +398,11 @@ async def managePatient(
                         patient_data["last_name"] = last_name or current_data.get("last_name")
                         patient_data["gender"] = gender or current_data.get("gender")
                         patient_data["dob"] = date_of_birth.isoformat() if date_of_birth else current_data.get("dob")
-                        
+                        # The EHR refuses any update without a record id, even a partial one
+                        # ("Patient Record Id is mandatory", PatientsBeanImpl). A record_id
+                        # argument below still replaces it.
+                        patient_data["record_id"] = current_data.get("record_id")
+
                         # Handle facilities requirement
                         if facility_ids:
                             patient_data["facilities"] = [{"facility_id": int(fid)} for fid in facility_ids.split(",")]
