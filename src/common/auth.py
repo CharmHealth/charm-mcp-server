@@ -12,6 +12,13 @@ Callers reach this server three ways, and they do not send the same thing:
 - **A local stdio client** (Claude Desktop, Cursor) sends nothing at all and is
   expected to authenticate as the server, from the ``CHARMHEALTH_*`` variables
   in ``.env``.
+- **cortex, for a user signed in through CHIS** (CH-1574, the AWS-hosted EHR),
+  forwards the user's CHIS session in ``x-chis-acting-session``, the practice's
+  app group in ``x-account-id``, and the session cookie's name in
+  ``x-chis-session-cookie-name``. The EHR is called with that cookie, so it
+  applies the user's own permissions. This is the beta's interim: a session
+  lasts 24 hours and can't serve unattended runs, which need a per-user grant
+  from CHIS.
 - **A CHIS caller** sends ``Authorization: Bearer <token>`` and ``x-account-id``
   (the practice's CHIS AppGroup id). Cortex's background runs send a token CHIS
   minted for the practice's service account. The token goes to the EHR unchanged
@@ -38,7 +45,8 @@ import base64
 import json
 import logging
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import Any, Dict
 
 from fastmcp.exceptions import ToolError
@@ -49,6 +57,13 @@ logger = logging.getLogger(__name__)
 _TRUTHY = {"1", "true", "yes", "on"}
 
 _API_PATH = "/api/ehr/v1"
+
+# A CHIS session id is 256 random bits in hex. Checking the shape keeps a value
+# with a ';' or a newline out of the Cookie header we build from it.
+_CHIS_SESSION = re.compile(r"[0-9a-f]{64}")
+# An RFC 6265 cookie name (an RFC 7230 token).
+_COOKIE_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+")
+_ACCOUNT_ID = re.compile(r"[0-9]+")
 
 
 def server_credentials_allowed() -> bool:
@@ -67,13 +82,14 @@ class AuthContext:
     token_url: str | None = None
     client_secret: str | None = None
     accounts_server: str | None = None
-    # The practice's CHIS AppGroup id, set only for a CHIS caller (a Bearer token
-    # with ``x-account-id``). The client then sends the token as a CHIS Bearer.
+    # The user's CHIS session. repr=False: it is a live credential.
+    chis_session: str | None = field(default=None, repr=False)
     account_id: str | None = None
+    session_cookie_name: str | None = None
 
     @property
     def is_user_scoped(self) -> bool:
-        return bool(self.access_token or self.refresh_token)
+        return bool(self.access_token or self.refresh_token or self.chis_session)
 
     def client_kwargs(self) -> Dict[str, Any]:
         """Keyword arguments for ``CharmHealthAPIClient``.
@@ -88,7 +104,13 @@ class AuthContext:
             "token_url": self.token_url,
             "client_secret": self.client_secret,
         }
-        if self.account_id:
+        if self.chis_session:
+            kwargs.update(
+                chis_session=self.chis_session,
+                account_id=self.account_id,
+                session_cookie_name=self.session_cookie_name,
+            )
+        elif self.account_id:
             # Only a CHIS caller adds it, so every other caller builds exactly the
             # client it built before.
             kwargs["account_id"] = self.account_id
@@ -152,6 +174,10 @@ def resolve_auth(tool_name: str) -> AuthContext:
 
     bearer = _bearer_token(headers)
     account_id = (headers.get("x-account-id") or "").strip()
+    if bearer and headers.get("x-chis-acting-session"):
+        raise ToolError(
+            "Send one credential: x-chis-acting-session or an access token, not both."
+        )
     if bearer and account_id:
         # A CHIS caller: the token goes to the EHR as it came. None of the Zoho
         # fields apply, so none are read.
@@ -169,6 +195,31 @@ def resolve_auth(tool_name: str) -> AuthContext:
     token_url = headers.get("x-charmhealth-token-url")
     client_secret = headers.get("x-charmhealth-client-secret")
     accounts_server = headers.get("x-charmhealth-accounts-server")
+
+    chis_session = headers.get("x-chis-acting-session")
+    if chis_session:
+        if access_token or refresh_token:
+            raise ToolError(
+                "Send one credential: x-chis-acting-session or an access token, not both."
+            )
+        account_id = headers.get("x-account-id")
+        cookie_name = headers.get("x-chis-session-cookie-name")
+        # Fail closed on anything malformed. Never echo the session in the error.
+        if not _CHIS_SESSION.fullmatch(chis_session):
+            raise ToolError("x-chis-acting-session is not a CHIS session id.")
+        if not cookie_name or not _COOKIE_NAME.fullmatch(cookie_name):
+            raise ToolError("x-chis-session-cookie-name is missing or not a cookie name.")
+        if not account_id or not _ACCOUNT_ID.fullmatch(account_id):
+            raise ToolError("x-account-id is missing or not an app group id.")
+        if base_url and not base_url.endswith(_API_PATH):
+            base_url = base_url.rstrip("/") + _API_PATH
+        logger.info("%s using the caller's CHIS session", tool_name)
+        return AuthContext(
+            base_url=base_url,
+            chis_session=chis_session,
+            account_id=account_id,
+            session_cookie_name=cookie_name,
+        )
 
     # The mobile flow sends an accounts server rather than a token URL.
     if accounts_server:

@@ -42,14 +42,16 @@ class CharmHealthAPIClient:
                  client_secret: Optional[str] = None,
                  redirect_uri: Optional[str] = None,
                  token_url: Optional[str] = None,
+                 chis_session: Optional[str] = None,
                  account_id: Optional[str] = None,
+                 session_cookie_name: Optional[str] = None,
                  max_retries: int = 3,
                  timeout: int = 30):
         self.base_url = base_url or os.getenv("CHARMHEALTH_BASE_URL")
         # A CHIS caller (common/auth.py): the access token is a CHIS Bearer for the
         # practice whose AppGroup id this is. It is sent as it came, never refreshed.
         self.account_id = account_id
-        self.chis = bool(account_id)
+        self.chis = bool(account_id) and not chis_session
         self.api_key = api_key or os.getenv("CHARMHEALTH_API_KEY")
         self.client_id = client_id or os.getenv("CHARMHEALTH_CLIENT_ID")
         self.client_secret = client_secret or os.getenv("CHARMHEALTH_CLIENT_SECRET")
@@ -62,7 +64,16 @@ class CharmHealthAPIClient:
         # would pair a user's access token with the *server's* refresh token, so
         # the session would silently become the server's account on the first
         # refresh: a cross-tenant escalation that raises nothing and logs nothing.
-        self.user_scoped = bool(access_token)
+        # A CHIS session (CH-1574) is a user credential of its own: the EHR
+        # reads it from the Cookie header and applies that user's permissions.
+        # It has nothing to refresh with, and the server's refresh token must
+        # never stand in for it.
+        self._chis_session = chis_session
+        self._account_id = account_id
+        self._session_cookie_name = session_cookie_name
+        if chis_session and not (account_id and session_cookie_name):
+            raise ValueError("A CHIS session needs an account_id and a session_cookie_name")
+        self.user_scoped = bool(access_token or chis_session)
         if self.user_scoped:
             self.refresh_token = refresh_token
         else:
@@ -70,7 +81,7 @@ class CharmHealthAPIClient:
 
         # One of the two is required: a per-user access token, or a refresh token
         # to mint one with.
-        if not self.refresh_token and not access_token:
+        if not self.refresh_token and not access_token and not chis_session:
             raise ValueError(
                 "Missing credentials: supply an access_token (per-user) or a "
                 "refresh_token (server-scoped)"
@@ -116,13 +127,15 @@ class CharmHealthAPIClient:
                 "Content-Type": "application/json",
                 "Cache-Control": "no-cache"
             }
-            if self.chis:
+            if self._chis_session:
+                del headers["api_key"]
+            elif self.chis:
                 # api_key is the Zoho API's header; a CHIS caller has none to send.
                 headers.pop("api_key")
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
                 timeout=self.timeout,
-                headers=headers
+                headers=headers,
             )
         
         
@@ -133,6 +146,15 @@ class CharmHealthAPIClient:
     
     async def _get_auth_headers(self) -> Dict[str, str]:
         logger.info("Getting auth headers")
+        if self._chis_session:
+            # No Authorization and no api_key: the EHR checks a Bearer first, and
+            # a session caller is proven to work with the cookie alone.
+            return {
+                "Cookie": f"{self._session_cookie_name}={self._chis_session}",
+                "X-ACCOUNT-ID": self._account_id,
+                "Content-Type": "application/json",
+                "Cache-Control": "no-cache",
+            }
         token = await self._get_valid_token()
         if self.chis:
             return {
@@ -332,6 +354,11 @@ class CharmHealthAPIClient:
             duration = time.time() - start_time
             record_api_call(self.client_id, False, clean_endpoint, method, duration)
             
+            if e.response.status_code == 401 and self._chis_session:
+                # The session expired or was signed out. There is nothing to
+                # refresh; the user has to sign in again.
+                logger.error(f"HTTP 401 on {method} {clean_endpoint}: the CHIS session was rejected")
+                return {"error": "HTTP 401: the CHIS session was rejected; the user must sign in again"}
             if self.chis:
                 # No refresh to retry with. Name the token and the EHR's own error code
                 # (RBAC_ERROR for a role the service account lacks) so a failed run's
@@ -429,8 +456,8 @@ class CharmHealthAPIClient:
         user, which is narrower than per practice: callers in one practice do
         not share entries, and no caller can reach another practice's."""
         import hashlib
-        secret = self.refresh_token or self._auth_token or ""
-        material = f"{self.base_url}\0{self.client_id}\0{secret}"
+        secret = self.refresh_token or self._auth_token or self._chis_session or ""
+        material = f"{self.base_url}\0{self.client_id}\0{secret}\0{self._account_id or ''}"
         return hashlib.sha256(material.encode()).hexdigest()[:32]
 
     def _token_cache_key(self) -> str:
