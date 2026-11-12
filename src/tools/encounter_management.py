@@ -336,6 +336,9 @@ async def manageEncounter(
     
     When required parameters are missing, ask the user to provide the specific values rather than proceeding with defaults or auto-generated values.
     </instructions>
+
+    Args:
+        encounter_id: Identifies the encounter itself — the id returned by this tool's own "create"/"list" output. Never reuse a different kind of id (e.g. an appointment_id or a record_id from another tool) in its place.
     """
     auth = resolve_auth("manageEncounter")
 
@@ -507,18 +510,39 @@ async def manageEncounter(
                         encounter_details["follow_up"] = encounter_detail.get("follow_up", [])
                         encounter_details["clinical_notes"] = _extract_clinical_notes(encounter_detail)
 
-                    # Create summary for review
+                    # Create summary for review. Administrative categories
+                    # (injections/vaccines/image_orders/addendums/handouts/
+                    # follow_up) go in summary_items for display only — they
+                    # don't belong in clinical_summary_items, which drives
+                    # ready_to_sign and the sign-vs-warn guidance below. A
+                    # handout or follow-up note isn't clinical documentation;
+                    # whether product wants that to change is tracked in
+                    # CH-2105, not decided here.
                     summary_items = []
+                    clinical_summary_items = []
                     if encounter_details.get("vitals"):
-                        summary_items.append(f"✓ {len(encounter_details['vitals'])} vital sign(s) recorded")
+                        line = f"✓ {len(encounter_details['vitals'])} vital sign(s) recorded"
+                        summary_items.append(line)
+                        clinical_summary_items.append(line)
                     if encounter_details.get("diagnoses"):
-                        summary_items.append(f"✓ {len(encounter_details['diagnoses'])} diagnosis/diagnoses documented")
+                        line = f"✓ {len(encounter_details['diagnoses'])} diagnosis/diagnoses documented"
+                        summary_items.append(line)
+                        clinical_summary_items.append(line)
                     if encounter_details.get("medications"):
-                        summary_items.append(f"✓ {len(encounter_details['medications'])} medication(s) prescribed/reviewed")
+                        line = f"✓ {len(encounter_details['medications'])} medication(s) prescribed/reviewed"
+                        summary_items.append(line)
+                        clinical_summary_items.append(line)
                     if encounter_details.get("supplements"):
-                        summary_items.append(f"✓ {len(encounter_details['supplements'])} supplement(s) documented")
+                        line = f"✓ {len(encounter_details['supplements'])} supplement(s) documented"
+                        summary_items.append(line)
+                        clinical_summary_items.append(line)
                     if encounter_details.get("lab_orders"):
-                        summary_items.append(f"✓ {len(encounter_details['lab_orders'])} lab order(s)")
+                        # lab_orders comes from lab_order.order_tests (one
+                        # order can carry several tests), so this counts
+                        # tests, not distinct orders.
+                        line = f"✓ {len(encounter_details['lab_orders'])} lab test(s) ordered"
+                        summary_items.append(line)
+                        clinical_summary_items.append(line)
                     if encounter_details.get("injections"):
                         summary_items.append(f"✓ {len(encounter_details['injections'])} injection(s)")
                     if encounter_details.get("vaccines"):
@@ -532,23 +556,52 @@ async def manageEncounter(
                     if encounter_details.get("follow_up"):
                         summary_items.append(f"✓ {len(encounter_details['follow_up'])} follow-up item(s)")
                     if encounter_details.get("clinical_notes"):
-                        summary_items.append("✓ Clinical notes documented")
+                        line = "✓ Clinical notes documented"
+                        summary_items.append(line)
+                        clinical_summary_items.append(line)
                     soap_entry_count = len(encounter_details.get("soap_entries") or [])
                     soap_note_count = len(encounter_details.get("soap_notes") or {})
                     if soap_entry_count or soap_note_count:
-                        summary_items.append(
-                            f"✓ SOAP note: {soap_entry_count} entry/entries, {soap_note_count} note field(s) documented"
-                        )
+                        line = f"✓ SOAP note: {soap_entry_count} entry/entries, {soap_note_count} note field(s) documented"
+                        summary_items.append(line)
+                        clinical_summary_items.append(line)
 
                     # Check if already signed
                     is_signed = encounter_details["encounter_info"]["status"] == "signed"
-                    
+                    clinical_data_unavailable = encounter_details.get("clinical_data_unavailable", False)
+
+                    if summary_items:
+                        documentation_summary = chr(10).join(summary_items)
+                    elif clinical_data_unavailable:
+                        documentation_summary = "WARNING: Vitals, diagnoses, medications, supplements, and lab orders could not be read just now — don't assume nothing is documented."
+                    else:
+                        documentation_summary = "WARNING: No clinical documentation found"
+
+                    if is_signed:
+                        sign_guidance = "SIGNED: This encounter is already signed."
+                    elif clinical_summary_items:
+                        sign_guidance = f"""
+                IMPORTANT: Review all details above carefully. Once signed, this encounter becomes legally binding and cannot be modified.
+
+                To sign after review: manageEncounter(patient_id='{patient_id}', encounter_id='{encounter_id}', action='sign')"""
+                    elif clinical_data_unavailable:
+                        sign_guidance = """
+                WARNING: Clinical documentation could not be verified just now. Don't assume nothing is documented, and don't add new vitals/diagnoses/medications based on this — retry the review before signing."""
+                    else:
+                        sign_guidance = f"""
+                WARNING: This encounter has minimal documentation. Consider adding vitals, diagnoses, or medications before signing.
+
+                To add documentation:
+                - managePatientVitals(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')
+                - managePatientDiagnoses(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')
+                - managePatientDrugs(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')"""
+
                     review_response = strip_empty_values({
                         "action": "review",
                         "encounter_details": encounter_details,
                         "summary": summary_items,
                         "is_signed": is_signed,
-                        "ready_to_sign": len(summary_items) > 0 and not is_signed,
+                        "ready_to_sign": len(clinical_summary_items) > 0 and not is_signed,
                         "guidance": f"""
                 ENCOUNTER REVIEW - Please confirm all information is accurate:
 
@@ -559,22 +612,13 @@ async def manageEncounter(
                 Status: {encounter_details['encounter_info']['status']}
 
                 Documentation Summary:
-                {chr(10).join(summary_items) if summary_items else 'WARNING: No clinical documentation found'}
+                {documentation_summary}
 
                 {_describe_attached_templates(encounter_details)}
                 {_describe_soap_note_source(encounter_details)}
                 {_describe_clinical_notes_source(encounter_details)}
 
-                {'SIGNED: This encounter is already signed.' if is_signed else f'''
-                IMPORTANT: Review all details above carefully. Once signed, this encounter becomes legally binding and cannot be modified.
-
-                To sign after review: manageEncounter(patient_id='{patient_id}', encounter_id='{encounter_id}', action='sign')''' if summary_items else '''
-                WARNING: This encounter has minimal documentation. Consider adding vitals, diagnoses, or medications before signing.
-
-                To add documentation:
-                - managePatientVitals(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')
-                - managePatientDiagnoses(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')
-                - managePatientDrugs(patient_id='{patient_id}', encounter_id='{encounter_id}', action='add')'''}
+                {sign_guidance}
                 """
                     })
                     # strip_empty_values unconditionally drops empty dicts (not

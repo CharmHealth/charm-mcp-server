@@ -455,3 +455,85 @@ async def test_review_surfaces_the_expanded_clinical_note_fields(monkeypatch) ->
         "nurse_notes": "Vitals stable.",
         "self_notes": "Private provider note.",
     }
+
+
+# ── ready_to_sign must stay a clinical-documentation guardrail — the new
+# administrative categories (injections/vaccines/image_orders/addendums/
+# handouts/follow_up) are display-only and must never flip it to True on
+# their own (caught in PR review).
+
+
+@pytest.mark.asyncio
+async def test_administrative_only_categories_do_not_make_it_ready_to_sign(monkeypatch) -> None:
+    responses = _base_responses(soap={"soap_encounter": {"entries": [], "notes": {}}})
+    responses["/encounters/e1"] = {"encounter": {
+        "medications": [],
+        "handouts": [{"handout_name": "GAD patient education"}],
+        "follow_up": [{"follow_up_notes": "Return in 4 weeks"}],
+        "notes": {},
+    }}
+    fake = _FakeAPIClient(get_responses=responses)
+
+    result = await _review(monkeypatch, fake)
+
+    assert result["ready_to_sign"] is False
+    assert "1 handout(s) given" in "\n".join(result["summary"])
+    assert "minimal documentation" in result["guidance"]
+    assert "action='sign'" not in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_clinical_categories_still_make_it_ready_to_sign(monkeypatch) -> None:
+    med = {"drug_name": "Sertraline", "encounter_id": "e1"}
+    fake = _FakeAPIClient(get_responses=_base_responses(
+        soap={"soap_encounter": {"entries": [], "notes": {}}},
+        medications=[med],
+    ))
+
+    result = await _review(monkeypatch, fake)
+
+    assert result["ready_to_sign"] is True
+    assert "action='sign'" in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_failed_encounter_detail_read_does_not_prompt_adding_duplicate_documentation(monkeypatch) -> None:
+    """A failed read must not look like an empty encounter: it must neither
+    flip ready_to_sign True nor tell the caller to add vitals/diagnoses/
+    medications that may already exist but just couldn't be read."""
+    responses = _base_responses(soap={"soap_encounter": {"entries": [], "notes": {}}})
+    responses["/encounters/e1"] = {"error": "HTTP 503: Service Unavailable"}
+    fake = _FakeAPIClient(get_responses=responses)
+
+    result = await _review(monkeypatch, fake)
+
+    assert result["ready_to_sign"] is False
+    assert "could not be" in result["guidance"]
+    assert "No clinical documentation found" not in result["guidance"]
+    assert "managePatientVitals" not in result["guidance"]
+    assert "managePatientDiagnoses" not in result["guidance"]
+    assert "managePatientDrugs" not in result["guidance"]
+
+
+# ── lab_orders counts tests, not orders (one lab_order can carry several
+# order_tests) — the summary line must say so, not "lab order(s)".
+
+
+@pytest.mark.asyncio
+async def test_lab_summary_line_counts_tests_not_orders(monkeypatch) -> None:
+    responses = _base_responses(soap={"soap_encounter": {"entries": [], "notes": {}}})
+    responses["/encounters/e1"] = {"encounter": {
+        "medications": [],
+        "lab_order": {"order_tests": [
+            {"lab_name": "CBC"}, {"lab_name": "TSH"}, {"lab_name": "A1C"},
+        ]},
+        "notes": {},
+    }}
+    fake = _FakeAPIClient(get_responses=responses)
+
+    result = await _review(monkeypatch, fake)
+
+    assert result["encounter_details"]["lab_orders"] == [
+        {"lab_name": "CBC"}, {"lab_name": "TSH"}, {"lab_name": "A1C"},
+    ]
+    assert "3 lab test(s) ordered" in "\n".join(result["summary"])
