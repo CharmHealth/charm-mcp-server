@@ -495,16 +495,18 @@ async def manageEncounter(
                     # charts too, though the API docs list it for Quick, Brief and
                     # Comprehensive only. A successful read is used even when it
                     # is empty, so a cleared chief complaint does not bring the
-                    # stale copy back. Only a failed read falls back to the list.
+                    # stale copy back: the EHR sends "" for a cleared one. It
+                    # leaves the key out only when the encounter has no physician
+                    # notes row, and then the list's copy is kept.
                     clinical_notes = found_encounter.get("chief_complaints")
                     try:
                         single_response = await client.get(f"/encounters/{encounter_id}")
                         current_notes = (single_response.get("encounter") or {}).get("notes")
-                        if isinstance(current_notes, dict):
-                            clinical_notes = current_notes.get("chief_complaints")
+                        if isinstance(current_notes, dict) and "chief_complaints" in current_notes:
+                            clinical_notes = current_notes["chief_complaints"]
                         else:
                             logger.warning(
-                                f"Encounter {encounter_id} read returned no notes; "
+                                f"Encounter {encounter_id} read returned no chief complaint; "
                                 "using the list's chief_complaints, which may be stale"
                             )
                     except Exception as e:

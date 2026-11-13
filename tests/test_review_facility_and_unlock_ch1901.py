@@ -132,6 +132,18 @@ async def test_a_cleared_chief_complaint_does_not_bring_back_the_signed_copy(mon
 
 
 @pytest.mark.asyncio
+async def test_notes_without_a_chief_complaint_key_keep_the_list_copy(monkeypatch) -> None:
+    # The EHR leaves the key out when the encounter has no physician notes row.
+    fake = _FakeAPIClient(get_responses=_review_responses(
+        list_cc="knee pain", current_notes={"history_of_present_illness": "fell yesterday"},
+    ))
+
+    details = (await _review(monkeypatch, fake))["encounter_details"]
+
+    assert details["clinical_notes"] == "knee pain"
+
+
+@pytest.mark.asyncio
 async def test_a_failed_encounter_read_falls_back_to_the_list(monkeypatch) -> None:
     fake = _FakeAPIClient(
         get_responses=_review_responses(list_cc="knee pain"),
