@@ -141,6 +141,10 @@ async def test_notes_without_a_chief_complaint_key_keep_the_list_copy(monkeypatc
     details = (await _review(monkeypatch, fake))["encounter_details"]
 
     assert details["clinical_notes"] == "knee pain"
+    # Nothing is saved now, so it is the signed copy, labeled as such, and the
+    # read worked, so the section is not flagged unreadable.
+    assert details["clinical_notes_source"] == "signed_copy"
+    assert "clinical_notes_unavailable" not in details
 
 
 @pytest.mark.asyncio
