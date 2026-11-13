@@ -456,7 +456,7 @@ async def manageEncounter(
 
                     # Get lab orders for this encounter
                     try:
-                        labs_response = await client.get(f"/patients/{patient_id}/lab-orders")
+                        labs_response = await client.get("/labs/orders", params={"patient_id": patient_id})
                         all_labs = labs_response.get("lab_orders", []) or []
                         encounter_labs = [
                             l for l in all_labs
