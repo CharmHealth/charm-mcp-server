@@ -52,6 +52,7 @@ class _FakeAPIClient:
         self._failing = set(failing)
         self._raising = set(raising)
         self._fail_all = fail_all
+        self.calls: list[tuple[str, dict | None]] = []
 
     async def __aenter__(self):
         return self
@@ -60,6 +61,7 @@ class _FakeAPIClient:
         return False
 
     async def get(self, endpoint, params=None):
+        self.calls.append((endpoint, params))
         if endpoint in self._raising:
             raise RuntimeError("connection reset")
         if self._fail_all or endpoint in self._failing:
@@ -92,7 +94,7 @@ def _encounter_responses(signed_copy="Cough x 3 days", current_cc="Cough x 5 day
         "/patients/p1/diagnoses": {"patient_diagnoses": [{"encounter_id": "e1", "name": "Flu"}]},
         "/patients/p1/medications": {"medications": [{"encounter_id": "e1", "trade_name": "Tamiflu"}]},
         "/patients/p1/supplements": {"supplements": [{"encounter_id": "e1", "supplement_name": "Zinc"}]},
-        "/patients/p1/lab-orders": {"lab_orders": [{"encounter_id": "e1", "test_names": "CBC"}]},
+        "/labs/orders": {"lab_orders": [{"encounter_id": "e1", "test_names": "CBC"}]},
     }
 
 
@@ -108,7 +110,7 @@ SECTIONS = {
     "diagnoses": "/patients/p1/diagnoses",
     "medications": "/patients/p1/medications",
     "supplements": "/patients/p1/supplements",
-    "lab_orders": "/patients/p1/lab-orders",
+    "lab_orders": "/labs/orders",
 }
 
 
@@ -142,7 +144,7 @@ async def test_a_failed_section_is_flagged_not_empty(monkeypatch, section, how) 
 @pytest.mark.asyncio
 async def test_a_genuinely_empty_section_stays_an_empty_list(monkeypatch) -> None:
     responses = _encounter_responses()
-    responses["/patients/p1/lab-orders"] = {"lab_orders": []}
+    responses["/labs/orders"] = {"lab_orders": []}
     responses["/patients/p1/vitals"] = {"vital_entries": [{"encounter_id": "other"}]}
 
     details = (await _review(monkeypatch, _FakeAPIClient(responses)))["encounter_details"]
@@ -157,7 +159,7 @@ async def test_a_section_answered_with_a_bare_list_is_read_not_crashed(monkeypat
     # read_failure counts a bare list as success, so the section helper must
     # not call .get on it (PR #35 review).
     responses = _encounter_responses()
-    responses["/patients/p1/lab-orders"] = [
+    responses["/labs/orders"] = [
         {"encounter_id": "e1", "test_names": "CBC"},
         {"encounter_id": "other", "test_names": "BMP"},
     ]
@@ -494,3 +496,16 @@ def test_a_rejected_request_is_not_told_to_retry() -> None:
     assert "retrying won't help" in rejected["guidance"]
     for result in (transient, throttled, network):
         assert "Retry" in result["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_lab_orders_are_read_from_labs_orders_for_the_patient(monkeypatch) -> None:
+    # There is no /patients/{id}/lab-orders route; the EHR serves lab orders
+    # at /labs/orders, filtered by patient_id (CH-2144).
+    fake = _FakeAPIClient(_encounter_responses())
+
+    details = (await _review(monkeypatch, fake))["encounter_details"]
+
+    assert ("/labs/orders", {"patient_id": "p1"}) in fake.calls
+    assert not [e for e, _ in fake.calls if e.endswith("/lab-orders")]
+    assert [o["test_names"] for o in details["lab_orders"]] == ["CBC"]

@@ -158,33 +158,37 @@ def _describe_soap_note_source(encounter_details: dict) -> str:
     return "SOAP Note: no entries or free-text notes documented on this encounter."
 
 
-# The review's per-encounter sections: response key -> (label, endpoint
-# suffix, the keys the endpoint may answer under). Each is read on its own,
-# and a failed read sets <key>_unavailable instead of an empty list (CH-1902),
-# because an empty list here reads as "nothing documented" to whoever signs.
+# The review's per-encounter sections: response key -> (label, endpoint, query
+# params, the keys the endpoint may answer under). {patient_id} is filled in
+# for both. Each is read on its own, and a failed read sets <key>_unavailable
+# instead of an empty list (CH-1902), because an empty list here reads as
+# "nothing documented" to whoever signs. Lab orders live at /labs/orders, the
+# route list_orders uses; there is no /patients/{id}/lab-orders (CH-2144).
 _REVIEW_SECTIONS = {
-    "vitals": ("Vitals", "vitals", ("vital_entries", "vitals")),
-    "diagnoses": ("Diagnoses", "diagnoses", ("patient_diagnoses", "diagnoses")),
-    "medications": ("Medications", "medications", ("medications",)),
-    "supplements": ("Supplements", "supplements", ("supplements",)),
-    "lab_orders": ("Lab orders", "lab-orders", ("lab_orders",)),
+    "vitals": ("Vitals", "/patients/{patient_id}/vitals", None, ("vital_entries", "vitals")),
+    "diagnoses": ("Diagnoses", "/patients/{patient_id}/diagnoses", None, ("patient_diagnoses", "diagnoses")),
+    "medications": ("Medications", "/patients/{patient_id}/medications", None, ("medications",)),
+    "supplements": ("Supplements", "/patients/{patient_id}/supplements", None, ("supplements",)),
+    "lab_orders": ("Lab orders", "/labs/orders", {"patient_id": "{patient_id}"}, ("lab_orders",)),
 }
 
 # Labels for every flag the review can set, in the order the guidance lists them.
 _UNAVAILABLE_LABELS = {
     "patient_info": "Patient demographics",
     "facility_name": "Facility name",
-    **{key: label for key, (label, _, _) in _REVIEW_SECTIONS.items()},
+    **{key: label for key, (label, _, _, _) in _REVIEW_SECTIONS.items()},
     "clinical_notes": "Chief complaint",
     "attached_templates": "SOAP templates",
     "soap_note": "SOAP note",
 }
 
 
-async def _read_patient_records(client, patient_id, suffix, keys):
+async def _read_patient_records(client, patient_id, path, params, keys):
     """(records, None) when the read worked, (None, reason) when it failed."""
+    endpoint = path.format(patient_id=patient_id)
+    query = {k: v.format(patient_id=patient_id) for k, v in params.items()} if params else None
     try:
-        response = await client.get(f"/patients/{patient_id}/{suffix}")
+        response = await client.get(endpoint, params=query)
     except Exception as e:
         return None, str(e)[:200]
     if reason := read_failure(response):
@@ -526,8 +530,8 @@ async def manageEncounter(
                     # blocks almost never ran and a failure became [] (CH-1902).
                     encounter_id_str = str(encounter_id)
                     encounter_date_str = str(encounter_details["encounter_info"]["encounter_date"]).split()[0] if encounter_details["encounter_info"]["encounter_date"] else None
-                    for key, (label, suffix, response_keys) in _REVIEW_SECTIONS.items():
-                        records, reason = await _read_patient_records(client, patient_id, suffix, response_keys)
+                    for key, (label, path, params, response_keys) in _REVIEW_SECTIONS.items():
+                        records, reason = await _read_patient_records(client, patient_id, path, params, response_keys)
                         if records is None:
                             logger.error(f"Error fetching {key} for the encounter review: {reason}")
                             encounter_details[f"{key}_unavailable"] = True
