@@ -180,7 +180,7 @@ async def test_manage_encounter_review_adds_provider_name(monkeypatch) -> None:
         "/patients/p1/diagnoses": {"diagnoses": []},
         "/patients/p1/medications": {"medications": []},
         "/patients/p1/supplements": {"supplements": []},
-        "/patients/p1/lab-orders": {"lab_orders": []},
+        "/labs/orders": {"lab_orders": []},
     })
     _patch_client(monkeypatch, encounter_management, fake)
 
