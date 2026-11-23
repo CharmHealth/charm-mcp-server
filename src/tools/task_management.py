@@ -239,11 +239,18 @@ async def manageTasks(
                             " Use action='add' to create new tasks, action='update' to modify existing tasks, or action='change_status' to update task status."
                         )
                         if filtered["filtered_count"] == 0 and total_count > 0 and eff_owner_filter:
-                            response["guidance"] += (
-                                f" 0 of {total_count} tasks matched owner_id='{eff_owner_filter}' — if you're looking for the"
-                                " asking provider's own tasks, use view='MyTasks' or view='AssignedToMe' instead of owner_filter;"
-                                " it's scoped to them automatically and doesn't require a matching ID."
-                            )
+                            # Isolate whether the owner filter itself matched nothing, rather than
+                            # blaming it when status_filter/priority_filter are what zeroed out an
+                            # otherwise-valid owner match (e.g. a real provider with no Completed
+                            # tasks) — that combination needs no hint, and "switch to view=MyTasks"
+                            # would be actively wrong advice for a different-provider lookup.
+                            owner_only_count = filter_items(tasks, filters={"owner_id": eff_owner_filter})["filtered_count"]
+                            if owner_only_count == 0:
+                                response["guidance"] += (
+                                    f" 0 of {total_count} tasks matched owner_id='{eff_owner_filter}' — if you're looking for the"
+                                    " asking provider's own tasks, use view='MyTasks' or view='AssignedToMe' instead of owner_filter;"
+                                    " it's scoped to them automatically and doesn't require a matching ID."
+                                )
                     return app_result(strip_empty_values(response), "task_list")
 
                 case "change_status":

@@ -130,6 +130,35 @@ async def test_mismatched_owner_filter_against_nonempty_tasks_points_at_view(mon
 
 
 @pytest.mark.asyncio
+async def test_matching_owner_filter_zeroed_by_other_filter_does_not_blame_owner(monkeypatch) -> None:
+    """A valid owner_filter combined with a status_filter that happens to match
+    nothing (e.g. the provider has no Completed tasks) must not get the
+    view='MyTasks' hint — that advice would be wrong here, since this is a
+    legitimate different-provider lookup, not a self-task query gone wrong
+    on a mismatched ID."""
+    fake = _FakeAPIClient(get_responses={
+        "/tasks": {
+            "tasks": [
+                {"task_id": "t1", "status": "Pending", "owner": {"member_id": 555, "full_name": "Dr. Smith"}},
+                {"task_id": "t2", "status": "Pending", "owner": {"member_id": 555, "full_name": "Dr. Smith"}},
+            ]
+        }
+    })
+    _patch_client(monkeypatch, fake)
+
+    async with Client(mcp_server.mcp_composite_server) as client:
+        result = await client.call_tool("manageTasks", {
+            "action": "list", "owner_filter": "555", "status_filter": "Completed",
+        })
+
+    payload = json.loads(_content_text(result))
+    assert payload["total_count"] == 2
+    assert payload["filtered_count"] == 0
+    assert "view='MyTasks'" not in payload["guidance"]
+    assert "AssignedToMe" not in payload["guidance"]
+
+
+@pytest.mark.asyncio
 async def test_bare_list_call_applies_no_implicit_owner_filter(monkeypatch) -> None:
     fake = _FakeAPIClient(get_responses=_two_tasks())
     _patch_client(monkeypatch, fake)
