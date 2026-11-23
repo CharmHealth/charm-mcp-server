@@ -71,8 +71,16 @@ async def manageTasks(
     List filters:
     - status_filter: filter by status (e.g., status_filter="Pending")
     - priority_filter: "0"-"3" or "Low"/"Medium"/"High"/"Critical"
-    - owner_filter: filter by owner_id
+    - owner_filter: filter by owner_id (== member_id — the same ID getPracticeInfo(info_type="providers")
+      returns for each provider). Matched client-side against each task's own owner_id after fetching,
+      so a value that doesn't exactly match a task's owner_id silently returns zero results rather than
+      an error — do not use this to answer "what are my tasks"/"my assigned tasks".
     - limit: max tasks to return (applied after filtering)
+
+    For "what are my tasks" / "tasks assigned to me": use view="MyTasks" or view="AssignedToMe" instead of
+    owner_filter. The request is already authenticated as the asking provider, so the server scopes the
+    result to them directly — no ID needs to be supplied or matched. Only use owner_filter when asking
+    about a *different* provider's tasks, with their member_id from getPracticeInfo(info_type="providers").
 
     Examples:
     - manageTasks(action="list", view="MyTasks", status_filter="In-progress", limit=20)
@@ -206,6 +214,9 @@ async def manageTasks(
                         return name_map.get(s_cf) or s
 
                     eff_status_filter = status_filter or status
+                    # owner_id falls back here as a convenience for callers that pass it meaning
+                    # "filter by this owner" — note it's also the "add"/"update" param for the task's
+                    # *new* owner, a different meaning depending on `action`.
                     eff_owner_filter = owner_filter or owner_id
                     eff_priority_filter = priority_filter or priority
 
@@ -227,6 +238,19 @@ async def manageTasks(
                             f"Found {total_count} tasks; {filtered['filtered_count']} match the provided filters."
                             " Use action='add' to create new tasks, action='update' to modify existing tasks, or action='change_status' to update task status."
                         )
+                        if filtered["filtered_count"] == 0 and total_count > 0 and eff_owner_filter:
+                            # Isolate whether the owner filter itself matched nothing, rather than
+                            # blaming it when status_filter/priority_filter are what zeroed out an
+                            # otherwise-valid owner match (e.g. a real provider with no Completed
+                            # tasks) — that combination needs no hint, and "switch to view=MyTasks"
+                            # would be actively wrong advice for a different-provider lookup.
+                            owner_only_count = filter_items(tasks, filters={"owner_id": eff_owner_filter})["filtered_count"]
+                            if owner_only_count == 0:
+                                response["guidance"] += (
+                                    f" 0 of {total_count} tasks matched owner_id='{eff_owner_filter}' — if you're looking for the"
+                                    " asking provider's own tasks, use view='MyTasks' or view='AssignedToMe' instead of owner_filter;"
+                                    " it's scoped to them automatically and doesn't require a matching ID."
+                                )
                     return app_result(strip_empty_values(response), "task_list")
 
                 case "change_status":
