@@ -12,7 +12,7 @@ class VitalEntry(BaseModel):
     vital_value: str = Field(description="The vital value")
     vital_unit: str = Field(default="", description="Unit of measurement (e.g., 'ft', 'ins', 'lbs', 'mmHg')")
 from api import CharmHealthAPIClient
-from common.utils import build_params_from_locals, strip_empty_values
+from common.utils import build_params_from_locals, strip_empty_values, get_error_response
 from common.filtering import filter_items
 import logging
 import re
@@ -702,6 +702,8 @@ async def managePatientDrugs(
                     if substance_type == "medication":
                         # GET current record to preserve required fields the API mandates on every PUT
                         current_resp = await client.get(f"/patients/{patient_id}/medications")
+                        if (err := get_error_response(current_resp, "medication", record_id)):
+                            return err
                         current_meds = current_resp.get("medications", [])
                         current_med = next(
                             (m for m in current_meds if str(m.get("patient_medication_id")) == str(record_id)),
@@ -748,6 +750,8 @@ async def managePatientDrugs(
                     else:
                         # GET current supplement to carry supplement_name — API rejects the PUT without it
                         current_resp = await client.get(f"/patients/{patient_id}/supplements")
+                        if (err := get_error_response(current_resp, "supplement", record_id)):
+                            return err
                         current_supps = current_resp.get("supplements", [])
                         current_supp = next(
                             (
@@ -798,6 +802,8 @@ async def managePatientDrugs(
                     if substance_type == "medication":
                         # GET current record to preserve required fields the API mandates on every PUT
                         current_resp = await client.get(f"/patients/{patient_id}/medications")
+                        if (err := get_error_response(current_resp, "medication", record_id)):
+                            return err
                         current_meds = current_resp.get("medications", [])
                         current_med = next(
                             (m for m in current_meds if str(m.get("patient_medication_id")) == str(record_id)),
@@ -828,6 +834,8 @@ async def managePatientDrugs(
                     else:
                         # GET current supplement to carry supplement_name — API rejects the PUT without it
                         current_resp = await client.get(f"/patients/{patient_id}/supplements")
+                        if (err := get_error_response(current_resp, "supplement", record_id)):
+                            return err
                         current_supps = current_resp.get("supplements", [])
                         current_supp = next(
                             (

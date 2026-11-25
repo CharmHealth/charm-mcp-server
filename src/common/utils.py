@@ -57,3 +57,24 @@ def strip_empty_values(data: Any, preserve_empty_lists: bool = True) -> Any:
     elif isinstance(data, list):
         return [strip_empty_values(item, preserve_empty_lists) for item in data]
     return data
+
+
+def get_error_response(resp: Dict[str, Any], resource_label: str, record_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Surface a failed lookup GET instead of letting it masquerade as "record not found".
+
+    api_client.py's _make_request() never raises on a failed GET -- it returns
+    {"error": "..."} as the whole response body, same shape as a success. A caller
+    that does current_resp.get("<resource>", []) then can't tell a transient 500
+    apart from a genuinely empty/non-matching list; both collapse to [].
+
+    Call this right after the GET, before doing that list lookup. Returns an error
+    dict to return immediately when the GET itself failed; returns None when the GET
+    succeeded, so the caller proceeds to its own not-found check against the real list.
+    """
+    if "error" in resp:
+        return {
+            "error": f"Could not verify {resource_label} {record_id}: {resp['error']}",
+            "guidance": "The lookup needed before this update failed -- retry the request; if it keeps failing, this isn't a bad record_id."
+        }
+    return None
