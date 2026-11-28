@@ -183,3 +183,64 @@ def test_token_id_is_a_dash_when_there_is_no_jti(token) -> None:
 
 def test_token_id_reads_the_jti() -> None:
     assert token_id(MINTED) == JTI
+
+
+# ── An exchanged write token for a CHIS-mode phone (CH-2264) ──────────
+
+WRITE_JTI = "0f4c1e9a-2b7d-4a55-9b1e-6c0d2f3a8e71"
+WRITE = _jwt({
+    "jti": WRITE_JTI,
+    "sub": "900000000501",
+    "token_use": "token_exchange",
+    "scope": "patient.allergy.create",
+    "approval_id": "form-7f3a",
+})
+
+
+def _write_client(monkeypatch) -> CharmHealthAPIClient:
+    for var in ("CHARMHEALTH_REFRESH_TOKEN", "CHARMHEALTH_CLIENT_ID", "CHARMHEALTH_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    return CharmHealthAPIClient(base_url="https://ehr.test/api/ehr/v1",
+                                access_token=WRITE, account_id=ACCOUNT)
+
+
+def test_cortexs_write_token_resolves_as_a_chis_caller_and_logs_its_approval(
+    monkeypatch, caplog
+) -> None:
+    _fake_headers(monkeypatch, {"authorization": f"Bearer {WRITE}", "x-account-id": ACCOUNT})
+
+    with caplog.at_level(logging.INFO, logger="common.auth"):
+        ctx = resolve_auth("managePatientAllergies")
+
+    assert ctx.access_token == WRITE
+    assert ctx.account_id == ACCOUNT
+    assert "approval=form-7f3a" in caplog.text
+    assert f"jti={WRITE_JTI}" in caplog.text
+
+
+async def test_the_write_token_goes_to_the_ehr_unchanged(monkeypatch) -> None:
+    headers = await _write_client(monkeypatch)._get_auth_headers()
+
+    assert headers["Authorization"] == f"Bearer {WRITE}"
+    assert headers["X-ACCOUNT-ID"] == ACCOUNT
+
+
+async def test_a_refused_write_is_not_retried_and_names_its_approval(monkeypatch, caplog) -> None:
+    client = _write_client(monkeypatch)
+    await client.ensure_client()
+    client._client.post = AsyncMock(return_value=_response(403, json={"code": 1097}))
+
+    with caplog.at_level(logging.DEBUG):
+        result = await client.post("/patients/1/allergies", data={"allergen": "x"})
+
+    assert result["error"].startswith("HTTP 403")
+    assert client._client.post.await_count == 1
+    assert "approval=form-7f3a" in caplog.text
+    for piece in WRITE.split("."):
+        assert piece not in caplog.text
+
+
+@pytest.mark.parametrize("token", [None, MINTED, _jwt({"approval_id": "a b\nforged"}),
+                                   _jwt({"approval_id": 7})])
+def test_token_approval_is_a_dash_unless_it_is_an_approval_id(token) -> None:
+    assert auth_module.token_approval(token) == "-"

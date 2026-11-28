@@ -26,6 +26,13 @@ Callers reach this server three ways, and they do not send the same thing:
   ``x-account-id`` is what tells this caller apart from the bearer-auth Zoho
   client above, and only while that client exists: once the Zoho paths are gone,
   every Bearer is a CHIS token and the header only names the practice.
+  For a CHIS-mode phone (CH-2264), cortex sends a token it got from CHIS by
+  token exchange the same way: a read-only one for a run, or, after the person
+  confirmed one write, a token carrying only that write's scopes, valid two
+  minutes, whose ``approval_id`` claim names the confirmation. This server
+  sends either to the EHR unchanged and never retries it; the approval id is
+  logged next to the ``jti`` so a write can be matched to cortex's form and
+  CHIS's audit line.
 
 Only the last case is gated. If a call arrives with no per-user token,
 ``CharmHealthAPIClient`` would fall back to the server's own credentials and
@@ -117,6 +124,23 @@ class AuthContext:
         return kwargs
 
 
+# What an approval id may look like in a log line (CHIS refuses anything else).
+_APPROVAL_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+
+def _claim(token: str | None, name: str) -> Any:
+    """One claim of a JWT, read without verifying it, or None."""
+    if not token:
+        return None
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return None
+    return claims.get(name) if isinstance(claims, dict) else None
+
+
 def token_id(token: str | None) -> str:
     """The token's ``jti`` claim, for log lines, or ``-``.
 
@@ -124,15 +148,18 @@ def token_id(token: str | None) -> str:
     so a run's lines in cortex, here and in CHIS can be matched up. Nothing here
     trusts it; the EHR verifies the token. The token itself is never logged.
     """
-    if not token:
-        return "-"
-    try:
-        payload = token.split(".")[1]
-        payload += "=" * (-len(payload) % 4)
-        jti = json.loads(base64.urlsafe_b64decode(payload)).get("jti")
-    except Exception:
-        return "-"
+    jti = _claim(token, "jti")
     return jti if isinstance(jti, str) and jti else "-"
+
+
+def token_approval(token: str | None) -> str:
+    """The ``approval_id`` claim of a write token exchanged for a CHIS-mode
+    phone (CH-2264), for log lines, or ``-``. Read unverified, like
+    ``token_id``, and only when it has an approval id's shape."""
+    approval = _claim(token, "approval_id")
+    if isinstance(approval, str) and _APPROVAL_ID.fullmatch(approval):
+        return approval
+    return "-"
 
 
 def _api_base_url(base_url: str | None) -> str | None:
@@ -181,8 +208,8 @@ def resolve_auth(tool_name: str) -> AuthContext:
     if bearer and account_id:
         # A CHIS caller: the token goes to the EHR as it came. None of the Zoho
         # fields apply, so none are read.
-        logger.info("%s using a CHIS bearer token jti=%s account=%s",
-                    tool_name, token_id(bearer), account_id)
+        logger.info("%s using a CHIS bearer token jti=%s account=%s approval=%s",
+                    tool_name, token_id(bearer), account_id, token_approval(bearer))
         return AuthContext(
             access_token=bearer,
             base_url=_api_base_url(headers.get("x-charmhealth-base-url")),

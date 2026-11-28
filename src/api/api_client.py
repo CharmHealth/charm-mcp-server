@@ -7,7 +7,7 @@ import logging
 from typing import Optional, Dict, Any
 from asyncio import Lock
 from telemetry import record_api_call, start_api_call, end_api_call, set_client_context
-from common.auth import token_id
+from common.auth import token_approval, token_id
 import re
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,7 @@ class CharmHealthAPIClient:
             # Nothing Zoho applies: no client id, no refresh, no shared token cache.
             self.refresh_token = None
             self._token_jti = token_id(access_token)
+            self._token_approval = token_approval(access_token)
         elif not self.client_id and not chis_session:
             # A CHIS session sends no Zoho credential, so it needs no client id.
             raise ValueError("Missing client_id")
@@ -366,7 +367,8 @@ class CharmHealthAPIClient:
                 # line points at the step that refused it. Never the token itself.
                 logger.error(
                     f"HTTP error {e.response.status_code} on {method} {clean_endpoint} in {duration:.3f}s "
-                    f"jti={self._token_jti} account={self.account_id} code={_ehr_error_code(e.response)}"
+                    f"jti={self._token_jti} account={self.account_id} approval={self._token_approval} "
+                    f"code={_ehr_error_code(e.response)}"
                 )
                 return {"error": f"HTTP {e.response.status_code}: {e.response.text}"}
 
