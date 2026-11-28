@@ -183,3 +183,25 @@ def test_token_id_is_a_dash_when_there_is_no_jti(token) -> None:
 
 def test_token_id_reads_the_jti() -> None:
     assert token_id(MINTED) == JTI
+
+
+@pytest.mark.parametrize("jti", [
+    "abc\n2026-11-28 00:00:00 - INFO - forged line",
+    "has space",
+    "x" * 129,
+    "",
+])
+def test_token_id_refuses_a_jti_that_could_forge_a_log_line(jti) -> None:
+    assert token_id(_jwt({"jti": jti})) == "-"
+
+
+# ── credential_key ─────────────────────────────────────────────────────
+
+
+def test_one_chis_token_gets_a_separate_cache_key_per_practice(monkeypatch) -> None:
+    practice_a = _chis_client(monkeypatch)
+    practice_b = CharmHealthAPIClient(base_url="https://ehr.test/api/ehr/v1",
+                                      access_token=MINTED, account_id="900000000003")
+
+    assert practice_a.credential_key() != practice_b.credential_key()
+    assert practice_a.credential_key() == _chis_client(monkeypatch).credential_key()

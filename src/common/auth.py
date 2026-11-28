@@ -38,6 +38,7 @@ import base64
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -95,6 +96,9 @@ class AuthContext:
         return kwargs
 
 
+_SAFE_JTI = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+
 def token_id(token: str | None) -> str:
     """The token's ``jti`` claim, for log lines, or ``-``.
 
@@ -110,7 +114,11 @@ def token_id(token: str | None) -> str:
         jti = json.loads(base64.urlsafe_b64decode(payload)).get("jti")
     except Exception:
         return "-"
-    return jti if isinstance(jti, str) and jti else "-"
+    # Unverified input, written to plain-text logs: accept only a short id with
+    # no spaces or line breaks, so a forged token cannot add log lines.
+    if isinstance(jti, str) and _SAFE_JTI.fullmatch(jti):
+        return jti
+    return "-"
 
 
 def _api_base_url(base_url: str | None) -> str | None:

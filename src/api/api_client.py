@@ -427,10 +427,17 @@ class CharmHealthAPIClient:
         which stays the same while access tokens rotate. A bearer-auth client
         has no refresh token, so it keys on its access token. A key is per
         user, which is narrower than per practice: callers in one practice do
-        not share entries, and no caller can reach another practice's."""
+        not share entries, and no caller can reach another practice's.
+
+        A CHIS caller is the exception to "the credential does": its practice is
+        picked by ``X-ACCOUNT-ID``, so one token may be sent for several
+        practices. Its account id is part of the key, so each practice gets its
+        own entries."""
         import hashlib
         secret = self.refresh_token or self._auth_token or ""
         material = f"{self.base_url}\0{self.client_id}\0{secret}"
+        if self.chis:
+            material += f"\0{self.account_id}"
         return hashlib.sha256(material.encode()).hexdigest()[:32]
 
     def _token_cache_key(self) -> str:
