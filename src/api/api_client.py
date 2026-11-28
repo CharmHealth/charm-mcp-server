@@ -90,7 +90,8 @@ class CharmHealthAPIClient:
             # Nothing Zoho applies: no client id, no refresh, no shared token cache.
             self.refresh_token = None
             self._token_jti = token_id(access_token)
-        elif not self.client_id:
+        elif not self.client_id and not chis_session:
+            # A CHIS session sends no Zoho credential, so it needs no client id.
             raise ValueError("Missing client_id")
         
         self.max_retries = max_retries

@@ -180,6 +180,18 @@ def test_two_users_sessions_do_not_share_a_cache_key() -> None:
     assert len({a.credential_key(), b.credential_key(), other_practice.credential_key()}) == 3
 
 
+async def test_a_session_needs_no_zoho_client_id(ehr, monkeypatch) -> None:
+    # A session caller sends no Zoho credential, so a server with no
+    # CHARMHEALTH_CLIENT_ID configured (lighthouse) must still call the EHR.
+    monkeypatch.delenv("CHARMHEALTH_CLIENT_ID", raising=False)
+    seen, _ = ehr
+
+    async with _session_client(client_id=None) as client:
+        await client.post("/tasks", data={"task": "A"})
+
+    assert seen[0].headers["cookie"] == f"CHARM_SID={SESSION}"
+
+
 def test_the_session_reaches_the_client_through_client_kwargs(monkeypatch) -> None:
     monkeypatch.setenv("CHARMHEALTH_CLIENT_ID", "cid")
     _fake_headers(monkeypatch, _session_headers())
