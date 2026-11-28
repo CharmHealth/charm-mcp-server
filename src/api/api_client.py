@@ -7,8 +7,18 @@ import logging
 from typing import Optional, Dict, Any
 from asyncio import Lock
 from telemetry import record_api_call, start_api_call, end_api_call, set_client_context
+from common.auth import token_id
 import re
 logger = logging.getLogger(__name__)
+
+
+def _ehr_error_code(response: httpx.Response) -> str:
+    """The EHR's ``code`` from an error body (e.g. RBAC_ERROR's number), or ``-``."""
+    try:
+        code = response.json().get("code")
+    except Exception:
+        return "-"
+    return "-" if code is None else str(code)
 
 # httpx logs every request URL at INFO, query string included, so a patient
 # search by name or date of birth would write those values to the log. The
@@ -32,9 +42,14 @@ class CharmHealthAPIClient:
                  client_secret: Optional[str] = None,
                  redirect_uri: Optional[str] = None,
                  token_url: Optional[str] = None,
+                 account_id: Optional[str] = None,
                  max_retries: int = 3,
                  timeout: int = 30):
         self.base_url = base_url or os.getenv("CHARMHEALTH_BASE_URL")
+        # A CHIS caller (common/auth.py): the access token is a CHIS Bearer for the
+        # practice whose AppGroup id this is. It is sent as it came, never refreshed.
+        self.account_id = account_id
+        self.chis = bool(account_id)
         self.api_key = api_key or os.getenv("CHARMHEALTH_API_KEY")
         self.client_id = client_id or os.getenv("CHARMHEALTH_CLIENT_ID")
         self.client_secret = client_secret or os.getenv("CHARMHEALTH_CLIENT_SECRET")
@@ -60,7 +75,11 @@ class CharmHealthAPIClient:
                 "Missing credentials: supply an access_token (per-user) or a "
                 "refresh_token (server-scoped)"
             )
-        if not self.client_id:
+        if self.chis:
+            # Nothing Zoho applies: no client id, no refresh, no shared token cache.
+            self.refresh_token = None
+            self._token_jti = token_id(access_token)
+        elif not self.client_id:
             raise ValueError("Missing client_id")
         
         self.max_retries = max_retries
@@ -92,14 +111,18 @@ class CharmHealthAPIClient:
     async def ensure_client(self):
         logger.info("Ensuring CharmHealth API client")
         if self._client is None:
+            headers = {
+                "api_key": self.api_key,
+                "Content-Type": "application/json",
+                "Cache-Control": "no-cache"
+            }
+            if self.chis:
+                # api_key is the Zoho API's header; a CHIS caller has none to send.
+                headers.pop("api_key")
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
                 timeout=self.timeout,
-                headers={
-                    "api_key": self.api_key,
-                    "Content-Type": "application/json",
-                    "Cache-Control": "no-cache"
-                }
+                headers=headers
             )
         
         
@@ -111,6 +134,13 @@ class CharmHealthAPIClient:
     async def _get_auth_headers(self) -> Dict[str, str]:
         logger.info("Getting auth headers")
         token = await self._get_valid_token()
+        if self.chis:
+            return {
+                "Authorization": f"Bearer {token}",
+                "X-ACCOUNT-ID": self.account_id,
+                "Content-Type": "application/json",
+                "Cache-Control": "no-cache"
+            }
         return {
             "api_key": self.api_key,
             # "Authorization": f"Bearer {token}",
@@ -121,6 +151,9 @@ class CharmHealthAPIClient:
     
     async def _get_valid_token(self) -> str:
         logger.info("Getting valid CharmHealth API token")
+        if self.chis:
+            # The caller owns this token's lifetime; the EHR says when it has expired.
+            return self._auth_token
         current_time = time.time()
 
         if self._auth_token and current_time < (self._token_expires_at - 300):
@@ -299,6 +332,16 @@ class CharmHealthAPIClient:
             duration = time.time() - start_time
             record_api_call(self.client_id, False, clean_endpoint, method, duration)
             
+            if self.chis:
+                # No refresh to retry with. Name the token and the EHR's own error code
+                # (RBAC_ERROR for a role the service account lacks) so a failed run's
+                # line points at the step that refused it. Never the token itself.
+                logger.error(
+                    f"HTTP error {e.response.status_code} on {method} {clean_endpoint} in {duration:.3f}s "
+                    f"jti={self._token_jti} account={self.account_id} code={_ehr_error_code(e.response)}"
+                )
+                return {"error": f"HTTP {e.response.status_code}: {e.response.text}"}
+
             if e.response.status_code == 401 and not auth_retried:
                 # Refresh and retry exactly once per request, regardless of max_retries.
                 # A 401 that survives a *freshly refreshed* token means the token was
@@ -384,10 +427,17 @@ class CharmHealthAPIClient:
         which stays the same while access tokens rotate. A bearer-auth client
         has no refresh token, so it keys on its access token. A key is per
         user, which is narrower than per practice: callers in one practice do
-        not share entries, and no caller can reach another practice's."""
+        not share entries, and no caller can reach another practice's.
+
+        A CHIS caller is the exception to "the credential does": its practice is
+        picked by ``X-ACCOUNT-ID``, so one token may be sent for several
+        practices. Its account id is part of the key, so each practice gets its
+        own entries."""
         import hashlib
         secret = self.refresh_token or self._auth_token or ""
         material = f"{self.base_url}\0{self.client_id}\0{secret}"
+        if self.chis:
+            material += f"\0{self.account_id}"
         return hashlib.sha256(material.encode()).hexdigest()[:32]
 
     def _token_cache_key(self) -> str:

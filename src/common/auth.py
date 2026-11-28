@@ -12,6 +12,13 @@ Callers reach this server three ways, and they do not send the same thing:
 - **A local stdio client** (Claude Desktop, Cursor) sends nothing at all and is
   expected to authenticate as the server, from the ``CHARMHEALTH_*`` variables
   in ``.env``.
+- **A CHIS caller** sends ``Authorization: Bearer <token>`` and ``x-account-id``
+  (the practice's CHIS AppGroup id). Cortex's background runs send a token CHIS
+  minted for the practice's service account. The token goes to the EHR unchanged
+  as ``Bearer`` with ``X-ACCOUNT-ID``; the EHR reads what kind of token it is.
+  ``x-account-id`` is what tells this caller apart from the bearer-auth Zoho
+  client above, and only while that client exists: once the Zoho paths are gone,
+  every Bearer is a CHIS token and the header only names the practice.
 
 Only the last case is gated. If a call arrives with no per-user token,
 ``CharmHealthAPIClient`` would fall back to the server's own credentials and
@@ -27,8 +34,11 @@ duplicated here — ``CharmHealthAPIClient.__init__`` already does
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -58,6 +68,9 @@ class AuthContext:
     token_url: str | None = None
     client_secret: str | None = None
     accounts_server: str | None = None
+    # The practice's CHIS AppGroup id, set only for a CHIS caller (a Bearer token
+    # with ``x-account-id``). The client then sends the token as a CHIS Bearer.
+    account_id: str | None = None
 
     @property
     def is_user_scoped(self) -> bool:
@@ -69,13 +82,50 @@ class AuthContext:
         ``accounts_server`` is not a client argument — it only exists to derive
         ``token_url``, which ``resolve_auth`` has already done.
         """
-        return {
+        kwargs = {
             "access_token": self.access_token,
             "refresh_token": self.refresh_token,
             "base_url": self.base_url,
             "token_url": self.token_url,
             "client_secret": self.client_secret,
         }
+        if self.account_id:
+            # Only a CHIS caller adds it, so every other caller builds exactly the
+            # client it built before.
+            kwargs["account_id"] = self.account_id
+        return kwargs
+
+
+_SAFE_JTI = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+
+def token_id(token: str | None) -> str:
+    """The token's ``jti`` claim, for log lines, or ``-``.
+
+    Read without verifying the signature: the value only names the token in logs,
+    so a run's lines in cortex, here and in CHIS can be matched up. Nothing here
+    trusts it; the EHR verifies the token. The token itself is never logged.
+    """
+    if not token:
+        return "-"
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        jti = json.loads(base64.urlsafe_b64decode(payload)).get("jti")
+    except Exception:
+        return "-"
+    # Unverified input, written to plain-text logs: accept only a short id with
+    # no spaces or line breaks, so a forged token cannot add log lines.
+    if isinstance(jti, str) and _SAFE_JTI.fullmatch(jti):
+        return jti
+    return "-"
+
+
+def _api_base_url(base_url: str | None) -> str | None:
+    """A caller's EHR base URL, with the API path added when it lacks one."""
+    if base_url and not base_url.endswith(_API_PATH):
+        return base_url.rstrip("/") + _API_PATH
+    return base_url
 
 
 def _bearer_token(headers: Dict[str, str]) -> str | None:
@@ -108,7 +158,20 @@ def resolve_auth(tool_name: str) -> AuthContext:
     except Exception as exc:  # no request context — stdio, or a direct call
         logger.debug("No HTTP headers available (likely stdio mode): %s", exc)
 
-    access_token = headers.get("x-user-access-token") or _bearer_token(headers)
+    bearer = _bearer_token(headers)
+    account_id = (headers.get("x-account-id") or "").strip()
+    if bearer and account_id:
+        # A CHIS caller: the token goes to the EHR as it came. None of the Zoho
+        # fields apply, so none are read.
+        logger.info("%s using a CHIS bearer token jti=%s account=%s",
+                    tool_name, token_id(bearer), account_id)
+        return AuthContext(
+            access_token=bearer,
+            base_url=_api_base_url(headers.get("x-charmhealth-base-url")),
+            account_id=account_id,
+        )
+
+    access_token = headers.get("x-user-access-token") or bearer
     refresh_token = headers.get("x-user-refresh-token")
     base_url = headers.get("x-charmhealth-base-url")
     token_url = headers.get("x-charmhealth-token-url")
@@ -119,8 +182,7 @@ def resolve_auth(tool_name: str) -> AuthContext:
     if accounts_server:
         token_url = f"{accounts_server.rstrip('/')}/oauth/v2/token"
 
-    if base_url and not base_url.endswith(_API_PATH):
-        base_url = base_url.rstrip("/") + _API_PATH
+    base_url = _api_base_url(base_url)
 
     context = AuthContext(
         access_token=access_token,
